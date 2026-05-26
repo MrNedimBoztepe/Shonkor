@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LLMBrain.CLI/LLMBrain.CLI.csproj" />
+    <Project Path="src/LLMBrain.Core/LLMBrain.Core.csproj" />
+    <Project Path="src/LLMBrain.Infrastructure/LLMBrain.Infrastructure.csproj" />
+    <Project Path="src/LLMBrain.Web/LLMBrain.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LLMBrain.Tests/LLMBrain.Tests.csproj" />
+  </Folder>
+</Solution>
