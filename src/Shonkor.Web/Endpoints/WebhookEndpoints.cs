@@ -1,0 +1,286 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
+using Shonkor.Core.Interfaces;
+using Shonkor.Core.Services;
+using Shonkor.Infrastructure.Services;
+
+namespace Shonkor.Web.Endpoints;
+
+public static class WebhookEndpoints
+{
+    // Valid GitHub repository names: letters, digits, '.', '_', '-'. No path separators or '..'.
+    private static readonly Regex SafeRepoName = new(@"^[A-Za-z0-9._-]{1,100}$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Reads the raw request body and verifies GitHub's HMAC-SHA256 signature
+    /// (X-Hub-Signature-256) against the configured secret. Returns the raw bytes on success.
+    /// </summary>
+    private static async Task<(bool Ok, byte[] Body)> ReadAndVerifyAsync(HttpContext context, IConfiguration config, CancellationToken ct)
+    {
+        var secret = config["GitHub:WebhookSecret"];
+
+        using var ms = new MemoryStream();
+        await context.Request.Body.CopyToAsync(ms, ct);
+        var body = ms.ToArray();
+
+        // If no secret is configured the endpoint refuses to process (fail closed),
+        // rather than silently accepting unauthenticated webhooks.
+        if (string.IsNullOrEmpty(secret))
+        {
+            return (false, body);
+        }
+
+        if (!context.Request.Headers.TryGetValue("X-Hub-Signature-256", out var sigHeader))
+        {
+            return (false, body);
+        }
+
+        var signature = sigHeader.ToString();
+        const string prefix = "sha256=";
+        if (!signature.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, body);
+        }
+
+        var expected = Convert.ToHexStringLower(
+            HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), body));
+        var provided = signature[prefix.Length..];
+
+        var ok = CryptographicOperations.FixedTimeEquals(
+            Encoding.ASCII.GetBytes(expected),
+            Encoding.ASCII.GetBytes(provided));
+
+        return (ok, body);
+    }
+
+    /// <summary>
+    /// Validates an untrusted repository name and resolves a contained tenant directory,
+    /// guaranteeing the result stays inside <paramref name="rootDir"/> (no path traversal).
+    /// </summary>
+    private static bool TryResolveTenantPath(string rootDir, string repoName, out string resolved)
+    {
+        resolved = string.Empty;
+        if (string.IsNullOrWhiteSpace(repoName) || !SafeRepoName.IsMatch(repoName))
+        {
+            return false;
+        }
+
+        var fullRoot = Path.GetFullPath(rootDir);
+        var candidate = Path.GetFullPath(Path.Combine(fullRoot, repoName));
+
+        // Ensure the resolved path is strictly within the root.
+        var rootWithSep = fullRoot.EndsWith(Path.DirectorySeparatorChar) ? fullRoot : fullRoot + Path.DirectorySeparatorChar;
+        if (!candidate.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        resolved = candidate;
+        return true;
+    }
+
+    public static void MapWebhookEndpoints(this WebApplication app)
+    {
+        // POST /api/webhooks/github/install
+        // Triggered when the GitHub App is installed in an organization.
+        // Auto-provisions Tenants (Projects) for all selected repositories.
+        app.MapPost("/api/webhooks/github/install", async (HttpContext context, IConfiguration config, ProjectManager pm, CancellationToken ct) =>
+        {
+            try
+            {
+                var (ok, body) = await ReadAndVerifyAsync(context, config, ct);
+                if (!ok)
+                {
+                    return Results.Unauthorized();
+                }
+
+                using var document = JsonDocument.Parse(body);
+                var root = document.RootElement;
+
+                var action = root.GetProperty("action").GetString();
+                if (action == "created" || action == "added")
+                {
+                    var repos = action == "created" 
+                        ? root.GetProperty("repositories").EnumerateArray() 
+                        : root.GetProperty("repositories_added").EnumerateArray();
+                    
+                    var newKeys = new List<object>();
+
+                    var tenantRoot = config["SaaS:TenantRoot"] ?? Path.Combine(AppContext.BaseDirectory, "tenants");
+
+                    foreach (var repo in repos)
+                    {
+                        var repoName = repo.GetProperty("name").GetString()!;
+                        var fullName = repo.GetProperty("full_name").GetString()!;
+
+                        // Validate the untrusted repo name and resolve a directory that is provably
+                        // contained within the tenant root (prevents path traversal via "../").
+                        if (!TryResolveTenantPath(tenantRoot, repoName, out var tenantPath))
+                        {
+                            return Results.BadRequest($"Invalid repository name: '{repoName}'.");
+                        }
+
+                        if (!Directory.Exists(tenantPath))
+                        {
+                            Directory.CreateDirectory(tenantPath);
+                        }
+
+                        // Generate a secure API Key for this specific repo (Tenant)
+                        var apiKey = "sk-" + Guid.NewGuid().ToString("N");
+
+                        // Auto-provision the project
+                        pm.AddProject(fullName, tenantPath, "", apiKey);
+
+                        newKeys.Add(new { Repository = fullName, ApiKey = apiKey });
+                    }
+
+                    return Results.Ok(new 
+                    { 
+                        Message = "SaaS Onboarding successful. Tenants provisioned.",
+                        Provisioned = newKeys
+                    });
+                }
+                
+                return Results.Ok(new { Message = $"Ignored action {action}" });
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[API] GitHub Install Webhook failed. :: {ex}");
+                return Results.Problem("GitHub Install Webhook failed.");
+            }
+        });
+
+        // POST /api/webhooks/github/push
+        // Triggered by GitHub when code is pushed.
+        app.MapPost("/api/webhooks/github/push", async (HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, CancellationToken ct) =>
+        {
+            try
+            {
+                var (ok, _) = await ReadAndVerifyAsync(context, config, ct);
+                if (!ok)
+                {
+                    return Results.Unauthorized();
+                }
+
+                var projectName = context.Request.Headers["X-Project-Name"].ToString();
+                var project = string.IsNullOrWhiteSpace(projectName)
+                    ? pm.GetActiveProject()
+                    : pm.GetProjects().FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
+
+                if (project == null)
+                {
+                    return Results.BadRequest("Project not configured.");
+                }
+
+                // In a real SaaS, we would parse the GitHub Webhook Payload here, 
+                // execute `git pull` or clone the repo into a temporary tenant directory.
+                // For this migration phase, we simulate the webhook by pulling the local repo 
+                // and then running the GraphIndexScanner.
+                
+                // Skip if a scan for this project is already in progress (avoids overlapping scans).
+                if (!pm.TryBeginScan(project.Name))
+                {
+                    return Results.Ok(new { Message = "A scan is already in progress for this project; push ignored." });
+                }
+
+                // Fire and forget the background scanning so the webhook responds quickly (GitHub timeouts)
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var storage = pm.GetStorageProvider(project.Name);
+
+                        // Load dynamic plugins only when explicitly enabled (RCE risk otherwise).
+                        var activeParsers = new List<IFileParser>(parsers);
+                        using var pluginLoad = config.GetValue<bool>("Security:EnablePlugins")
+                            ? PluginLoader.LoadPlugins(System.IO.Path.Combine(pm.WorkspacePath, "plugins"))
+                            : PluginLoadResult.Empty;
+                        activeParsers.AddRange(pluginLoad.Parsers);
+
+                        var scanner = new GraphIndexScanner(storage, activeParsers);
+                        var projectConfig = pm.GetProjectConfig(project.Name);
+
+                        Console.WriteLine($"[Webhook] Starting background incremental index for push event on project: {project.Name}");
+                        var result = await scanner.ScanDirectoryAsync(project.Path, projectConfig.ExcludePatterns, CancellationToken.None);
+                        Console.WriteLine($"[Webhook] Index complete: {result.FilesScanned} files scanned, {result.NodesCreated} nodes created/updated.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Webhook Error] {ex.Message}");
+                    }
+                    finally
+                    {
+                        pm.EndScan(project.Name);
+                    }
+                });
+
+                return Results.Ok(new { Message = "Push webhook received. Background incremental indexing started." });
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[API] Push webhook failed. :: {ex}");
+                return Results.Problem("Webhook failed.");
+            }
+        });
+
+        // POST /api/webhooks/github/pr
+        // Triggered by GitHub when a PR is opened. Analyzes impact.
+        app.MapPost("/api/webhooks/github/pr", async (HttpContext context, IConfiguration config, ProjectManager pm, ContextCapsuleSynthesizer synthesizer, CancellationToken ct) =>
+        {
+            try
+            {
+                var (ok, _) = await ReadAndVerifyAsync(context, config, ct);
+                if (!ok)
+                {
+                    return Results.Unauthorized();
+                }
+
+                var projectName = context.Request.Headers["X-Project-Name"].ToString();
+                var project = string.IsNullOrWhiteSpace(projectName)
+                    ? pm.GetActiveProject()
+                    : pm.GetProjects().FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
+
+                if (project == null)
+                {
+                    return Results.BadRequest("Project not configured.");
+                }
+
+                // In a real scenario, we read `pull_request.changed_files` from the JSON payload.
+                // For this phase, we mock "changed files" to traverse the graph and return an Impact Report.
+                var storage = pm.GetStorageProvider(project.Name);
+                
+                // Example simulation: Search for a core term to simulate changed files
+                var search = await storage.SearchAsync("Controller", 3);
+                var seeds = search.Select(s => s.Node.Id).ToList();
+
+                if (seeds.Count == 0) return Results.Ok(new { Impact = "No relevant changed files found to analyze." });
+
+                // Trace 1-2 hops out to see what this PR breaks/affects
+                var (nodes, edges) = await storage.GetSubgraphAsync(seeds, 2);
+                var impactMarkdown = synthesizer.Synthesize(nodes, edges);
+
+                return Results.Ok(new 
+                { 
+                    Message = "PR Webhook received. Simulated Impact Analysis completed.",
+                    AnalyzedSeeds = seeds,
+                    ImpactReport = impactMarkdown
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[API] PR webhook failed. :: {ex}");
+                return Results.Problem("PR Webhook failed.");
+            }
+        });
+    }
+}

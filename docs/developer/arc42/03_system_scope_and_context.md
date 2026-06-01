@@ -1,35 +1,44 @@
 # arc42 Kapitel 3: Kontextabgrenzung 🌐
 
-Dieses Kapitel beschreibt die Schnittstellen von LLMBrain zu seiner Umwelt.
+Dieses Kapitel beschreibt die Schnittstellen von Shonkor zu seiner Umwelt.
 
 ---
 
 ## 3.1 Fachlicher Kontext
 
-Aus fachlicher Sicht fungiert LLMBrain als Vermittler zwischen dem physischen Quellcode eines Entwicklers und einem Large Language Model (LLM).
+Aus fachlicher Sicht fungiert Shonkor als Vermittler zwischen dem physischen Quellcode eines Entwicklers und einem Large Language Model (LLM).
 
 ```mermaid
 graph LR
-    Dev[Entwickler] -->|Startet Scan/Abfrage| CLI[LLMBrain CLI]
-    Dev -->|Analysiert Beziehungen| Web[LLMBrain Web Dashboard]
+    Dev[Entwickler] -->|Nutzt Dashboard| Web[Shonkor Web]
     
-    Workspace[Projekt-Workspace] -->|Liest Quellcode/AST| CLI
+    Workspace[Lokales Projekt] -->|Liest Quellcode| CLI[Shonkor CLI / MCP Server]
+    CLI -->|JSON-RPC via stdio| LLM_Lokal[Lokale KI z.B. Antigravity]
     
-    CLI -->|Generiert Context Capsule| Capsule[Token-optimierte capsule.md]
-    Capsule -->|Kopiert in Prompt| LLM[LLM / IDE Assistant]
+    GitHub[GitHub Webhooks] -->|Push & PR Events| Web
+    Web -->|Liest Cloud Repositories| CloudWorkspace[SaaS Repositories]
+    
+    LLM_Remote[Externe Cloud-KI] -->|API Key Auth| Web
+    Web -->|Generiert Capsule| LLM_Remote
 ```
 
-* **Entwickler**: Stellt Suchanfragen und konfiguriert Ausschlusskriterien.
-* **Workspace (Projekt-Quellcode)**: Die physischen Quelldateien (C#, JS, PHP, YAML, MD), die als Eingabedaten dienen.
-* **LLM (z. B. Cursor, ChatGPT)**: Das nachgelagerte Konsumentensystem, welches die strukturierte Markdown-Kapsel als Eingabe (Context) erhält.
+* **Entwickler**: Nutzt das lokale Dashboard oder KI-Agenten zur Architektur-Exploration.
+* **Workspace (Projekt-Quellcode)**: Physische Quelldateien (Lokal oder im SaaS-Tenant).
+* **Lokale KI (z.B. Antigravity/Claude Code)**: Greift über das Model Context Protocol (MCP) direkt auf die `Shonkor.CLI` zu. Das Projekt wird aus dem Arbeitsverzeichnis des Clients abgeleitet (kein globales aktives Flag).
+* **GitHub (SaaS)**: Sendet Push- und Installations-Webhooks (HMAC-signiert via `X-Hub-Signature-256`), woraufhin Shonkor Projekte (Tenants) anlegt und inkrementell indiziert.
+* **Externe Cloud-KI (z.B. ChatGPT)**: Ruft die `/api/rag/query` SaaS-Endpunkte mit `X-API-Key` Authentifizierung auf.
 
 ---
 
 ## 3.2 Technischer Kontext
 
-LLMBrain läuft vollständig innerhalb einer isolierten Benutzerumgebung auf dem lokalen Betriebssystem des Anwenders.
+Shonkor kann sowohl als **lokales Entwickler-Werkzeug** als auch als **Multi-Tenant SaaS-Plattform** betrieben werden.
 
-* **Dateisystem-Crawler (Infrastructure)**: Liest Quellcodedateien ein, berechnet SHA256-Prüfsummen und interagiert mit den domänenspezifischen Parsern (Roslyn, Esprima, etc.).
-* **SQLite-Speicher**: Speichert Knoten und Kanten in relationalen Tabellen und indiziert Code-Ausschnitte in FTS5-Tabellen zur Keyword-Suche.
-* **Web-API (ASP.NET Core Web)**: Ein lokaler Webserver (Minimal APIs), der statische Assets (HTML/CSS/JS) an den Webbrowser ausliefert und Daten via JSON-Schnittstellen bereitstellt.
-* **Benutzer-Browser**: Rendert das Glassmorphic-Dashboard und verarbeitet Canvas-basierte Netzwerk-Visualisierungen.
+* **Dateisystem-Crawler (Infrastructure)**: Liest Quellcodedateien ein und generiert inkrementell den Graphen.
+* **SQLite-Speicher**: Speichert Knoten/Kanten pro Tenant isoliert (`shonkor.db`) und indiziert Code-Ausschnitte via FTS5.
+* **Web-API (ASP.NET Core)**: 
+  * Liefert das Dashboard aus.
+  * `ApiKeyMiddleware`: Schirmt SaaS-Endpunkte ab (konstantzeitiger Key-Vergleich, Loopback-Bypass nur in Development) und leitet Anfragen automatisch auf die Tenant-DB um.
+  * `WebhookEndpoints`: Nimmt GitHub-Events (`install`, `push`, `pr`) entgegen und verifiziert deren HMAC-Signatur (fail-closed ohne Secret).
+  * `GraphRagEndpoints`: Bietet KIs die direkte Schnittstelle zur Kapsel-Generierung.
+* **MCP Server (CLI)**: Stellt KI-Editoren wie Claude Code oder Antigravity über `stdio` einen direkten Zugriff auf den lokalen Graphen bereit. Das aktive Projekt wird aus dem Arbeitsverzeichnis abgeleitet; token-effiziente Tools (`locate`, `search_graph`, `get_subgraph`).

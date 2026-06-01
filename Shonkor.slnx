@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Shonkor.CLI/Shonkor.CLI.csproj" />
+    <Project Path="src/Shonkor.Core/Shonkor.Core.csproj" />
+    <Project Path="src/Shonkor.Infrastructure/Shonkor.Infrastructure.csproj" />
+    <Project Path="src/Shonkor.Web/Shonkor.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Shonkor.Tests/Shonkor.Tests.csproj" />
+  </Folder>
+</Solution>

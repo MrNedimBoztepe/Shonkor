@@ -1,6 +1,6 @@
-# LLMBrain 🧠 - arc42 Architekturdokumentation
+# Shonkor 🧠 - arc42 Architekturdokumentation
 
-Dieses Verzeichnis enthält die vollständige Architekturdokumentation des LLMBrain-Projekts, strukturiert nach dem international bewährten **arc42**-Standard.
+Dieses Verzeichnis enthält die vollständige Architekturdokumentation des Shonkor-Projekts, strukturiert nach dem international bewährten **arc42**-Standard.
 
 Die Dokumentation richtet sich an Softwarearchitekten, Entwickler und Auditoren, die das innere Design, die logischen Bausteine, die Laufzeitaspekte und die zugrundeliegenden Konzepte des Systems verstehen oder erweitern möchten.
 
@@ -39,9 +39,10 @@ Die Dokumentation richtet sich an Softwarearchitekten, Entwickler und Auditoren,
 
 ### 📄 [Kapitel 8: Konzepte](file:///c:/Projects/Brain/docs/developer/arc42/08_concepts.md)
 * AST Graph-Metamodell.
-* FTS5 + Rekursives CTE (SQL-Implementierung).
-* Token-Optimierung & Pruning.
-* UX-Visualisierung (Force-Directed Graph).
+* FTS5 + Rekursives CTE (UNION ALL + MIN-Depth) und Batch-Edge-Loading.
+* Typ-Referenzen (`REFERENCES_TYPE`) & Cross-Technology-Linking.
+* Nebenläufigkeit (Connection-per-Operation), Sicherheitsmodell.
+* MCP-Projektauflösung & Token-Effizienz, Capsule-Pruning.
 
 ---
 

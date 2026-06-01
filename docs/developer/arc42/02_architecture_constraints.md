@@ -1,6 +1,6 @@
 # arc42 Kapitel 2: Randbedingungen ⚙️
 
-Dieses Kapitel beschreibt die technischen und organisatorischen Vorgaben, die das Design von LLMBrain beeinflussen.
+Dieses Kapitel beschreibt die technischen und organisatorischen Vorgaben, die das Design von Shonkor beeinflussen.
 
 ---
 

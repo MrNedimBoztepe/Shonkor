@@ -16,15 +16,30 @@ obj/
 .idea/
 *.swp
 
-# LLMBrain Runtime
-.llmbrain/brain.db
-.llmbrain/logs/
-llmbrain.db
+# Shonkor Runtime
+.shonkor/brain.db
+.shonkor/logs/
+# Project registry contains API keys and machine-specific paths -> never commit.
+projects.json
+shonkor.db
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 test-capsule.md
+shonkor-capsule.md
+
+# Build output & throwaway/scratch projects (not part of the source tree)
+dist/
+scratch/
+publish/
+
+# Logs
+*.log
+
+# Runtime workspace plugins dir (standard plugins are regenerated from embedded resources;
+# shippable plugins belong in src/Shonkor.Core/StandardPlugins instead).
+plugins/
 
 # OS
 Thumbs.db

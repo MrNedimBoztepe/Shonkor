@@ -6,13 +6,13 @@ Dieses Kapitel beschreibt das dynamische Verhalten des Systems anhand wesentlich
 
 ## 6.1 Szenario 1: Inkrementelle Indexierung
 
-Dieses Szenario zeigt den Ablauf, wenn der Entwickler den Befehl `llmbrain index .` aufruft, um Änderungen in seiner Codebasis in den Graphen einzupflegen.
+Dieses Szenario zeigt den Ablauf, wenn der Entwickler den Befehl `shonkor index .` aufruft, um Änderungen in seiner Codebasis in den Graphen einzupflegen.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Dev as Entwickler
-    participant CLI as LLMBrain.CLI
+    participant CLI as Shonkor.CLI
     participant Scan as GraphIndexScanner
     participant Db as SqliteGraphStorageProvider
     participant Parser as RoslynAstParser (C#)
@@ -53,7 +53,7 @@ Dieses Szenario zeigt den Ablauf, wenn der Entwickler eine Kontextkapsel generie
 sequenceDiagram
     autonumber
     actor Dev as Entwickler
-    participant CLI as LLMBrain.CLI
+    participant CLI as Shonkor.CLI
     participant Db as SqliteGraphStorageProvider
     participant Synth as ContextCapsuleSynthesizer
 

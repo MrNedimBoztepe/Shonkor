@@ -1,0 +1,83 @@
+﻿msgid "precision_engine"
+msgstr "Präzise GraphRAG Engine"
+
+msgid "search_projects"
+msgstr "Projekte suchen..."
+
+msgid "nodes"
+msgstr "Knoten"
+
+msgid "edges"
+msgstr "Kanten"
+
+msgid "all_types"
+msgstr "Alle Typen"
+
+msgid "quick_search"
+msgstr "Schnelle Graph-Suche..."
+
+msgid "search"
+msgstr "Suche"
+
+msgid "dashboard"
+msgstr "Dashboard"
+
+msgid "scan_workspace"
+msgstr "Projekt Scannen"
+
+msgid "explore_filter"
+msgstr "Entdecken & Filtern"
+
+msgid "search_hint"
+msgstr "Suchbegriff eingeben oder Knoten anklicken..."
+
+msgid "context_capsule"
+msgstr "Kontext-Kapsel"
+
+msgid "capsule_desc"
+msgstr "Generiert optimierten Kontext für KI-Modelle."
+
+msgid "seed_query"
+msgstr "Suchbegriff"
+
+msgid "traversal_hops"
+msgstr "Tiefe"
+
+msgid "hop_1"
+msgstr "1 Ebene (Direkt)"
+
+msgid "hop_2"
+msgstr "2 Ebenen (Indirekt)"
+
+msgid "hop_3"
+msgstr "3 Ebenen (Erweitert)"
+
+msgid "synthesize"
+msgstr "Generieren"
+
+msgid "filter"
+msgstr "Filter:"
+
+msgid "ai_dashboard"
+msgstr "KI Interaktions-Dashboard"
+
+msgid "ai_dashboard_desc"
+msgstr "Offene Aufgaben, Fragen und Entscheidungen."
+
+msgid "questions"
+msgstr "Fragen"
+
+msgid "tasks"
+msgstr "Aufgaben"
+
+msgid "decisions"
+msgstr "Entscheidungen"
+
+msgid "milestones"
+msgstr "Meilensteine"
+
+msgid "stabilizing_graph"
+msgstr "Graph wird berechnet..."
+
+msgid "graph"
+msgstr "Graph"

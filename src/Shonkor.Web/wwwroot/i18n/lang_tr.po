@@ -1,0 +1,83 @@
+﻿msgid "precision_engine"
+msgstr "Hassas GraphRAG Motoru"
+
+msgid "search_projects"
+msgstr "Projeleri ara..."
+
+msgid "nodes"
+msgstr "Düğümler"
+
+msgid "edges"
+msgstr "Kenarlar"
+
+msgid "all_types"
+msgstr "Tüm Tipler"
+
+msgid "quick_search"
+msgstr "Hızlı grafik arama..."
+
+msgid "search"
+msgstr "Ara"
+
+msgid "dashboard"
+msgstr "Pano"
+
+msgid "scan_workspace"
+msgstr "Çalışma Alanını Tara"
+
+msgid "explore_filter"
+msgstr "Keşfet ve Filtrele"
+
+msgid "search_hint"
+msgstr "Başlamak için bir arama yapın veya bir düğüme tıklayın..."
+
+msgid "context_capsule"
+msgstr "Bağlam Kapsülü"
+
+msgid "capsule_desc"
+msgstr "Alt grafik için prompt uyumlu bağlam paketi oluşturun."
+
+msgid "seed_query"
+msgstr "Tohum Sorgusu"
+
+msgid "traversal_hops"
+msgstr "Derinlik"
+
+msgid "hop_1"
+msgstr "1 Seviye (Doğrudan)"
+
+msgid "hop_2"
+msgstr "2 Seviye (Dolaylı)"
+
+msgid "hop_3"
+msgstr "3 Seviye (Genişletilmiş)"
+
+msgid "synthesize"
+msgstr "Oluştur"
+
+msgid "filter"
+msgstr "Filtre:"
+
+msgid "ai_dashboard"
+msgstr "Yapay Zeka Panosu"
+
+msgid "ai_dashboard_desc"
+msgstr "Açık görevler, sorular ve kararlar."
+
+msgid "questions"
+msgstr "Sorular"
+
+msgid "tasks"
+msgstr "Görevler"
+
+msgid "decisions"
+msgstr "Kararlar"
+
+msgid "milestones"
+msgstr "Kilometre Taşları"
+
+msgid "stabilizing_graph"
+msgstr "Grafik hesaplanıyor..."
+
+msgid "graph"
+msgstr "Grafik"
