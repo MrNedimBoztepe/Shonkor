@@ -44,9 +44,9 @@ public sealed class KenticoPlugin : IFileParser
                         Id = $"{filePath}::KenticoModule",
                         Name = "Kentico Module Registration",
                         Type = "KenticoModule",
+                        FilePath = filePath,
                         Properties = new Dictionary<string, string>
                         {
-                            ["filePath"] = filePath,
                             ["cms"] = "Kentico"
                         }
                     });
@@ -68,9 +68,9 @@ public sealed class KenticoPlugin : IFileParser
                     Id = typeNodeId,
                     Name = typeName,
                     Type = "KenticoPageType",
+                    FilePath = filePath,
                     Properties = new Dictionary<string, string>
                     {
-                        ["filePath"] = filePath,
                         ["cms"] = "Kentico"
                     }
                 });
@@ -84,9 +84,9 @@ public sealed class KenticoPlugin : IFileParser
                     Id = typeNodeId,
                     Name = typeName,
                     Type = "KenticoFormComponent",
+                    FilePath = filePath,
                     Properties = new Dictionary<string, string>
                     {
-                        ["filePath"] = filePath,
                         ["cms"] = "Kentico"
                     }
                 });

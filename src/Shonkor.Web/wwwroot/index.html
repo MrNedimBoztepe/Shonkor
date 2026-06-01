@@ -25,7 +25,7 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-php.min.js"></script>
     
     <!-- Custom app.css?v=2.0.12 -->
-    <link rel="stylesheet" href="/app.css?v=2.0.13">
+    <link rel="stylesheet" href="/app.css?v=2.0.15">
 </head>
 <body>
     <div class="stars"></div>
@@ -47,7 +47,7 @@
 
             <!-- PROJECT SELECTOR (Dropdown) -->
             <div class="project-selector-container">
-                <button id="active-project-btn" class="glass-btn hover-glow-blue" title="Switch Project">
+                <button id="active-project-btn" class="glass-btn hover-glow-blue" title="Switch Project" aria-label="Switch project" aria-haspopup="true" aria-expanded="false">
                     <i data-lucide="folder-kanban"></i>
                     <span id="active-project-name">Shonkor</span>
                     <i data-lucide="chevron-down" class="dropdown-arrow"></i>
@@ -79,7 +79,7 @@
 
             <div class="search-bar glass-panel-sm">
                 <div class="filter-dropdown-container" id="search-type-dropdown-container">
-                    <button class="glass-btn filter-dropdown-btn" id="search-type-btn" style="min-width: 120px; justify-content: space-between;">
+                    <button class="glass-btn filter-dropdown-btn" id="search-type-btn" style="min-width: 120px; justify-content: space-between;" aria-label="Filter by node type" aria-haspopup="true" aria-expanded="false">
                         <span id="search-type-label" data-i18n="all_types">All Types</span>
                         <i data-lucide="chevron-down"></i>
                     </button>
@@ -94,12 +94,12 @@
             </div>
             
             <div class="header-actions">
-                <button id="open-settings-btn" class="glass-btn hover-glow-blue" title="Project Settings & Plugins">
+                <button id="open-settings-btn" class="glass-btn hover-glow-blue" title="Project Settings & Plugins" aria-label="Open project settings and plugins" aria-haspopup="dialog">
                     <i data-lucide="settings"></i>
                 </button>
 
                 <div class="custom-lang-dropdown" id="lang-dropdown">
-                    <button class="glass-btn lang-dropdown-btn" id="lang-dropdown-btn" title="Select Language">
+                    <button class="glass-btn lang-dropdown-btn" id="lang-dropdown-btn" title="Select Language" aria-label="Select language" aria-haspopup="true" aria-expanded="false">
                         <img src="https://flagcdn.com/w20/gb.png" alt="EN" id="current-lang-flag">
                         <span id="current-lang-text">EN</span>
                         <i data-lucide="chevron-down" class="dropdown-arrow"></i>
@@ -230,9 +230,9 @@
                 <div id="network-graph" class="graph-canvas"></div>
                 
                 <div class="canvas-controls">
-                    <button id="drag-select-btn" class="control-btn" title="Drag Select Mode"><i data-lucide="scan"></i></button>
-                    <button id="fit-graph-btn" class="control-btn" title="Recenter Graph"><i data-lucide="maximize-2"></i></button>
-                    <button id="clear-graph-btn" class="control-btn" title="Reset View"><i data-lucide="trash-2"></i></button>
+                    <button id="drag-select-btn" class="control-btn" title="Drag Select Mode" aria-label="Toggle drag-select mode"><i data-lucide="scan"></i></button>
+                    <button id="fit-graph-btn" class="control-btn" title="Recenter Graph" aria-label="Recenter graph"><i data-lucide="maximize-2"></i></button>
+                    <button id="clear-graph-btn" class="control-btn" title="Reset View" aria-label="Reset graph view"><i data-lucide="trash-2"></i></button>
                 </div>
                 
                 <div class="legend glass-panel-sm" id="dynamic-legend">
@@ -247,7 +247,7 @@
                         <span id="drawer-node-type" class="type-badge">Class</span>
                         <h2 id="drawer-node-name">RoslynAstParser</h2>
                     </div>
-                    <button id="close-drawer-btn" class="close-btn"><i data-lucide="x"></i></button>
+                    <button id="close-drawer-btn" class="close-btn" aria-label="Close details panel"><i data-lucide="x"></i></button>
                 </div>
 
                 <div class="drawer-content">
@@ -282,11 +282,11 @@
     </div>
 
     <!-- MODAL FOR CAPSULE VIEW -->
-    <div id="capsule-modal" class="modal-overlay hidden">
+    <div id="capsule-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="Generated context capsule">
         <div class="modal-container glass-panel">
             <div class="modal-header">
                 <h2><i data-lucide="file-check" class="green-glow"></i> Context Capsule Generated</h2>
-                <button id="close-modal-btn" class="close-btn"><i data-lucide="x"></i></button>
+                <button id="close-modal-btn" class="close-btn" aria-label="Close capsule dialog"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body">
                 <div class="modal-meta-pills">
@@ -300,7 +300,7 @@
     </div>
 
     <!-- MODAL FOR PROJECT MANAGEMENT -->
-    <div id="project-modal" class="modal-overlay hidden">
+    <div id="project-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="Project and plugin settings">
         <div class="modal-container project-modal-container glass-panel">
             <div class="modal-header">
                 <h2><i data-lucide="settings" class="blue-glow"></i> Settings</h2>
@@ -309,7 +309,7 @@
                     <button class="modal-tab active" data-tab="projects-tab"><i data-lucide="folder-kanban"></i> Projects</button>
                     <button class="modal-tab" data-tab="plugins-tab"><i data-lucide="puzzle"></i> Plugins</button>
                 </div>
-                <button id="close-project-modal-btn" class="close-btn"><i data-lucide="x"></i></button>
+                <button id="close-project-modal-btn" class="close-btn" aria-label="Close settings dialog"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body project-modal-body">
 
@@ -448,11 +448,11 @@
     </div>
 
     <!-- MODAL FOR LOCAL FOLDER BROWSER -->
-    <div id="browse-modal" class="modal-overlay hidden" style="z-index: 200;">
+    <div id="browse-modal" class="modal-overlay hidden" style="z-index: 200;" role="dialog" aria-modal="true" aria-label="Select local directory">
         <div class="modal-container browse-modal-container glass-panel">
             <div class="modal-header">
                 <h2><i data-lucide="folder-open" class="blue-glow"></i> Select Local Directory</h2>
-                <button id="close-browse-modal-btn" class="close-btn"><i data-lucide="x"></i></button>
+                <button id="close-browse-modal-btn" class="close-btn" aria-label="Close folder browser"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body browse-modal-body">
                 <div class="browse-toolbar">
@@ -500,6 +500,6 @@
         <span id="toast-message">Message text</span>
     </div>
     <!-- Custom App JS -->
-    <script defer src="/app.js?v=2.0.14"></script>
+    <script defer src="/app.js?v=2.0.15"></script>
 </body>
 </html>

@@ -43,10 +43,7 @@ public sealed class JavaScriptParser : IFileParser
         var componentName = Path.GetFileNameWithoutExtension(filePath);
         var componentNodeId = filePath.ToLowerInvariant();
 
-        var properties = new Dictionary<string, string>
-        {
-            ["filePath"] = filePath
-        };
+        var properties = new Dictionary<string, string>();
 
         // Sitecore JSS/Next.js signature detection
         if (content.Contains("@sitecore-jss/sitecore-jss-nextjs", StringComparison.Ordinal))
@@ -64,6 +61,7 @@ public sealed class JavaScriptParser : IFileParser
             Id = componentNodeId,
             Name = componentName,
             Type = "JSComponent",
+            FilePath = filePath,
             Properties = properties
         });
 

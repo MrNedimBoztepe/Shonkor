@@ -59,9 +59,9 @@ public sealed partial class GraphQLParser : IFileParser
                 Id = nodeId,
                 Name = queryName,
                 Type = "GraphQLQuery",
+                FilePath = filePath,
                 Properties = new Dictionary<string, string>
                 {
-                    ["filePath"] = filePath,
                     ["queryType"] = "Query"
                 }
             });
@@ -87,9 +87,9 @@ public sealed partial class GraphQLParser : IFileParser
                 Id = nodeId,
                 Name = mutationName,
                 Type = "GraphQLQuery",
+                FilePath = filePath,
                 Properties = new Dictionary<string, string>
                 {
-                    ["filePath"] = filePath,
                     ["queryType"] = "Mutation"
                 }
             });
@@ -115,9 +115,9 @@ public sealed partial class GraphQLParser : IFileParser
                 Id = nodeId,
                 Name = fragmentName,
                 Type = "GraphQLFragment",
+                FilePath = filePath,
                 Properties = new Dictionary<string, string>
                 {
-                    ["filePath"] = filePath,
                     ["targetTemplate"] = targetTemplate
                 }
             });

@@ -124,10 +124,10 @@ public sealed class RoslynAstParser : IFileParser
                 Name = typeName,
                 Type = "Enum",
                 Content = $"Enum Members: {members}",
+                FilePath = filePath,
+                StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
                 Properties = new Dictionary<string, string>
                 {
-                    ["filePath"] = filePath,
-                    ["lineNumber"] = node.GetLocation().GetLineSpan().StartLinePosition.Line.ToString(),
                     ["modifiers"] = node.Modifiers.ToString()
                 }
             });
@@ -158,11 +158,11 @@ public sealed class RoslynAstParser : IFileParser
                 Name = methodName,
                 Type = "Method",
                 Content = GetTruncatedContent(node),
+                FilePath = filePath,
+                StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
                 Properties = new Dictionary<string, string>
                 {
-                    ["filePath"] = filePath,
                     ["returnType"] = node.ReturnType.ToString(),
-                    ["lineNumber"] = node.GetLocation().GetLineSpan().StartLinePosition.Line.ToString(),
                     ["modifiers"] = node.Modifiers.ToString(),
                     ["parameters"] = node.ParameterList.Parameters.ToString()
                 }
@@ -193,11 +193,11 @@ public sealed class RoslynAstParser : IFileParser
                 Id = propertyNodeId,
                 Name = propertyName,
                 Type = "Property",
+                FilePath = filePath,
+                StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
                 Properties = new Dictionary<string, string>
                 {
-                    ["filePath"] = filePath,
                     ["returnType"] = node.Type.ToString(),
-                    ["lineNumber"] = node.GetLocation().GetLineSpan().StartLinePosition.Line.ToString(),
                     ["modifiers"] = node.Modifiers.ToString()
                 }
             });
@@ -228,10 +228,10 @@ public sealed class RoslynAstParser : IFileParser
                 Name = constructorName,
                 Type = "Constructor",
                 Content = GetTruncatedContent(node),
+                FilePath = filePath,
+                StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
                 Properties = new Dictionary<string, string>
                 {
-                    ["filePath"] = filePath,
-                    ["lineNumber"] = node.GetLocation().GetLineSpan().StartLinePosition.Line.ToString(),
                     ["modifiers"] = node.Modifiers.ToString(),
                     ["parameters"] = node.ParameterList.Parameters.ToString()
                 }
@@ -271,8 +271,6 @@ public sealed class RoslynAstParser : IFileParser
 
             var properties = new Dictionary<string, string>
             {
-                ["filePath"] = filePath,
-                ["lineNumber"] = node.GetLocation().GetLineSpan().StartLinePosition.Line.ToString(),
                 ["modifiers"] = modifiers.ToString()
             };
             if (referencedTypes.Count > 0)
@@ -285,6 +283,8 @@ public sealed class RoslynAstParser : IFileParser
                 Id = typeNodeId,
                 Name = typeName,
                 Type = defaultType,
+                FilePath = filePath,
+                StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
                 Properties = properties
             });
 

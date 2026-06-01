@@ -32,9 +32,9 @@ public sealed class SitecoreXmCloudPlugin : IFileParser
                     Id = nodeId,
                     Name = componentName,
                     Type = "XmCloudComponent",
+                    FilePath = filePath,
                     Properties = new Dictionary<string, string>
                     {
-                        ["filePath"] = filePath,
                         ["cms"] = "Sitecore XM Cloud"
                     }
                 });
@@ -49,9 +49,9 @@ public sealed class SitecoreXmCloudPlugin : IFileParser
                     Id = filePath,
                     Name = Path.GetFileName(filePath),
                     Type = "XmCloudRouteData",
+                    FilePath = filePath,
                     Properties = new Dictionary<string, string>
                     {
-                        ["filePath"] = filePath,
                         ["cms"] = "Sitecore XM Cloud"
                     }
                 });

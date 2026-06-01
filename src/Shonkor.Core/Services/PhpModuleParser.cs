@@ -115,9 +115,9 @@ public sealed partial class PhpModuleParser : IFileParser
                 Id = classNodeId,
                 Name = className,
                 Type = "OxidModule",
+                FilePath = filePath,
                 Properties = new Dictionary<string, string>
                 {
-                    ["filePath"] = filePath,
                     ["baseClass"] = baseClassName
                 }
             });
@@ -178,10 +178,8 @@ public sealed partial class PhpModuleParser : IFileParser
             Id = templateNodeId,
             Name = templateName,
             Type = "SmartyTemplate",
-            Properties = new Dictionary<string, string>
-            {
-                ["filePath"] = filePath
-            }
+            FilePath = filePath,
+            Properties = new Dictionary<string, string>()
         });
 
         foreach (Match match in SmartyBlockPattern().Matches(content))

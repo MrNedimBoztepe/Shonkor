@@ -54,7 +54,6 @@ public sealed class SitecoreUnicornPlugin : IFileParser
                     
                     var properties = new Dictionary<string, string>
                     {
-                        ["filePath"] = filePath,
                         ["cms"] = "Sitecore Unicorn"
                     };
 
@@ -107,6 +106,7 @@ public sealed class SitecoreUnicornPlugin : IFileParser
                         Id = itemId,
                         Name = itemName,
                         Type = "SitecoreItem",
+                        FilePath = filePath,
                         Properties = properties
                     });
                 }
@@ -196,7 +196,9 @@ public sealed class SitecoreUnicornPlugin : IFileParser
                     SourceId = sourceId,
                     TargetId = targetId,
                     Relationship = "REFERENCES",
-                    RelationType = hint // Attach the hint to know exactly WHICH field is referencing it
+                    // Keep the hint as metadata so we know WHICH field references the target.
+                    // (Previously assigned to the RelationType alias, which silently overwrote Relationship.)
+                    Properties = new Dictionary<string, string> { ["field"] = hint }
                 });
             }
         }

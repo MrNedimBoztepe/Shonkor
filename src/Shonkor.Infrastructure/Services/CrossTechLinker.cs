@@ -194,7 +194,7 @@ public static class CrossTechLinker
         // 5. Build Helix Architecture Module mapping (Feature / Foundation / Project layers)
         foreach (var node in allNodes)
         {
-            var filePath = node.Properties.TryGetValue("filePath", out var fp) ? fp : (node.Properties.TryGetValue("FilePath", out var fp2) ? fp2 : null);
+            var filePath = node.FilePath;
             var sitecorePath = node.Properties.TryGetValue("sitecorePath", out var sp) ? sp : null;
 
             var helixInfo = GetHelixModule(filePath, sitecorePath);
