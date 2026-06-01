@@ -724,7 +724,7 @@ public sealed class McpServer
                                     {
                                         SourceId = connId,
                                         TargetId = taskId,
-                                        RelationType = "HasTask"
+                                        Relationship = "HasTask"
                                     });
                                 }
                             }

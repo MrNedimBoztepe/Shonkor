@@ -2446,6 +2446,49 @@ body {
     font-weight: 500;
 }
 
+/* Interactive status controls on Kanban cards */
+.kanban-card-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-top: 0.75rem;
+}
+
+.kanban-status-btn {
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.05);
+    color: #bbb;
+    font-size: 0.68rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.kanban-status-btn:hover {
+    background: rgba(59, 130, 246, 0.18);
+    color: #fff;
+    border-color: rgba(59, 130, 246, 0.5);
+}
+
+.kanban-status-btn.active {
+    background: rgba(59, 130, 246, 0.85);
+    color: #fff;
+    border-color: rgba(59, 130, 246, 0.9);
+    cursor: default;
+}
+
+/* Visible keyboard focus indicator (accessibility) */
+.kanban-status-btn:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible,
+input:focus-visible,
+select:focus-visible {
+    outline: 2px solid #60a5fa;
+    outline-offset: 2px;
+}
+
 select.glass-btn option {
     background: var(--color-surface);
     color: var(--color-text);

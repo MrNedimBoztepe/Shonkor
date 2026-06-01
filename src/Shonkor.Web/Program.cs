@@ -87,6 +87,42 @@ app.MapGet("/api/interactions", async (HttpContext context, ProjectManager pm, C
     }
 });
 
+// Update the status of an interaction node (Task/Question/Decision/Milestone) from the dashboard.
+app.MapPost("/api/interactions/status", async (UpdateStatusRequest req, HttpContext context, ProjectManager pm, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Id) || string.IsNullOrWhiteSpace(req.Status))
+    {
+        return Results.BadRequest("Both 'id' and 'status' are required.");
+    }
+
+    try
+    {
+        var projectName = context.Request.Headers["X-Project-Name"].ToString();
+        var storage = string.IsNullOrEmpty(projectName) ? pm.GetActiveStorageProvider() : pm.GetStorageProvider(projectName);
+
+        var node = await storage.GetNodeByIdAsync(req.Id, ct);
+        if (node == null)
+        {
+            return Results.NotFound($"Node '{req.Id}' not found.");
+        }
+
+        var properties = new Dictionary<string, string>(node.Properties)
+        {
+            ["status"] = req.Status,
+            ["updated"] = DateTime.UtcNow.ToString("o")
+        };
+
+        var updated = node with { Properties = properties };
+        await storage.UpsertNodesAsync(new[] { updated }, ct);
+
+        return Results.Ok(new { Message = "Status updated.", node.Id, req.Status });
+    }
+    catch (Exception ex)
+    {
+        return Fail("Failed to update status.", ex);
+    }
+});
+
 // 2. GET /api/search - Semantic search over nodes in active project
 app.MapGet("/api/search", async (string q, int? limit, string? type, HttpContext context, ProjectManager pm, CancellationToken ct) =>
 {
@@ -683,3 +719,4 @@ static string FindWorkspacePath()
 public record CapsuleRequest(string Query, int? Hops);
 public record IndexRequest(string? Directory, List<string>? ExcludePatterns);
 public record PluginCreateRequest(string Name, string Extension);
+public record UpdateStatusRequest(string Id, string Status);

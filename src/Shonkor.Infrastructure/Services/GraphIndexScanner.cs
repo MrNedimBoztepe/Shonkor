@@ -165,11 +165,8 @@ public sealed class GraphIndexScanner
                     Name = Path.GetFileName(filePath),
                     Type = "File",
                     Content = storedContent,
-                    Properties = new Dictionary<string, string>
-                    {
-                        ["FilePath"] = filePath,
-                        ["ContentHash"] = contentHash
-                    }
+                    FilePath = filePath,
+                    ContentHash = contentHash
                 };
                 allNodesToUpsert.Add(fileNode);
 

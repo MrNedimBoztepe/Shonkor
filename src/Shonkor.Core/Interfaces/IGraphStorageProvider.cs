@@ -71,4 +71,9 @@ public interface IGraphStorageProvider
     /// Retrieves nodes filtered by a set of types.
     /// </summary>
     Task<IReadOnlyList<GraphNode>> GetNodesByTypesAsync(IEnumerable<string> types, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves a single node by its identifier, or <c>null</c> if it does not exist.
+    /// </summary>
+    Task<GraphNode?> GetNodeByIdAsync(string id, CancellationToken cancellationToken = default);
 }

@@ -78,9 +78,9 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
                 Id = sectionId,
                 Name = title,
                 Type = "MarkdownSection",
+                FilePath = filePath,
                 Properties = new Dictionary<string, string>
                 {
-                    ["filePath"] = filePath,
                     ["level"] = level.ToString(),
                     ["index"] = i.ToString()
                 }

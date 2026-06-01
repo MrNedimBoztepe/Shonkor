@@ -213,12 +213,12 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             pId.Value = node.Id;
             pType.Value = node.Type;
             pName.Value = node.Name;
-            pContent.Value = GetPropertyOrDbNull(node, "Content");
+            pContent.Value = string.IsNullOrEmpty(node.Content) ? DBNull.Value : node.Content;
             pMetadata.Value = SerializeMetadata(node.Properties);
-            pFilePath.Value = GetPropertyOrDbNull(node, "FilePath");
-            pStartLine.Value = GetIntPropertyOrDbNull(node, "StartLine");
-            pEndLine.Value = GetIntPropertyOrDbNull(node, "EndLine");
-            pContentHash.Value = GetPropertyOrDbNull(node, "ContentHash");
+            pFilePath.Value = (object?)node.FilePath ?? DBNull.Value;
+            pStartLine.Value = node.StartLine.HasValue ? node.StartLine.Value : DBNull.Value;
+            pEndLine.Value = node.EndLine.HasValue ? node.EndLine.Value : DBNull.Value;
+            pContentHash.Value = (object?)node.ContentHash ?? DBNull.Value;
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -606,8 +606,8 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             "SELECT RelationType, COUNT(*) FROM Edges GROUP BY RelationType;", cancellationToken).ConfigureAwait(false);
 
         return new GraphStatistics(
-            (int)totalNodes,
-            (int)totalEdges,
+            totalNodes,
+            totalEdges,
             nodesByType,
             edgesByRelation);
     }
@@ -663,6 +663,25 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         }
 
         return nodes;
+    }
+
+    /// <inheritdoc />
+    public async Task<GraphNode?> GetNodeByIdAsync(string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Nodes WHERE Id = @id LIMIT 1;";
+        command.Parameters.AddWithValue("@id", id);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return ReadNode(reader);
+        }
+
+        return null;
     }
 
     /// <inheritdoc cref="IDisposable.Dispose"/>
@@ -820,50 +839,33 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     }
 
     /// <summary>
-    /// Reads a <see cref="GraphNode"/> from the current row of a data reader.
-    /// Maps DB columns back to the <see cref="GraphNode.Properties"/> dictionary.
+    /// Reads a <see cref="GraphNode"/> from the current row of a data reader, mapping the
+    /// dedicated columns to typed properties and the JSON metadata blob back to <see cref="GraphNode.Properties"/>.
     /// </summary>
     private static GraphNode ReadNode(SqliteDataReader reader)
     {
+        string? GetStringOrNull(string column)
+        {
+            var ordinal = reader.GetOrdinal(column);
+            return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+        }
+
+        int? GetIntOrNull(string column)
+        {
+            var ordinal = reader.GetOrdinal(column);
+            return reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
+        }
+
         var properties = new Dictionary<string, string>();
-
-        var content = reader.IsDBNull(reader.GetOrdinal("Content"))
-            ? null
-            : reader.GetString(reader.GetOrdinal("Content"));
-        if (content is not null) properties["Content"] = content;
-
-        var filePath = reader.IsDBNull(reader.GetOrdinal("FilePath"))
-            ? null
-            : reader.GetString(reader.GetOrdinal("FilePath"));
-        if (filePath is not null) properties["FilePath"] = filePath;
-
-        var startLine = reader.IsDBNull(reader.GetOrdinal("StartLine"))
-            ? (int?)null
-            : reader.GetInt32(reader.GetOrdinal("StartLine"));
-        if (startLine.HasValue) properties["StartLine"] = startLine.Value.ToString();
-
-        var endLine = reader.IsDBNull(reader.GetOrdinal("EndLine"))
-            ? (int?)null
-            : reader.GetInt32(reader.GetOrdinal("EndLine"));
-        if (endLine.HasValue) properties["EndLine"] = endLine.Value.ToString();
-
-        var contentHash = reader.IsDBNull(reader.GetOrdinal("ContentHash"))
-            ? null
-            : reader.GetString(reader.GetOrdinal("ContentHash"));
-        if (contentHash is not null) properties["ContentHash"] = contentHash;
-
-        // Merge any additional metadata stored as JSON.
-        var metadataJson = reader.IsDBNull(reader.GetOrdinal("Metadata"))
-            ? null
-            : reader.GetString(reader.GetOrdinal("Metadata"));
+        var metadataJson = GetStringOrNull("Metadata");
         if (metadataJson is not null)
         {
-            var extraProperties = JsonSerializer.Deserialize<Dictionary<string, string>>(metadataJson);
-            if (extraProperties is not null)
+            var extra = JsonSerializer.Deserialize<Dictionary<string, string>>(metadataJson);
+            if (extra is not null)
             {
-                foreach (var kvp in extraProperties)
+                foreach (var kvp in extra)
                 {
-                    properties.TryAdd(kvp.Key, kvp.Value);
+                    properties[kvp.Key] = kvp.Value;
                 }
             }
         }
@@ -873,6 +875,11 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             Id = reader.GetString(reader.GetOrdinal("Id")),
             Type = reader.GetString(reader.GetOrdinal("Type")),
             Name = reader.GetString(reader.GetOrdinal("Name")),
+            Content = GetStringOrNull("Content") ?? string.Empty,
+            FilePath = GetStringOrNull("FilePath"),
+            StartLine = GetIntOrNull("StartLine"),
+            EndLine = GetIntOrNull("EndLine"),
+            ContentHash = GetStringOrNull("ContentHash"),
             Properties = properties
         };
     }
@@ -889,67 +896,11 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         };
 
     /// <summary>
-    /// Retrieves a string property from the node's <see cref="GraphNode.Properties"/> dictionary,
-    /// or returns <see cref="DBNull.Value"/> if the key is missing.
-    /// Supports both PascalCase and camelCase key lookups.
+    /// Serializes the node's dynamic properties into a JSON string for the Metadata column,
+    /// or returns <see cref="DBNull.Value"/> when there are none.
     /// </summary>
-    private static object GetPropertyOrDbNull(GraphNode node, string key)
-    {
-        if (node.Properties.TryGetValue(key, out var value))
-        {
-            return value;
-        }
-        var camelKey = JsonNamingPolicy.CamelCase.ConvertName(key);
-        if (node.Properties.TryGetValue(camelKey, out value))
-        {
-            return value;
-        }
-        return DBNull.Value;
-    }
-
-    /// <summary>
-    /// Retrieves an integer property from the node's <see cref="GraphNode.Properties"/> dictionary,
-    /// or returns <see cref="DBNull.Value"/> if the key is missing or not a valid integer.
-    /// Supports both PascalCase and camelCase key lookups (along with "lineNumber" for "StartLine").
-    /// </summary>
-    private static object GetIntPropertyOrDbNull(GraphNode node, string key)
-    {
-        if (node.Properties.TryGetValue(key, out var value) && int.TryParse(value, out var intValue))
-        {
-            return intValue;
-        }
-        var camelKey = JsonNamingPolicy.CamelCase.ConvertName(key);
-        if (node.Properties.TryGetValue(camelKey, out value) && int.TryParse(value, out intValue))
-        {
-            return intValue;
-        }
-        if (key == "StartLine" && node.Properties.TryGetValue("lineNumber", out value) && int.TryParse(value, out intValue))
-        {
-            return intValue;
-        }
-        return DBNull.Value;
-    }
-
-    /// <summary>
-    /// Serializes the node's properties (excluding well-known DB columns) into a JSON string
-    /// for storage in the Metadata column.
-    /// </summary>
-    private static object SerializeMetadata(Dictionary<string, string> properties)
-    {
-        // Filter out properties that already have dedicated columns, using case-insensitive comparison.
-        var wellKnownKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "Content", "FilePath", "StartLine", "EndLine", "ContentHash", "lineNumber"
-        };
-
-        var metadata = properties
-            .Where(kvp => !wellKnownKeys.Contains(kvp.Key))
-            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-
-        return metadata.Count > 0
-            ? JsonSerializer.Serialize(metadata)
-            : DBNull.Value;
-    }
+    private static object SerializeMetadata(Dictionary<string, string> properties) =>
+        properties.Count > 0 ? JsonSerializer.Serialize(properties) : DBNull.Value;
 
     #endregion
 }

@@ -13,11 +13,11 @@ namespace Shonkor.Core.Models;
 /// (e.g., <c>Class</c>, <c>Method</c>, <c>File</c>).
 /// </param>
 /// <param name="EdgesByRelation">
-/// A breakdown of edge counts grouped by <see cref="GraphEdge.RelationType"/>
+/// A breakdown of edge counts grouped by <see cref="GraphEdge.Relationship"/>
 /// (e.g., <c>CONTAINS</c>, <c>IMPLEMENTS</c>, <c>CALLS</c>).
 /// </param>
 public record GraphStatistics(
-    int TotalNodes,
-    int TotalEdges,
+    long TotalNodes,
+    long TotalEdges,
     Dictionary<string, int> NodesByType,
     Dictionary<string, int> EdgesByRelation);

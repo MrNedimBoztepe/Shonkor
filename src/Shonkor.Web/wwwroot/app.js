@@ -20,22 +20,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
         langDropdownBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            langOptions.classList.toggle('hidden');
+            const open = langOptions.classList.toggle('hidden') === false;
+            langDropdownBtn.setAttribute('aria-expanded', String(open));
         });
 
         langOptions.querySelectorAll('li').forEach(li => {
-            li.addEventListener('click', (e) => {
+            // Keyboard-accessible: each option is focusable and activatable via Enter/Space.
+            li.setAttribute('tabindex', '0');
+            li.setAttribute('role', 'option');
+            const choose = () => {
                 const lang = li.getAttribute('data-value');
                 localStorage.setItem('shonkor_lang', lang);
                 updateLangUI(lang);
                 loadLanguage(lang);
                 langOptions.classList.add('hidden');
+                langDropdownBtn.setAttribute('aria-expanded', 'false');
+            };
+            li.addEventListener('click', choose);
+            li.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); }
             });
         });
 
         document.addEventListener('click', (e) => {
             if (!langDropdownBtn.contains(e.target) && !langOptions.contains(e.target)) {
                 langOptions.classList.add('hidden');
+                langDropdownBtn.setAttribute('aria-expanded', 'false');
             }
         });
     }
@@ -392,9 +402,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (res.ok) {
                 const items = await res.json();
                 renderKanban(items);
+            } else {
+                showToast('Could not load the dashboard interactions.');
             }
         } catch (e) {
             console.error("Failed to load dashboard:", e);
+            showToast('Network error while loading the dashboard.');
         }
     }
 
@@ -414,21 +427,47 @@ document.addEventListener('DOMContentLoaded', () => {
         items.forEach(item => {
             const card = document.createElement('div');
             card.className = 'kanban-card';
-            
-            let status = 'Open';
-            if (item.properties && item.properties.status) {
-                status = item.properties.status;
-            }
 
-            card.innerHTML = `
-                <div class="kanban-card-title">${escapeHtml(item.name || 'Untitled')}</div>
-                <div class="kanban-card-desc">${escapeHtml(item.content || '')}</div>
-                <div class="kanban-card-meta">
-                    <span class="kanban-badge">${escapeHtml(status)}</span>
-                </div>
-            `;
-            
-            // Allow clicking a card to search for it by ID and show it in the graph
+            const status = (item.properties && item.properties.status) ? item.properties.status : 'Open';
+
+            // Status options per interaction type (the current one is highlighted; the others act as set-buttons).
+            const STATUS_OPTIONS = {
+                Question: ['Open', 'Resolved'],
+                Task: ['Todo', 'In Progress', 'Done'],
+                Decision: ['Proposed', 'Accepted', 'Superseded'],
+                Milestone: ['In Progress', 'Completed', 'Blocked']
+            };
+            const options = STATUS_OPTIONS[item.type] || [status];
+
+            const title = document.createElement('div');
+            title.className = 'kanban-card-title';
+            title.textContent = item.name || 'Untitled';
+
+            const desc = document.createElement('div');
+            desc.className = 'kanban-card-desc';
+            desc.textContent = item.content || '';
+
+            const actions = document.createElement('div');
+            actions.className = 'kanban-card-status';
+            options.forEach(opt => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'kanban-status-btn' + (opt === status ? ' active' : '');
+                btn.textContent = opt;
+                btn.setAttribute('aria-pressed', String(opt === status));
+                btn.setAttribute('aria-label', `Set status of "${item.name || 'item'}" to ${opt}`);
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (opt !== status) updateInteractionStatus(item.id || item.Id, opt);
+                });
+                actions.appendChild(btn);
+            });
+
+            card.appendChild(title);
+            if (item.content) card.appendChild(desc);
+            card.appendChild(actions);
+
+            // Clicking the card body (not a status button) finds it in the graph.
             card.addEventListener('click', () => {
                 hideDashboard();
                 globalSearchInput.value = item.name;
@@ -440,6 +479,27 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (item.type === 'Decision') dCol.appendChild(card);
             else if (item.type === 'Milestone') mCol.appendChild(card);
         });
+    }
+
+    // Persist a new status for an interaction node, then refresh the board.
+    async function updateInteractionStatus(id, status) {
+        if (!id) return;
+        try {
+            const res = await fetch('/api/interactions/status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Project-Name': activeProjectName.textContent },
+                body: JSON.stringify({ id, status })
+            });
+            if (res.ok) {
+                showToast(`Status set to "${status}".`);
+                loadDashboard();
+            } else {
+                showToast('Could not update status. Please try again.');
+            }
+        } catch (e) {
+            console.error('Failed to update interaction status:', e);
+            showToast('Network error while updating status.');
+        }
     }
 
     // Search

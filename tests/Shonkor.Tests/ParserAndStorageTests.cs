@@ -300,7 +300,7 @@ public class ParserAndStorageTests
         var nodes = new List<GraphNode>
         {
             // NextJS JSComponent
-            new() { Id = "src/components/blogbox.tsx", Type = "JSComponent", Name = "BlogBox", Properties = new Dictionary<string, string> { ["filePath"] = "src/components/blogbox.tsx" } },
+            new() { Id = "src/components/blogbox.tsx", Type = "JSComponent", Name = "BlogBox", FilePath = "src/components/blogbox.tsx" },
             // Sitecore Rendering with explicit controller & componentName
             new() {
                 Id = "dfbb0822-f08f-4e1f-a4a7-20b5cde22893",
@@ -313,14 +313,14 @@ public class ParserAndStorageTests
                 }
             },
             // C# AST Controller Class
-            new() { Id = "csharp::blogcontroller", Type = "Class", Name = "BlogController", Properties = new Dictionary<string, string> { ["filePath"] = "src/Feature/Blog/code/Controllers/BlogController.cs" } },
+            new() { Id = "csharp::blogcontroller", Type = "Class", Name = "BlogController", FilePath = "src/Feature/Blog/code/Controllers/BlogController.cs" },
             // GraphQL Query referencing BlogPost
             new() {
                 Id = "query::getblogpost",
                 Type = "GraphQLQuery",
                 Name = "GetBlogPost",
+                FilePath = "src/Feature/Blog/graphql/GetBlogPost.graphql",
                 Properties = new Dictionary<string, string> {
-                    ["filePath"] = "src/Feature/Blog/graphql/GetBlogPost.graphql",
                     ["referencedTemplates"] = "BlogPost"
                 }
             },

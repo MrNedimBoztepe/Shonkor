@@ -51,9 +51,9 @@ public sealed class OptimizelyPlugin : IFileParser
                     Id = typeNodeId,
                     Name = typeName,
                     Type = nodeType,
+                    FilePath = filePath,
                     Properties = new Dictionary<string, string>
                     {
-                        ["filePath"] = filePath,
                         ["cms"] = "Optimizely"
                     }
                 });
