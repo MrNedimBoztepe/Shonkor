@@ -133,6 +133,7 @@ public static class Program
                 return;
             }
 
+
             var defaultConfig = new CliConfig();
             var options = new JsonSerializerOptions { WriteIndented = true };
             var json = JsonSerializer.Serialize(defaultConfig, options);

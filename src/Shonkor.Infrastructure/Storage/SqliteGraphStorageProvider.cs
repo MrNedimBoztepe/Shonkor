@@ -108,7 +108,8 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
                 EndLine     INTEGER,
                 ContentHash TEXT,
                 Summary     TEXT,
-                NeedsSemanticAnalysis INTEGER DEFAULT 1
+                NeedsSemanticAnalysis INTEGER DEFAULT 1,
+                Embedding   BLOB
             );
             """,
             cancellationToken).ConfigureAwait(false);
@@ -116,6 +117,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         // Migration for existing databases
         try { await ExecuteNonQueryAsync(connection, "ALTER TABLE Nodes ADD COLUMN Summary TEXT;", cancellationToken).ConfigureAwait(false); } catch { /* Ignore if already exists */ }
         try { await ExecuteNonQueryAsync(connection, "ALTER TABLE Nodes ADD COLUMN NeedsSemanticAnalysis INTEGER DEFAULT 1;", cancellationToken).ConfigureAwait(false); } catch { /* Ignore if already exists */ }
+        try { await ExecuteNonQueryAsync(connection, "ALTER TABLE Nodes ADD COLUMN Embedding BLOB;", cancellationToken).ConfigureAwait(false); } catch { /* Ignore if already exists */ }
 
         await ExecuteNonQueryAsync(connection,
             """
@@ -198,8 +200,8 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT OR REPLACE INTO Nodes (Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash, Summary, NeedsSemanticAnalysis)
-            VALUES (@Id, @Type, @Name, @Content, @Metadata, @FilePath, @StartLine, @EndLine, @ContentHash, @Summary, @NeedsSemanticAnalysis);
+            INSERT OR REPLACE INTO Nodes (Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash, Summary, NeedsSemanticAnalysis, Embedding)
+            VALUES (@Id, @Type, @Name, @Content, @Metadata, @FilePath, @StartLine, @EndLine, @ContentHash, @Summary, @NeedsSemanticAnalysis, @Embedding);
             """;
 
         var pId = command.Parameters.Add("@Id", SqliteType.Text);
@@ -213,6 +215,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var pContentHash = command.Parameters.Add("@ContentHash", SqliteType.Text);
         var pSummary = command.Parameters.Add("@Summary", SqliteType.Text);
         var pNeedsAnalysis = command.Parameters.Add("@NeedsSemanticAnalysis", SqliteType.Integer);
+        var pEmbedding = command.Parameters.Add("@Embedding", SqliteType.Blob);
 
         await command.PrepareAsync(cancellationToken).ConfigureAwait(false);
 
@@ -228,7 +231,15 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             pEndLine.Value = node.EndLine.HasValue ? node.EndLine.Value : DBNull.Value;
             pContentHash.Value = (object?)node.ContentHash ?? DBNull.Value;
             pSummary.Value = (object?)node.Summary ?? DBNull.Value;
-            pNeedsAnalysis.Value = string.IsNullOrEmpty(node.Summary) ? 1 : 0; // If no summary, needs analysis
+            pNeedsAnalysis.Value = 1;
+
+            byte[]? embeddingBytes = null;
+            if (node.Embedding != null)
+            {
+                embeddingBytes = new byte[node.Embedding.Length * 4];
+                Buffer.BlockCopy(node.Embedding, 0, embeddingBytes, 0, embeddingBytes.Length);
+            }
+            pEmbedding.Value = (object?)embeddingBytes ?? DBNull.Value;
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -413,6 +424,62 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         }
 
         return results;
+    }
+
+    public async Task<IReadOnlyList<SearchResult>> SearchSemanticAsync(float[] queryEmbedding, int maxResults = 10, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(queryEmbedding);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxResults);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        var hits = new List<(string Id, double Score)>();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Id, Embedding FROM Nodes WHERE Embedding IS NOT NULL;";
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var id = reader.GetString(0);
+            var blob = reader.GetValue(1) as byte[];
+            
+            if (blob != null && blob.Length > 0)
+            {
+                var floatCount = blob.Length / 4;
+                if (floatCount == queryEmbedding.Length)
+                {
+                    var nodeEmbedding = new float[floatCount];
+                    Buffer.BlockCopy(blob, 0, nodeEmbedding, 0, blob.Length);
+                    
+                    var score = System.Numerics.Tensors.TensorPrimitives.CosineSimilarity(queryEmbedding, nodeEmbedding);
+                    hits.Add((id, (double)score));
+                }
+            }
+        }
+
+        if (hits.Count == 0)
+        {
+            return [];
+        }
+
+        var topHits = hits.OrderByDescending(h => h.Score).Take(maxResults).ToList();
+        var ids = topHits.Select(h => h.Id).ToList();
+
+        // Fetch full nodes
+        var (nodes, _) = await GetSubgraphAsync(ids, 0, cancellationToken).ConfigureAwait(false);
+        var nodesById = nodes.ToDictionary(n => n.Id);
+
+        var finalHits = new List<(GraphNode Node, double Score)>();
+        foreach (var hit in topHits)
+        {
+            if (nodesById.TryGetValue(hit.Id, out var node))
+            {
+                finalHits.Add((node, hit.Score));
+            }
+        }
+
+        return await AttachEdgesAsync(connection, finalHits, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -942,15 +1009,86 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         return nodes;
     }
 
-    public async Task UpdateNodeSemanticDataAsync(string nodeId, string summary, CancellationToken cancellationToken = default)
+    public async Task UpdateNodeSemanticDataAsync(string nodeId, SemanticAnalysisResult result, float[]? embedding = null, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        // 1. Fetch existing properties
+        await using var selectCmd = connection.CreateCommand();
+        selectCmd.CommandText = "SELECT Metadata FROM Nodes WHERE Id = @Id;";
+        selectCmd.Parameters.AddWithValue("@Id", nodeId);
+        
+        var existingPropsJson = await selectCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        
+        // Ensure Concepts are stored in the graph relationships instead of just metadata
+        if (result.ExtractedConcepts.Count > 0)
+        {
+            await using var mergeTx = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            
+            // Create Concept nodes if they don't exist
+            await using var conceptCmd = connection.CreateCommand();
+            conceptCmd.Transaction = mergeTx;
+            conceptCmd.CommandText = @"
+                INSERT OR IGNORE INTO Nodes (Id, Type, Name, Content, Summary, NeedsSemanticAnalysis)
+                VALUES (@Id, 'Concept', @Name, @Name, '', 0);
+            ";
+            var pConceptId = conceptCmd.Parameters.Add("@Id", SqliteType.Text);
+            var pConceptName = conceptCmd.Parameters.Add("@Name", SqliteType.Text);
+            
+            await conceptCmd.PrepareAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var concept in result.ExtractedConcepts)
+            {
+                pConceptId.Value = $"concept_{concept.ToLowerInvariant()}";
+                pConceptName.Value = concept;
+                await conceptCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            
+            // Create Edges
+            await using var edgeCmd = connection.CreateCommand();
+            edgeCmd.Transaction = mergeTx;
+            edgeCmd.CommandText = @"
+                INSERT OR IGNORE INTO Edges (SourceId, TargetId, RelationType)
+                VALUES (@SourceId, @TargetId, 'RELATES_TO');
+            ";
+            var pSourceId = edgeCmd.Parameters.Add("@SourceId", SqliteType.Text);
+            var pTargetId = edgeCmd.Parameters.Add("@TargetId", SqliteType.Text);
+            
+            await edgeCmd.PrepareAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var concept in result.ExtractedConcepts)
+            {
+                pSourceId.Value = nodeId;
+                pTargetId.Value = $"concept_{concept.ToLowerInvariant()}";
+                await edgeCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            
+            await mergeTx.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        
+        var properties = string.IsNullOrEmpty(existingPropsJson) 
+            ? new Dictionary<string, string>() 
+            : JsonSerializer.Deserialize<Dictionary<string, string>>(existingPropsJson) ?? new Dictionary<string, string>();
+            
+        properties["PromptTokens"] = result.PromptTokens.ToString();
+        properties["CompletionTokens"] = result.CompletionTokens.ToString();
+        properties["LatencyMs"] = result.LatencyMs.ToString();
+
+        // 2. Update node
         await using var command = connection.CreateCommand();
         command.CommandText = @"
             UPDATE Nodes 
-            SET Summary = @Summary, NeedsSemanticAnalysis = 0 
+            SET Summary = @Summary, Metadata = @Metadata, NeedsSemanticAnalysis = 0, Embedding = @Embedding 
             WHERE Id = @Id;";
-        command.Parameters.AddWithValue("@Summary", (object?)summary ?? DBNull.Value);
+        command.Parameters.AddWithValue("@Summary", (object?)result.Summary ?? DBNull.Value);
+        command.Parameters.AddWithValue("@Metadata", JsonSerializer.Serialize(properties));
+        
+        byte[]? embeddingBytes = null;
+        if (embedding != null)
+        {
+            embeddingBytes = new byte[embedding.Length * 4];
+            Buffer.BlockCopy(embedding, 0, embeddingBytes, 0, embeddingBytes.Length);
+        }
+        command.Parameters.AddWithValue("@Embedding", (object?)embeddingBytes ?? DBNull.Value);
+        
         command.Parameters.AddWithValue("@Id", nodeId);
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

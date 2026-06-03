@@ -31,9 +31,7 @@ public class ApiKeyMiddleware
         var isLocal = context.Connection.RemoteIpAddress != null &&
                       IPAddress.IsLoopback(context.Connection.RemoteIpAddress);
 
-        var isSaaSEndpoint = context.Request.Path.StartsWithSegments("/api/rag");
-
-        if (allowLocalBypass && isLocal && !isSaaSEndpoint)
+        if (allowLocalBypass && isLocal)
         {
             await _next(context);
             return;

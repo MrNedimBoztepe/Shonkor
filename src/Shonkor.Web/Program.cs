@@ -37,6 +37,7 @@ builder.Services.AddSingleton<ContextCapsuleSynthesizer>();
 
 // Register Semantic Analyzer Backend (Phase 2 - Ollama Integration)
 builder.Services.AddHttpClient<ISemanticAnalyzer, OllamaSemanticAnalyzer>();
+builder.Services.AddHttpClient<IEmbeddingService, OllamaEmbeddingService>();
 builder.Services.AddHostedService<SemanticEnrichmentService>();
 
 var app = builder.Build();
@@ -148,6 +149,73 @@ app.MapGet("/api/search", async (string q, int? limit, int? offset, string? type
     catch (Exception ex)
     {
         return Fail("Search failed.", ex);
+    }
+});
+
+// 2a. GET /api/search/semantic - Semantic search over nodes in active project using vector embeddings
+app.MapGet("/api/search/semantic", async (string q, int? limit, HttpContext context, ProjectManager pm, IEmbeddingService embeddingService, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(q))
+    {
+        return Results.BadRequest("Query string 'q' cannot be empty.");
+    }
+
+    try
+    {
+        var projectName = context.Request.Headers["X-Project-Name"].ToString();
+        var storage = string.IsNullOrEmpty(projectName) ? pm.GetActiveStorageProvider() : pm.GetStorageProvider(projectName);
+        
+        var queryEmbedding = await embeddingService.GenerateEmbeddingAsync(q, ct);
+        if (queryEmbedding == null || queryEmbedding.Length == 0)
+        {
+            return Fail("Failed to generate embedding for the search query.", new Exception("Embedding generation returned empty."));
+        }
+        
+        var maxResults = limit ?? 15;
+        var results = await storage.SearchSemanticAsync(queryEmbedding, maxResults, ct);
+        return Results.Ok(results);
+    }
+    catch (Exception ex)
+    {
+        return Fail("Semantic search failed.", ex);
+    }
+});
+
+// 2b. POST /api/rag/ask - Generate a text answer based on the given node context
+app.MapPost("/api/rag/ask", async (AskRagRequest req, HttpContext context, ProjectManager pm, ISemanticAnalyzer semanticAnalyzer, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Query) || req.NodeIds == null || req.NodeIds.Length == 0)
+    {
+        return Results.BadRequest("Query and NodeIds are required.");
+    }
+
+    try
+    {
+        var projectName = context.Request.Headers["X-Project-Name"].ToString();
+        var storage = string.IsNullOrEmpty(projectName) ? pm.GetActiveStorageProvider() : pm.GetStorageProvider(projectName);
+
+        // Retrieve the full nodes to use as context
+        var contextNodes = new List<GraphNode>();
+        foreach (var id in req.NodeIds)
+        {
+            var node = await storage.GetNodeByIdAsync(id, ct);
+            if (node != null)
+            {
+                contextNodes.Add(node);
+            }
+        }
+
+        if (contextNodes.Count == 0)
+        {
+            return Results.BadRequest("None of the provided NodeIds were found in the database.");
+        }
+
+        var responseText = await semanticAnalyzer.GenerateRAGResponseAsync(req.Query, contextNodes, ct);
+        return Results.Ok(new { response = responseText });
+    }
+    catch (Exception ex)
+    {
+        return Fail("Failed to generate RAG response.", ex);
     }
 });
 
@@ -732,3 +800,5 @@ public record CapsuleRequest(string Query, int? Hops);
 public record IndexRequest(string? Directory, List<string>? ExcludePatterns);
 public record PluginCreateRequest(string Name, string Extension);
 public record UpdateStatusRequest(string Id, string Status);
+public record UpsertNodeRequest(GraphNode Node);
+public record AskRagRequest(string Query, string[] NodeIds);

@@ -43,6 +43,7 @@ public class ProjectManager
     private readonly object _lock = new();
     private List<Project> _projects = new();
     private string _activeProjectName = string.Empty;
+    private DateTime _lastLoadTime = DateTime.MinValue;
 
     public string WorkspacePath { get; private set; }
 
@@ -54,10 +55,23 @@ public class ProjectManager
         EnsureStandardPlugins();
     }
 
+    private void EnsureUpToDate()
+    {
+        if (File.Exists(_projectsFilePath))
+        {
+            var currentWriteTime = File.GetLastWriteTimeUtc(_projectsFilePath);
+            if (currentWriteTime > _lastLoadTime)
+            {
+                LoadProjects(WorkspacePath);
+            }
+        }
+    }
+
     public List<Project> GetProjects()
     {
         lock (_lock)
         {
+            EnsureUpToDate();
             return _projects.ToList();
         }
     }
@@ -66,6 +80,7 @@ public class ProjectManager
     {
         lock (_lock)
         {
+            EnsureUpToDate();
             return _activeProjectName;
         }
     }
@@ -74,6 +89,7 @@ public class ProjectManager
     {
         lock (_lock)
         {
+            EnsureUpToDate();
             return _projects.FirstOrDefault(p => p.Name.Equals(_activeProjectName, StringComparison.OrdinalIgnoreCase));
         }
     }
@@ -353,6 +369,7 @@ public class ProjectManager
                     _projects = registry.Projects ?? new();
                     _activeProjectName = registry.ActiveProjectName ?? string.Empty;
                 }
+                _lastLoadTime = File.GetLastWriteTimeUtc(_projectsFilePath);
             }
             catch
             {

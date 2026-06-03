@@ -29,6 +29,9 @@ public record GraphNode
     /// <summary>An AI-generated semantic summary of the node's business purpose or functionality.</summary>
     public string? Summary { get; set; }
 
+    /// <summary>The numerical vector representation of the node's Summary.</summary>
+    public float[]? Embedding { get; set; }
+
     /// <summary>
     /// Dynamic, parser-specific attributes (e.g. <c>modifiers</c>, <c>returnType</c>,
     /// <c>referencedTypes</c>, <c>status</c>, <c>sitecorePath</c>). Persisted as JSON.

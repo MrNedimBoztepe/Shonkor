@@ -1,30 +1,30 @@
-# arc42 Kapitel 2: Randbedingungen ⚙️
+# arc42 Chapter 2: Architecture Constraints ⚙️
 
-Dieses Kapitel beschreibt die technischen und organisatorischen Vorgaben, die das Design von Shonkor beeinflussen.
+This chapter describes the technical and organizational constraints that influence the design of Shonkor.
 
 ---
 
-## 2.1 Technische Randbedingungen
+## 2.1 Technical Constraints
 
-| Randbedingung | Beschreibung | Auswirkung auf die Architektur |
+| Constraint | Description | Impact on Architecture |
 | :--- | :--- | :--- |
-| **.NET 10 (C#)** | Das System muss auf der neuesten .NET-Laufzeitumgebung lauffähig sein. | Verwendung moderner C#-Features wie File-Scoped Namespaces, Records, Pattern Matching und Native AOT-Kompatibilität. |
-| **SQLite (FTS5 + CTE)** | Verwendung von SQLite als einziges Datenbank-Backend. | Datenbankoperationen müssen über performante SQL-Befehle gelöst werden. Rekursive CTEs und FTS5-Trigger müssen manuell im Setup erstellt werden. |
-| **Keine externen Server** | Keine Abhängigkeiten zu Cloud-RAG-Systemen oder externen SaaS-Datenbanken. | Sämtliche Logik (Parser, Storage, CLI und Web-Host) wird lokal auf dem Rechner des Anwenders ausgeführt. |
-| **Plattformunterstützung** | Unterstützung für Windows-Systeme (und Linux/macOS via dotnet-Core). | Verwendung von plattformunabhängigen Pfad-Separatoren und standardisierten Dateisystem-Zugriffen. |
+| **.NET 10 (C#)** | The system must be executable on the latest .NET runtime environment. | Use of modern C# features such as file-scoped namespaces, records, pattern matching, and native AOT compatibility. |
+| **SQLite (FTS5 + CTE)** | Use of SQLite as the sole database backend. | Database operations must be resolved via performant SQL commands. Recursive CTEs and FTS5 triggers must be created manually during setup. |
+| **No External Servers** | No dependencies on cloud RAG systems or external SaaS databases. | All logic (parser, storage, CLI, and web host) is executed locally on the user's machine. |
+| **Platform Support** | Support for Windows systems (and Linux/macOS via dotnet-core). | Use of platform-independent path separators and standardized file system access. |
 
 ---
 
-## 2.2 Organisatorische Randbedingungen
+## 2.2 Organizational Constraints
 
-* **GitFlow-Modell**: Konsequente Trennung von Feature-Entwicklungen über kurzlebige `feature/*` Branches, die in einen `develop` Branch und schließlich in einen stabilen `main`/`master` Branch gemergt werden.
-* **arc42 Dokumentationsstandard**: Verpflichtung zur Führung und kontinuierlichen Pflege der Systemarchitektur in separaten, versionierten Kapiteln.
-* **Dokumentenintegrität**: Jede Code-Änderung erfordert eine unmittelbare Überprüfung der dazugehörigen Architekturdokumentation (Pre-Commit-Richtlinie).
+* **GitFlow Model**: Consistent separation of feature development via short-lived `feature/*` branches, which are merged into a `develop` branch and ultimately into a stable `main`/`master` branch.
+* **arc42 Documentation Standard**: Commitment to maintaining and continuously updating the system architecture in separate, versioned chapters.
+* **Document Integrity**: Every code change requires an immediate review of the associated architecture documentation (pre-commit guideline).
 
 ---
 
-## 2.3 Konventionen
+## 2.3 Conventions
 
-* **.NET Code Guidelines**: Einhaltung offizieller Microsoft-Codierrichtlinien (PascalCase für öffentliche Member, camelCase für Parameter, Unterstrich-Präfix `_` für private Felder).
-* **SOLID, KISS, DRY**: Vermeidung von Code-Duplikaten durch zentrale Abstraktionen (z. B. `IGraphStorageProvider`) und Trennung von Parser- und Persistenzlogiken.
-* **Nullable Reference Types**: Zwingende Aktivierung von `<Nullable>enable</Nullable>` in allen Projektdateien zur Vermeidung von NullReferenceExceptions.
+* **.NET Code Guidelines**: Adherence to official Microsoft coding guidelines (PascalCase for public members, camelCase for parameters, underscore prefix `_` for private fields).
+* **SOLID, KISS, DRY**: Avoidance of code duplication through central abstractions (e.g., `IGraphStorageProvider`) and separation of parser and persistence logic.
+* **Nullable Reference Types**: Mandatory activation of `<Nullable>enable</Nullable>` in all project files to prevent NullReferenceExceptions.

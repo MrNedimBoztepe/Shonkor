@@ -3,20 +3,23 @@
  * Themes: Glassmorphism, Neon Glows, Dark Mode, Space depth
  */
 
-:root {
-    --bg-base: #080b11;
-    --bg-glass: rgba(13, 19, 33, 0.6);
-    --bg-glass-sm: rgba(22, 28, 45, 0.4);
-    --bg-glass-solid: rgba(13, 19, 33, 0.95);
+:root, :root.theme-dark {
+    /* Tengrism Dark Mode (Default / System Dark) */
+    --bg-base: #050a11; /* Deep Night Sky */
+    --bg-glass: rgba(10, 15, 30, 0.65);
+    --bg-glass-sm: rgba(15, 20, 35, 0.5);
+    --bg-glass-solid: rgba(8, 12, 22, 0.95);
+    --bg-glass-hover: rgba(255, 255, 255, 0.08);
     --border-glass: rgba(255, 255, 255, 0.08);
-    --border-glass-highlight: rgba(255, 255, 255, 0.15);
+    --border-glass-highlight: rgba(255, 255, 255, 0.2);
+    --shadow-glass: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
     
-    --color-text: #e2e8f0;
+    --color-text: #f1f5f9; /* Feather White */
     --color-text-muted: #94a3b8;
-    --color-primary: #3b82f6;
-    --color-primary-glow: rgba(59, 130, 246, 0.4);
-    --color-accent: #06b6d4;
-    --color-accent-glow: rgba(6, 182, 212, 0.4);
+    --color-primary: #0ea5e9; /* Tengri Sky Blue */
+    --color-primary-glow: rgba(14, 165, 233, 0.4);
+    --color-accent: #f59e0b; /* Falcon Gold / Sun */
+    --color-accent-glow: rgba(245, 158, 11, 0.4);
     
     --color-file: #3b82f6;
     --color-class: #06b6d4;
@@ -27,8 +30,58 @@
     --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
     
-    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-smooth: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
     --transition-quick: all 0.15s ease-out;
+}
+
+:root.theme-light {
+    --bg-base: #f0f4f8; /* Cloud/Feather Gray-White */
+    --bg-glass: rgba(255, 255, 255, 0.65);
+    --bg-glass-sm: rgba(255, 255, 255, 0.5);
+    --bg-glass-solid: rgba(248, 250, 252, 0.95);
+    --bg-glass-hover: rgba(0, 0, 0, 0.04);
+    --border-glass: rgba(0, 0, 0, 0.08);
+    --border-glass-highlight: rgba(0, 0, 0, 0.18);
+    --shadow-glass: 0 8px 32px 0 rgba(0, 0, 0, 0.08);
+    
+    --color-text: #0f172a; /* Earthy Dark */
+    --color-text-muted: #64748b;
+    --color-primary: #0284c7; /* Deep Tengri Blue */
+    --color-primary-glow: rgba(2, 132, 199, 0.3);
+    --color-accent: #d97706; /* Deep Falcon Gold */
+    --color-accent-glow: rgba(217, 119, 6, 0.3);
+    
+    --color-file: #2563eb;
+    --color-class: #0891b2;
+    --color-method: #9333ea;
+    --color-markdown: #059669;
+    --color-other: #475569;
+}
+
+@media (prefers-color-scheme: light) {
+    :root:not(.theme-dark) {
+        --bg-base: #f0f4f8; /* Cloud/Feather Gray-White */
+        --bg-glass: rgba(255, 255, 255, 0.65);
+        --bg-glass-sm: rgba(255, 255, 255, 0.5);
+        --bg-glass-solid: rgba(248, 250, 252, 0.95);
+        --bg-glass-hover: rgba(0, 0, 0, 0.04);
+        --border-glass: rgba(0, 0, 0, 0.08);
+        --border-glass-highlight: rgba(0, 0, 0, 0.18);
+        --shadow-glass: 0 8px 32px 0 rgba(0, 0, 0, 0.08);
+        
+        --color-text: #0f172a; /* Earthy Dark */
+        --color-text-muted: #64748b;
+        --color-primary: #0284c7; /* Deep Tengri Blue */
+        --color-primary-glow: rgba(2, 132, 199, 0.3);
+        --color-accent: #d97706; /* Deep Falcon Gold */
+        --color-accent-glow: rgba(217, 119, 6, 0.3);
+        
+        --color-file: #2563eb;
+        --color-class: #0891b2;
+        --color-method: #9333ea;
+        --color-markdown: #059669;
+        --color-other: #475569;
+    }
 }
 
 * {
@@ -41,18 +94,20 @@
 
 /* Beautiful Custom Scrollbars */
 ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
 }
 ::-webkit-scrollbar-track {
     background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(128, 128, 128, 0.2);
     border-radius: 10px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background-color: rgba(128, 128, 128, 0.4);
 }
 
 body {
@@ -63,6 +118,15 @@ body {
     height: 100vh;
     width: 100%;
     position: relative;
+    transition: background-color 0.5s ease, color 0.5s ease;
+}
+
+/* Accessibility Focus States */
+*:focus-visible {
+    outline: 2px solid var(--color-accent) !important;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px var(--color-accent-glow) !important;
+    border-radius: 4px;
 }
 
 /* Glowing background depth elements */
@@ -139,9 +203,9 @@ body {
     background: var(--bg-glass);
     border: 1px solid var(--border-glass);
     border-radius: 16px;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    box-shadow: var(--shadow-glass);
     transition: var(--transition-smooth);
 }
 
@@ -153,8 +217,10 @@ body {
     background: var(--bg-glass-sm);
     border: 1px solid var(--border-glass);
     border-radius: 12px;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-glass);
+    transition: var(--transition-smooth);
 }
 
 /* HEADER STYLE */
@@ -415,13 +481,17 @@ body {
     gap: 0.2rem;
     z-index: 1000;
     transform-origin: top right;
-    transition: opacity 0.2s, transform 0.2s;
+    transition: var(--transition-quick);
+    opacity: 1;
+    visibility: visible;
+    transform: scale(1) translateY(0);
 }
 
 .lang-options.hidden {
     opacity: 0;
+    visibility: hidden;
     pointer-events: none;
-    transform: scale(0.95);
+    transform: scale(0.95) translateY(-5px);
 }
 
 .lang-options li {
@@ -993,13 +1063,17 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 100;
+    z-index: 1000;
     transition: var(--transition-smooth);
+    opacity: 1;
+    visibility: visible;
 }
 
 .modal-overlay.hidden {
     opacity: 0;
+    visibility: hidden;
     pointer-events: none;
+    backdrop-filter: blur(0px);
 }
 
 .modal-container {
@@ -1008,12 +1082,14 @@ body {
     height: 75vh;
     display: flex;
     flex-direction: column;
-    animation: modal-zoom 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: var(--transition-smooth);
+    transform: scale(1) translateY(0);
+    opacity: 1;
 }
 
-@keyframes modal-zoom {
-    0% { transform: scale(0.9); opacity: 0; }
-    100% { transform: scale(1); opacity: 1; }
+.modal-overlay.hidden .modal-container {
+    transform: scale(0.95) translateY(10px);
+    opacity: 0;
 }
 
 .modal-header {
@@ -1202,17 +1278,18 @@ body {
     gap: 4px;
     background: var(--bg-glass-solid);
     border: 1px solid var(--border-glass-highlight);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 20px rgba(59, 130, 246, 0.08);
-    animation: dropdown-appear 0.15s ease-out;
+    box-shadow: var(--shadow-glass);
+    transition: var(--transition-quick);
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
 }
 
 .project-dropdown.hidden {
-    display: none;
-}
-
-@keyframes dropdown-appear {
-    from { opacity: 0; transform: translateY(-6px); }
-    to   { opacity: 1; transform: translateY(0); }
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-6px);
 }
 
 .dropdown-search-wrapper {
@@ -1867,10 +1944,20 @@ body {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    background: var(--bg-glass-solid);
+    border: 1px solid var(--border-glass-highlight);
+    box-shadow: var(--shadow-glass);
+    transition: var(--transition-quick);
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
 }
 
 .filter-dropdown-menu.hidden {
-    display: none;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-5px);
 }
 
 .filter-category-header {
@@ -2399,8 +2486,8 @@ body {
 }
 
 .kanban-card {
-    background: rgba(10, 14, 23, 0.8);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-glass-solid);
+    border: 1px solid var(--border-glass);
     border-radius: 8px;
     padding: 0.85rem;
     cursor: pointer;
@@ -2409,14 +2496,14 @@ body {
 
 .kanban-card:hover {
     transform: translateY(-2px);
-    border-color: rgba(255, 255, 255, 0.2);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    border-color: var(--border-glass-highlight);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .kanban-card-title {
     font-size: 0.9rem;
     font-weight: 600;
-    color: #fff;
+    color: var(--color-text);
     margin-bottom: 0.4rem;
 }
 
@@ -2457,9 +2544,9 @@ body {
 .kanban-status-btn {
     padding: 0.15rem 0.5rem;
     border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    background: rgba(255, 255, 255, 0.05);
-    color: #bbb;
+    border: 1px solid var(--border-glass-highlight);
+    background: var(--bg-glass-sm);
+    color: var(--color-text-muted);
     font-size: 0.68rem;
     font-weight: 500;
     cursor: pointer;
@@ -2467,15 +2554,15 @@ body {
 }
 
 .kanban-status-btn:hover {
-    background: rgba(59, 130, 246, 0.18);
-    color: #fff;
-    border-color: rgba(59, 130, 246, 0.5);
+    background: var(--color-primary-glow);
+    color: var(--color-text);
+    border-color: var(--color-primary);
 }
 
 .kanban-status-btn.active {
-    background: rgba(59, 130, 246, 0.85);
+    background: var(--color-primary);
     color: #fff;
-    border-color: rgba(59, 130, 246, 0.9);
+    border-color: var(--color-primary);
     cursor: default;
 }
 
@@ -2485,8 +2572,7 @@ button:focus-visible,
 [tabindex]:focus-visible,
 input:focus-visible,
 select:focus-visible {
-    outline: 2px solid #60a5fa;
-    outline-offset: 2px;
+    /* Kept clean, defaults to the global *:focus-visible */
 }
 
 select.glass-btn option {

@@ -18,6 +18,7 @@ public class SemanticEnrichmentService : BackgroundService
 {
     private readonly ProjectManager _projectManager;
     private readonly ISemanticAnalyzer _analyzer;
+    private readonly IEmbeddingService _embeddingService;
     private readonly ILogger<SemanticEnrichmentService> _logger;
     private readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(30);
     private const int BatchSize = 10;
@@ -25,10 +26,12 @@ public class SemanticEnrichmentService : BackgroundService
     public SemanticEnrichmentService(
         ProjectManager projectManager, 
         ISemanticAnalyzer analyzer, 
+        IEmbeddingService embeddingService,
         ILogger<SemanticEnrichmentService> logger)
     {
         _projectManager = projectManager;
         _analyzer = analyzer;
+        _embeddingService = embeddingService;
         _logger = logger;
     }
 
@@ -80,12 +83,15 @@ public class SemanticEnrichmentService : BackgroundService
                     {
                         var result = await _analyzer.AnalyzeNodeAsync(node, cancellationToken);
                         
-                        // Update the node's semantic summary in the DB
-                        await storage.UpdateNodeSemanticDataAsync(node.Id, result.Summary, cancellationToken);
-
-                        // If the analyzer returned extracted concepts, we could optionally 
-                        // create new Concept nodes and BELONGS_TO_CONCEPT edges here.
-                        // For now, Phase 2 focuses on just persisting the Summary.
+                        float[]? embedding = null;
+                        if (!string.IsNullOrWhiteSpace(result.Summary))
+                        {
+                            _logger.LogDebug("Generating vector embedding for node {Id}...", node.Id);
+                            embedding = await _embeddingService.GenerateEmbeddingAsync(result.Summary, cancellationToken);
+                        }
+                        
+                        // Update the node's semantic data (Summary + Metrics + Embedding) in the DB
+                        await storage.UpdateNodeSemanticDataAsync(node.Id, result, embedding, cancellationToken);
                     }
                     catch (Exception ex)
                     {

@@ -35,7 +35,12 @@ public interface IGraphStorageProvider
     Task<IReadOnlyList<SearchResult>> SearchAsync(string query, int maxResults = 10, int offset = 0, string? filterType = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Retrieves a subgraph centered on the specified seed nodes, expanding outward
+    /// Performs a semantic similarity search using vector embeddings.
+    /// </summary>
+    Task<IReadOnlyList<SearchResult>> SearchSemanticAsync(float[] queryEmbedding, int maxResults = 10, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Generates a subgraph by expanding outward from the specified seed nodes., expanding outward
     /// by the given number of hops along edges in either direction.
     /// </summary>
     Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> GetSubgraphAsync(IEnumerable<string> seedNodeIds, int hops = 1, CancellationToken cancellationToken = default);
@@ -70,7 +75,7 @@ public interface IGraphStorageProvider
     /// <summary>
     /// Updates the semantic summary of a node and resets its pending flag.
     /// </summary>
-    Task UpdateNodeSemanticDataAsync(string nodeId, string summary, CancellationToken cancellationToken = default);
+    Task UpdateNodeSemanticDataAsync(string nodeId, SemanticAnalysisResult result, float[]? embedding = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Retrieves all nodes from the graph store.

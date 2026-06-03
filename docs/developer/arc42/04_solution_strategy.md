@@ -1,30 +1,30 @@
-# arc42 Kapitel 4: Lösungsstrategie 💡
+# arc42 Chapter 4: Solution Strategy 💡
 
-Dieses Kapitel beschreibt die grundlegenden Architekturentscheidungen und technologischen Ansätze des Shonkor-Systems.
-
----
-
-## 4.1 Kernkonzept: Deterministischer Wissensgraph
-
-Probabilistisches RAG (z. B. Vektordatenbanken) leidet unter dem Verlust logischer Beziehungen. Um 100% präzisen Code-Kontext zu liefern, implementiert Shonkor einen exakten gerichteten Wissensgraphen.
-
-1. **Abstraktion von Code als Graph**:
-   * **Knoten (Nodes)** stellen Entitäten dar: Dateien, Klassen, Methoden, Konfigurationen und Markdown-Abschnitte. Jeder Knoten speichert seinen Typ, Namen und Quelltext (`Content`).
-   * **Kanten (Edges)** stellen Beziehungen dar, u. a. `CONTAINS` (Datei/Typ enthält Member), `IMPLEMENTS`/`EXTENDS` (Vererbung), `REFERENCES_TYPE` (Typ verwendet anderen Typ – Basis der Impact-Analyse), `IMPORTS` (Modulabhängigkeit) sowie Cross-Technology-Kanten (`BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMPLATE`, `BELONGS_TO_MODULE`).
-2. **Technologiewahl: SQLite**:
-   * Anstelle komplexer Graph-Datenbanken (Neo4j, Memgraph), die eine schwere Serverinstallation erfordern, setzt Shonkor auf **SQLite**.
-   * Dies ermöglicht eine 0-Dependency, portable Datei (`shonkor.db`), die direkt in das Git-Repository eingecheckt werden kann.
-   * **FTS5 (Full-Text Search)**: Ermöglicht extrem schnelle, BM25-gewertete Schlagwortsuche über den Code-Content, um die Einstiegspunkte ("Seeds") für Suchanfragen zu finden.
-   * **Recursive Common Table Expressions (CTEs)**: Ermöglicht die Traversierung des Graphen über beliebig viele Hops ("N-Hops") direkt auf SQL-Ebene. Dies löst das typische Performance-Problem relationaler Graphen in Millisekunden.
+This chapter describes the fundamental architecture decisions and technological approaches of the Shonkor system.
 
 ---
 
-## 4.2 Multi-Language Parser-Strategie
+## 4.1 Core Concept: Deterministic Knowledge Graph
 
-Das System zerlegt unterschiedliche Sprachen mithilfe spezialisierter Parser-Klassen, die alle die gemeinsame Schnittstelle `IFileParser` implementieren:
+Probabilistic RAG (e.g., vector databases) suffers from the loss of logical relationships. To provide 100% precise code context, Shonkor implements an exact directed knowledge graph.
 
-* **Roslyn AST-Parser (C#)**: Nutzt den offiziellen Microsoft C#-Compiler, um Quelltext in abstrakte Syntaxbäume (AST) zu zerlegen. Dies ermöglicht die exakte Extraktion von Klassendeklarationen, Vererbung und Methodensignaturen. Erkennt Optimizely `[ContentType]` Attribute.
-* **JavaScript/TypeScript Parser**: Nutzt die performante **Esprima**-Bibliothek, um JS/TS-Dateien syntaktisch zu analysieren. Extrahiert Import/Export-Beziehungen zur Abbildung von Modulabhängigkeiten.
-* **Smarty- & PHP-Parser**: Regex-basierter Parser zur Extraktion von Erweiterungen (`extends`) in OXID eShop-Modulen sowie Smarty-Template-Blöcken (`[{block name="..."}]`).
-* **SCS-YAML Parser (Sitecore)**: Deserialisiert SCS-YAML-Dateien mittels **YamlDotNet**, um Sitecore-Templates und Layouts im Graphen abzubilden.
-* **Markdown Hierarchy Parser**: Analysiert Markdown-Strukturen anhand von Überschriften (`#`, `##`, `###`) und extrahiert relative Dateilinks, um Dokumente als Begleitmaterial semantisch mit dem Code zu verknüpfen.
+1. **Abstraction of Code as a Graph**:
+   * **Nodes** represent entities: files, classes, methods, configurations, and Markdown sections. Each node stores its type, name, and source code (`Content`).
+   * **Edges** represent relationships, including `CONTAINS` (file/type contains member), `IMPLEMENTS`/`EXTENDS` (inheritance), `REFERENCES_TYPE` (type uses another type – the basis of impact analysis), `IMPORTS` (module dependency), as well as cross-technology edges (`BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMPLATE`, `BELONGS_TO_MODULE`).
+2. **Technology Choice: SQLite**:
+   * Instead of complex graph databases (Neo4j, Memgraph) that require heavy server installations, Shonkor relies on **SQLite**.
+   * This enables a zero-dependency, portable file (`shonkor.db`) that can be checked directly into the Git repository.
+   * **FTS5 (Full-Text Search)**: Enables extremely fast, BM25-weighted keyword search across code content to find the entry points ("seeds") for search queries.
+   * **Recursive Common Table Expressions (CTEs)**: Enables traversing the graph across an arbitrary number of hops ("N-hops") directly at the SQL level. This solves the typical performance problem of relational graphs in milliseconds.
+
+---
+
+## 4.2 Multi-Language Parser Strategy
+
+The system breaks down different languages using specialized parser classes, all of which implement the common `IFileParser` interface:
+
+* **Roslyn AST Parser (C#)**: Uses the official Microsoft C# compiler to break source code down into abstract syntax trees (AST). This enables the exact extraction of class declarations, inheritance, and method signatures. Detects Optimizely `[ContentType]` attributes.
+* **JavaScript/TypeScript Parser**: Uses the highly performant **Esprima** library to syntactically analyze JS/TS files. Extracts import/export relationships to map module dependencies.
+* **Smarty & PHP Parser**: Regex-based parser for extracting extensions (`extends`) in OXID eShop modules as well as Smarty template blocks (`[{block name="..."}]`).
+* **SCS-YAML Parser (Sitecore)**: Deserializes SCS-YAML files using **YamlDotNet** to map Sitecore templates and layouts in the graph.
+* **Markdown Hierarchy Parser**: Analyzes Markdown structures based on headings (`#`, `##`, `###`) and extracts relative file links to semantically link documents as accompanying material with the code.

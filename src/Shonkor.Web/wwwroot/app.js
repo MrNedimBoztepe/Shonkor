@@ -126,9 +126,46 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultsCountEl = document.getElementById('results-count');
     const resultsListEl = document.getElementById('search-results-list');
     const triggerScanBtn = document.getElementById('trigger-scan-btn');
+    const themeToggleBtn = document.getElementById('theme-toggle-btn');
+    const themeIcon = document.getElementById('theme-icon');
+
+    // Theme Toggle Logic
+    let isLightMode = window.matchMedia('(prefers-color-scheme: light)').matches;
+    if (localStorage.getItem('shonkor-theme') === 'light') isLightMode = true;
+    if (localStorage.getItem('shonkor-theme') === 'dark') isLightMode = false;
+
+    function applyTheme() {
+        if (isLightMode) {
+            document.documentElement.classList.add('theme-light');
+            document.documentElement.classList.remove('theme-dark');
+        } else {
+            document.documentElement.classList.add('theme-dark');
+            document.documentElement.classList.remove('theme-light');
+        }
+        
+        if (themeToggleBtn) {
+            themeToggleBtn.innerHTML = `<i data-lucide="${isLightMode ? 'sun' : 'moon'}" id="theme-icon"></i>`;
+        }
+        
+        if (window.lucide) window.lucide.createIcons();
+    }
+    applyTheme();
+
+    if (themeToggleBtn) {
+        themeToggleBtn.addEventListener('click', () => {
+            isLightMode = !isLightMode;
+            localStorage.setItem('shonkor-theme', isLightMode ? 'light' : 'dark');
+            applyTheme();
+        });
+    }
     
     // Capsule synthesis DOM
     const capsuleQueryInput = document.getElementById('capsule-query');
+    const typeFilter = document.getElementById('type-filter');
+    const askAiBtn = document.getElementById('ask-ai-btn');
+    const ragAnswerOverlay = document.getElementById('rag-answer-overlay');
+    const ragAnswerContent = document.getElementById('rag-answer-content');
+    const closeRagBtn = document.getElementById('close-rag-btn');
     const capsuleHopsSelect = document.getElementById('capsule-hops');
     const generateCapsuleBtn = document.getElementById('generate-capsule-btn');
     
@@ -156,6 +193,56 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalEdgesCount = document.getElementById('modal-edges-count');
     const copyCapsuleBtn = document.getElementById('copy-capsule-btn');
     const capsuleText = document.getElementById('capsule-text');
+
+    if (closeRagBtn) {
+        closeRagBtn.addEventListener('click', () => {
+            ragAnswerOverlay.classList.add('hidden');
+        });
+    }
+
+    if (askAiBtn) {
+        askAiBtn.addEventListener('click', async () => {
+            if (!lastSearchResults || lastSearchResults.length === 0) return;
+            
+            const query = globalSearchInput.value.trim();
+            if (!query) return;
+
+            ragAnswerContent.innerHTML = `<div style="display:flex; align-items:center; gap:0.5rem;"><div class="spinner" style="width:20px; height:20px; border-width:2px;"></div> <span>Denke nach... (Analysiere ${Math.min(lastSearchResults.length, 10)} Knoten)</span></div>`;
+            ragAnswerOverlay.classList.remove('hidden');
+
+            try {
+                // Take top 10 nodes for context to avoid huge payloads
+                const topNodes = lastSearchResults.slice(0, 10).map(res => {
+                    const node = res.Node || res.node;
+                    return node.Id;
+                }).filter(id => !!id);
+
+                const res = await fetch('/api/rag/ask', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-Project-Name': activeProjectName.textContent
+                    },
+                    body: JSON.stringify({ query: query, nodeIds: topNodes })
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    if (window.marked) {
+                        ragAnswerContent.innerHTML = window.marked.parse(data.response || "Keine Antwort.");
+                    } else {
+                        ragAnswerContent.textContent = data.response || "Keine Antwort.";
+                    }
+                } else {
+                    const errText = await res.text();
+                    ragAnswerContent.innerHTML = `<span style="color: #f87171;">Fehler: ${errText}</span>`;
+                }
+            } catch (err) {
+                console.error("Ask AI Error:", err);
+                ragAnswerContent.innerHTML = `<span style="color: #f87171;">Fehler: Netzwerk- oder Serverproblem.</span>`;
+            }
+        });
+    }
 
     // Project Manager DOM
     const activeProjectBtn = document.getElementById('active-project-btn');
@@ -504,9 +591,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Search
-    const typeFilter = document.getElementById('type-filter');
+    const semanticToggleBtn = document.getElementById('semantic-toggle-btn');
+    if (semanticToggleBtn) {
+        semanticToggleBtn.addEventListener('click', () => {
+            const isActive = semanticToggleBtn.classList.toggle('active');
+            semanticToggleBtn.classList.toggle('glow-purple');
+            
+            semanticToggleBtn.innerHTML = `<i data-lucide="${isActive ? 'brain' : 'network'}"></i>`;
+            if (window.lucide) window.lucide.createIcons();
+            
+            if (isActive) {
+                semanticToggleBtn.title = window.t("Semantic Search Active");
+                globalSearchInput.placeholder = window.t("Semantic query (AI)...");
+            } else {
+                semanticToggleBtn.title = window.t("Keyword Search Active");
+                globalSearchInput.placeholder = window.t("Quick graph search... (FTS5 matched)");
+            }
+        });
+    }
 
-    searchBtn.addEventListener('click', performSearch);
+    searchBtn.addEventListener('click', (e) => performSearch(e));
     globalSearchInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') performSearch();
     });
@@ -1286,16 +1390,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // PERFORM FTS5 GRAPH SEARCH
-            console.error(window.t("Error loading statistics:"), err);
-        }
-    }
-
     let currentSearchOffset = 0;
     let currentSearchLimit = 20;
     let currentSearchQuery = "";
 
-    async function performSearch(query, isLoadMore = false) {
-        if (!query) return;
+    async function performSearch(queryOrEvent, isLoadMore = false) {
+        let query = (typeof queryOrEvent === 'string') ? queryOrEvent : globalSearchInput.value.trim();
+        if (queryOrEvent instanceof Event) {
+            isLoadMore = false; // ensure event doesn't bleed into loadMore
+        }
+        
+        if (!query && !isLoadMore) return;
 
         hideDashboard();
 
@@ -1322,8 +1427,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             
             const typeFilter = document.getElementById('type-filter').value;
-            let url = `/api/search?q=${encodeURIComponent(currentSearchQuery)}&limit=${currentSearchLimit}&offset=${currentSearchOffset}`;
-            if (typeFilter) {
+            const semanticToggleBtn = document.getElementById('semantic-toggle-btn');
+            const isSemantic = semanticToggleBtn && semanticToggleBtn.classList.contains('active');
+            
+            let url = isSemantic 
+                ? `/api/search/semantic?q=${encodeURIComponent(currentSearchQuery)}&limit=${currentSearchLimit}`
+                : `/api/search?q=${encodeURIComponent(currentSearchQuery)}&limit=${currentSearchLimit}&offset=${currentSearchOffset}`;
+                
+            if (typeFilter && !isSemantic) {
                 url += `&type=${encodeURIComponent(typeFilter)}`;
             }
             
@@ -1347,6 +1458,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateLoadingState(window.t("Building graph..."), true);
                 renderSearchInGraph(lastSearchResults);
                 updateFilterBar();
+
+                // Show Ask AI button if results are found
+                if (askAiBtn && lastSearchResults.length > 0) {
+                    askAiBtn.classList.remove('hidden');
+                }
             } else {
                 updateLoadingState(null, false);
                 resultsCountEl.textContent = window.t("Search failed.");
@@ -1354,7 +1470,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (err) {
             updateLoadingState(null, false);
-            resultsCountEl.textContent = window.t("Search error.");
+            resultsCountEl.textContent = "Search error: " + (err.message || String(err));
             console.error(window.t("Search failed:"), err);
         }
     }
@@ -1686,7 +1802,13 @@ document.addEventListener('DOMContentLoaded', () => {
             codeElement.textContent = `// No source code or block contents available for this [${node.Type}] structural definition.`;
         }
         
-        Prism.highlightElement(codeElement);
+        try {
+            if (window.Prism) {
+                Prism.highlightElement(codeElement);
+            }
+        } catch (e) {
+            console.error("Prism syntax highlighting failed:", e);
+        }
 
         // Slide in Drawer
         detailsDrawer.classList.remove('hidden');

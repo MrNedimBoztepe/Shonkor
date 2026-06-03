@@ -24,6 +24,9 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-typescript.min.js"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-php.min.js"></script>
     
+    <!-- Marked.js for RAG Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
     <!-- Custom app.css?v=2.0.12 -->
     <link rel="stylesheet" href="/app.css?v=2.0.15">
 </head>
@@ -37,7 +40,7 @@
         <header class="glass-header">
             <div class="logo-section">
                 <div class="logo-icon">
-                    <i data-lucide="brain-circuit" class="glow-icon"></i>
+                    <img src="/shonkor_logo.png" alt="Shonkor Falcon Logo" style="width: 32px; height: 32px; border-radius: 6px; box-shadow: 0 0 10px rgba(14, 165, 233, 0.5);">
                 </div>
                 <div class="logo-text">
                     <h1>Shon<span>kor</span></h1>
@@ -89,11 +92,21 @@
                 </div>
                 <input type="hidden" id="type-filter" value="">
                 <i data-lucide="search" class="search-icon"></i>
-                <input type="text" id="global-search" data-i18n-placeholder="quick_search" placeholder="Quick graph search... (FTS5 matched)" autocomplete="off">
+                <input type="text" id="global-search" data-i18n-placeholder="quick_search" placeholder="Search graph... (FTS5 / AI Semantic)" autocomplete="off">
+                <button id="semantic-toggle-btn" class="glass-btn" title="Keyword Search Active" aria-label="Toggle Semantic Search" style="margin-right: 5px;">
+                    <i data-lucide="network"></i>
+                </button>
                 <button id="search-btn" class="glow-btn" data-i18n="search">Search</button>
+                <button id="ask-ai-btn" class="glass-btn hover-glow-purple hidden" title="Ask AI based on results" style="margin-left: 5px;">
+                    <i data-lucide="sparkles"></i> Ask AI
+                </button>
             </div>
             
             <div class="header-actions">
+                <button id="theme-toggle-btn" class="glass-btn hover-glow-blue" title="Toggle Light/Dark Theme" aria-label="Toggle Theme">
+                    <i data-lucide="moon" id="theme-icon"></i>
+                </button>
+
                 <button id="open-settings-btn" class="glass-btn hover-glow-blue" title="Project Settings & Plugins" aria-label="Open project settings and plugins" aria-haspopup="dialog">
                     <i data-lucide="settings"></i>
                 </button>
@@ -228,6 +241,15 @@
                 </div>
                 
                 <div id="network-graph" class="graph-canvas"></div>
+                
+                <!-- RAG AI Answer Overlay -->
+                <div id="rag-answer-overlay" class="glass-panel hidden" style="position: absolute; top: 1.5rem; left: 1.5rem; width: 450px; max-height: 80vh; overflow-y: auto; z-index: 100; border: 1px solid var(--color-accent); padding: 1.2rem; box-shadow: 0 10px 30px rgba(0,0,0,0.5); backdrop-filter: blur(12px);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.5rem;">
+                        <h3 style="color: var(--color-accent); font-size: 1rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;"><i data-lucide="sparkles"></i> Shonkor AI</h3>
+                        <button id="close-rag-btn" class="close-btn" aria-label="Close AI Answer"><i data-lucide="x"></i></button>
+                    </div>
+                    <div id="rag-answer-content" style="font-size: 0.85rem; line-height: 1.5; color: var(--color-text);"></div>
+                </div>
                 
                 <div class="canvas-controls">
                     <button id="drag-select-btn" class="control-btn" title="Drag Select Mode" aria-label="Toggle drag-select mode"><i data-lucide="scan"></i></button>
@@ -505,6 +527,6 @@
         <span id="toast-message">Message text</span>
     </div>
     <!-- Custom App JS -->
-    <script defer src="/app.js?v=2.0.15"></script>
+    <script defer src="/app.js?v=2.0.22"></script>
 </body>
 </html>
