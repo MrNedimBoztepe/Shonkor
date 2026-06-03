@@ -190,7 +190,7 @@ public sealed class McpServer
                         new
                         {
                             name = "search_graph",
-                            description = "Token-efficient FTS5 search for classes, methods, files, or markdown sections. Returns one compact line per hit (type, name, file:line). Set verbose=true only when you also need each hit's graph connections.",
+                            description = "Token-efficient FTS5 search for classes, methods, files, or markdown sections. Returns one compact line per hit (type, name, file:line, summary). Use 'type' to filter by node type (e.g. 'Class', 'Method'). Set verbose=true only when you also need each hit's graph connections.",
                             inputSchema = new
                             {
                                 type = "object",
@@ -198,6 +198,7 @@ public sealed class McpServer
                                 {
                                     query = new { type = "string", description = "The search text or terms" },
                                     limit = new { type = "integer", description = "Max number of results to return (default 10)" },
+                                    type = new { type = "string", description = "Filter results to a specific node type (e.g. 'Class', 'Method', 'Interface', 'File', 'Record', 'Property', 'MarkdownSection', 'Concept'). Omit for all types." },
                                     verbose = new { type = "boolean", description = "Include each hit's graph connections and full metadata as JSON (default false). Leave false for token-efficient lookups." },
                                     projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
                                 },
@@ -207,7 +208,7 @@ public sealed class McpServer
                         new
                         {
                             name = "locate",
-                            description = "Minimal symbol locator: returns one 'name -> file:line' line per hit. The most token-efficient way to find where a class, method, file, or section is defined. Use this for pure 'where is X?' lookups.",
+                            description = "Minimal symbol locator: returns one 'name -> file:line | summary' line per hit. The most token-efficient way to find where a class, method, file, or section is defined and understand its purpose. Use this for pure 'where is X?' lookups.",
                             inputSchema = new
                             {
                                 type = "object",
@@ -392,7 +393,8 @@ public sealed class McpServer
                         }
                         var limit = args?["limit"]?.GetValue<int>() ?? 10;
                         var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
-                        var results = await storage.SearchAsync(query, limit).ConfigureAwait(false);
+                        var typeFilter = args?["type"]?.ToString();
+                        var results = await storage.SearchAsync(query, limit, filterType: typeFilter).ConfigureAwait(false);
                         var basePath = GetProjectBasePath(projectName);
 
                         if (!verbose)
@@ -401,7 +403,7 @@ public sealed class McpServer
                             // no connections, no indentation. Closer to ripgrep output than verbose JSON.
                             if (results.Count == 0)
                             {
-                                SendToolResponse(id, $"No matches for '{query}'.");
+                                SendToolResponse(id, $"No matches for '{query}'{(typeFilter != null ? $" (type={typeFilter})" : "")}.");
                                 break;
                             }
 
@@ -410,7 +412,8 @@ public sealed class McpServer
                                 var rawLoc = string.IsNullOrEmpty(r.Node.FilePath) ? r.Node.Id : r.Node.FilePath;
                                 var loc = Shorten(rawLoc, basePath);
                                 if (r.Node.StartLine.HasValue) loc += $":{r.Node.StartLine}";
-                                return $"{r.Node.Type}\t{r.Node.Name}\t{loc}";
+                                var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t{r.Node.Summary}" : "";
+                                return $"{r.Node.Type}\t{r.Node.Name}\t{loc}{summary}";
                             });
                             SendToolResponse(id, string.Join("\n", lines));
                             break;
@@ -463,7 +466,8 @@ public sealed class McpServer
                             var rawLoc = string.IsNullOrEmpty(r.Node.FilePath) ? r.Node.Id : r.Node.FilePath;
                             var loc = Shorten(rawLoc, basePath);
                             if (r.Node.StartLine.HasValue) loc += $":{r.Node.StartLine}";
-                            return $"{r.Node.Name} -> {loc}";
+                            var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $" | {r.Node.Summary}" : "";
+                            return $"{r.Node.Name} -> {loc}{summary}";
                         });
                         SendToolResponse(id, string.Join("\n", lines));
                     }

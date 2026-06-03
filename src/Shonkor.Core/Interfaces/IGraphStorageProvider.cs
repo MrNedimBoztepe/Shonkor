@@ -32,7 +32,7 @@ public interface IGraphStorageProvider
     /// Performs a semantic search over the graph nodes using the given natural-language query.
     /// Results are ranked by relevance score in descending order.
     /// </summary>
-    Task<IReadOnlyList<SearchResult>> SearchAsync(string query, int maxResults = 10, string? filterType = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<SearchResult>> SearchAsync(string query, int maxResults = 10, int offset = 0, string? filterType = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Retrieves a subgraph centered on the specified seed nodes, expanding outward
@@ -61,6 +61,16 @@ public interface IGraphStorageProvider
     /// Returns aggregate statistics about the current state of the knowledge graph.
     /// </summary>
     Task<GraphStatistics> GetStatisticsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves nodes that are pending semantic analysis.
+    /// </summary>
+    Task<IReadOnlyList<GraphNode>> GetNodesPendingSemanticAnalysisAsync(int batchSize, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Updates the semantic summary of a node and resets its pending flag.
+    /// </summary>
+    Task UpdateNodeSemanticDataAsync(string nodeId, string summary, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Retrieves all nodes from the graph store.

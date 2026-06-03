@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Collections.Concurrent;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 using Microsoft.Extensions.FileSystemGlobbing;
@@ -101,21 +102,19 @@ public sealed class GraphIndexScanner
         var existingHashes = await _storage.GetContentHashesAsync(candidateFiles, cancellationToken).ConfigureAwait(false);
 
         // 3. Process candidate files incrementally
-        var allNodesToUpsert = new List<GraphNode>();
-        var allEdgesToUpsert = new List<GraphEdge>();
-        var filesToClear = new List<string>();
+        var allNodesToUpsert = new ConcurrentBag<GraphNode>();
+        var allEdgesToUpsert = new ConcurrentBag<GraphEdge>();
+        var filesToClear = new ConcurrentBag<string>();
 
-        foreach (var filePath in candidateFiles)
+        await Parallel.ForEachAsync(candidateFiles, cancellationToken, async (filePath, ct) =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             var extension = Path.GetExtension(filePath);
             if (!parserMap.TryGetValue(extension, out var fileParsers) || fileParsers.Count == 0)
             {
-                continue;
+                return;
             }
 
-            filesScanned++;
+            Interlocked.Increment(ref filesScanned);
 
             try
             {
@@ -123,23 +122,23 @@ public sealed class GraphIndexScanner
                 if (fileInfo.Length > 5 * 1024 * 1024) // 5 MB limit
                 {
                     Console.WriteLine($"Skipping large file {filePath} ({fileInfo.Length} bytes)");
-                    continue;
+                    return;
                 }
 
                 // Skip binary files (a NUL byte in the header is a strong binary signal):
                 // reading them as text produces garbage nodes and pollutes the FTS index.
-                if (await IsLikelyBinaryAsync(filePath, cancellationToken).ConfigureAwait(false))
+                if (await IsLikelyBinaryAsync(filePath, ct).ConfigureAwait(false))
                 {
-                    continue;
+                    return;
                 }
 
-                var content = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
+                var content = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
                 var contentHash = ComputeSha256Hash(content);
 
                 // Incremental Hash Check: skip if hash matches DB
                 if (existingHashes.TryGetValue(filePath, out var existingHash) && existingHash == contentHash)
                 {
-                    continue; // Unchanged!
+                    return; // Unchanged!
                 }
 
                 // File has changed. We need to clear its old graph structure and re-parse.
@@ -148,8 +147,8 @@ public sealed class GraphIndexScanner
                 foreach (var parser in fileParsers)
                 {
                     var (nodes, edges) = await parser.ParseAsync(filePath, content).ConfigureAwait(false);
-                    allNodesToUpsert.AddRange(nodes);
-                    allEdgesToUpsert.AddRange(edges);
+                    foreach (var node in nodes) allNodesToUpsert.Add(node);
+                    foreach (var edge in edges) allEdgesToUpsert.Add(edge);
                 }
 
                 // Create a File node to represent the scanned file itself.
@@ -175,7 +174,7 @@ public sealed class GraphIndexScanner
             {
                 Console.WriteLine($"Error parsing file {filePath}: {ex.Message}");
             }
-        }
+        }).ConfigureAwait(false);
 
         // 3.5 Gather stale files (previously indexed but no longer matched / excluded / deleted)
         var indexedFiles = await _storage.GetAllIndexedFilePathsAsync(cancellationToken).ConfigureAwait(false);

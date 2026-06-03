@@ -33,6 +33,7 @@ graph TD
   * `GraphIndexScanner`: Scannt Verzeichnisse, erkennt geänderte Dateien per SHA256 (Hash-Lookup statt Full-Content-Load), überspringt Binärdateien und koordiniert die Parser.
   * `CrossTechLinker`: Post-Scan-Pass, der Cross-Technology-Kanten (Next.js ↔ Sitecore ↔ C# ↔ GraphQL), Helix-Module sowie **C#-Typ-Referenzen (`REFERENCES_TYPE`)** auflöst und persistiert.
   * `ProjectManager`: Verwaltet die Multi-Projekt-Registry (`projects.json`), cached `IGraphStorageProvider` pro Projekt (via `Lazy<>`), koordiniert parallele Scans und löst Projekte aus einem Verzeichnis auf (`FindProjectByPath`).
+  * `OllamaSemanticAnalyzer`: Kontaktiert eine lokale Ollama REST-API (z.B. `qwen2.5-coder`), um Source-Code-Knoten asynchron in hochverdichtete architektonische Zusammenfassungen (JSON) zu transformieren.
   * `PluginLoader`: Kompiliert C#-Plugins zur Laufzeit (Roslyn) in einen **collectible, entladbaren** `AssemblyLoadContext` (Opt-in, RCE-relevant).
 
 ### 3. Shonkor.CLI (Application Layer)
@@ -48,4 +49,5 @@ graph TD
   * `Program.cs`: ASP.NET Core WebHost mit Minimal APIs (Stats, Suche, Subgraph, Kapsel, Indexierung, Projekt- und Plugin-Verwaltung, Dateisystem-Browser).
   * `Middleware/ApiKeyMiddleware`: Multi-Tenant-API-Key-Prüfung (konstantzeitig) mit auf Development beschränktem Loopback-Bypass.
   * `Endpoints/GraphRagEndpoints`, `Endpoints/WebhookEndpoints`: SaaS-RAG-Abfrage bzw. HMAC-verifizierte GitHub-Webhooks.
+  * `Services/SemanticEnrichmentService`: Background Worker (`BackgroundService`), der asynchron Nodes aus der SQLite-Datenbank abruft, zur Analyse an den `OllamaSemanticAnalyzer` übergibt und die generierten KI-Summaries wieder in die Datenbank schreibt.
   * `wwwroot/`: Glassmorphes HTML/CSS/JS-Frontend mit `force-graph` (WebGL-Canvas-Netzwerkvisualisierung) und Prism.js (Syntax-Highlighting).

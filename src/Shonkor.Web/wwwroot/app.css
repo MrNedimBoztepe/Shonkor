@@ -2490,16 +2490,9 @@ select:focus-visible {
 }
 
 select.glass-btn option {
-    background: var(--color-surface);
+    background: #1a2332;
     color: var(--color-text);
 }
 
 /* Drag-selection marquee box on the graph canvas (merged from selection-box.css) */
-.selection-box {
-    position: absolute;
-    border: 1px solid rgba(59, 130, 246, 0.8);
-    background: rgba(59, 130, 246, 0.2);
-    display: none;
-    pointer-events: none;
-    z-index: 1000;
-}
+
