@@ -60,6 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let currentTranslations = {};
+    window.t = function(key) { return currentTranslations[key] || key; };
 
     async function loadLanguage(lang) {
         try {
@@ -223,7 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let projectSearchQuery = '';
 
     // Graph Interaction & Filter State Variables
-    let allKnownTypes = []; // Array of { typeName, category, defaultHidden }
+    let allKnownTypes = []; // Array of { typeName, category, isVisibleByDefault }
     let databaseNodeTypes = new Set(); // Types actually present in the project DB
     let activeTypes = new Set();
     let lastSearchResults = [];
@@ -679,7 +680,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         if (filtered.length === 0) {
-            dropdownProjectList.innerHTML = `<li class="dropdown-empty">No projects found.</li>`;
+            dropdownProjectList.innerHTML = '';
+            const emptyLi = document.createElement('li');
+            emptyLi.className = 'dropdown-empty';
+            emptyLi.textContent = window.t('No projects found.');
+            dropdownProjectList.appendChild(emptyLi);
             return;
         }
 
@@ -827,10 +832,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await res.json();
                 allKnownTypes = data.types || [];
                 
-                // Initialize activeTypes based on defaultHidden
+                // Initialize activeTypes based on isVisibleByDefault
                 activeTypes = new Set();
                 allKnownTypes.forEach(t => {
-                    if (!t.defaultHidden) {
+                    if (t.isVisibleByDefault) {
                         activeTypes.add(t.typeName);
                     }
                 });
@@ -877,10 +882,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // GRAPH VIEWPORT - DYNAMIC FILTERS
     function updateFilterBar() {
         const filterBar = document.getElementById('type-filter-bar');
-        const typeFilterSelect = document.getElementById('type-filter'); // For the search bar select
         if (!filterBar) return;
 
-        filterBar.innerHTML = '';
+        // W-1 Fix: Do not destroy the static "Filter:" label, just remove the old dropdown container
+        const existingDropdown = filterBar.querySelector('.filter-dropdown-container');
+        if (existingDropdown) {
+            filterBar.removeChild(existingDropdown);
+        }
         
         // Use the types actually present in the database rather than just the loaded graph
         const filteredKnownTypes = allKnownTypes.filter(t => databaseNodeTypes.has(t.typeName));
@@ -909,6 +917,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 searchTypeInput.value = '';
                 searchTypeLabel.textContent = 'All Types';
                 searchTypeMenu.classList.add('hidden');
+                performSearch(); // Auto-search on change
             });
             searchTypeMenu.appendChild(allOption);
             
@@ -928,6 +937,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         searchTypeInput.value = t.typeName;
                         searchTypeLabel.textContent = t.typeName;
                         searchTypeMenu.classList.add('hidden');
+                        performSearch(); // Auto-search on change
                     });
                     
                     searchTypeMenu.appendChild(itemDiv);
@@ -982,8 +992,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             nodes: currentFilteredNodes,
                             links: graphData.links.filter(link => {
                                 const s = link.source.id || link.source;
-                                const t = link.target.id || link.target;
-                                return validNodes.has(s) && validNodes.has(t);
+                                const tgt = link.target.id || link.target;
+                                return validNodes.has(s) && validNodes.has(tgt);
                             })
                         };
                         network.graphData(filteredData);
@@ -1005,20 +1015,22 @@ document.addEventListener('DOMContentLoaded', () => {
             dropdownMenu.classList.toggle('hidden');
         });
         
-        const searchTypeBtn = document.getElementById('search-type-btn');
-        if (searchTypeBtn) {
-            searchTypeBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                document.querySelectorAll('.filter-dropdown-menu').forEach(m => {
-                    if (m !== searchTypeMenu) m.classList.add('hidden');
-                });
-                searchTypeMenu.classList.toggle('hidden');
-            });
-        }
-        
+        // Search-type and global click-away listeners: register ONCE
         if (!window.__filterMenuListenerAttached) {
+            const searchTypeBtn = document.getElementById('search-type-btn');
+            if (searchTypeBtn) {
+                searchTypeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const stMenu = document.getElementById('search-type-menu');
+                    // Close all OTHER menus first
+                    document.querySelectorAll('.filter-dropdown-menu').forEach(m => {
+                        if (m !== stMenu) m.classList.add('hidden');
+                    });
+                    if (stMenu) stMenu.classList.toggle('hidden');
+                });
+            }
+
             document.addEventListener('click', (e) => {
-                // If the click is not inside a dropdown container, close all menus
                 if (!e.target.closest('.filter-dropdown-container')) {
                     document.querySelectorAll('.filter-dropdown-menu').forEach(m => m.classList.add('hidden'));
                 }
@@ -1041,11 +1053,8 @@ document.addEventListener('DOMContentLoaded', () => {
             dragSelectBtn.classList.toggle('active', dragSelectMode);
 
             if (network) {
-                network.setOptions({
-                    interaction: {
-                        dragView: !dragSelectMode
-                    }
-                });
+                // ForceGraph uses enablePanInteraction instead of setOptions
+                network.enablePanInteraction(!dragSelectMode);
             }
             showToast(dragSelectMode ? "Drag Select Active! Drag a box on the canvas to select multiple nodes." : "Normal drag-pan mode active.");
         });
@@ -1115,28 +1124,26 @@ document.addEventListener('DOMContentLoaded', () => {
             const y2 = Math.max(startY, e.clientY) - rect.top;
 
             if (network) {
-                const c1 = network.DOMtoCanvas({ x: x1, y: y1 });
-                const c2 = network.DOMtoCanvas({ x: x2, y: y2 });
+                const c1 = network.screen2GraphCoords(x1, y1);
+                const c2 = network.screen2GraphCoords(x2, y2);
 
-                const allPositions = network.getPositions();
+                const minX = Math.min(c1.x, c2.x);
+                const maxX = Math.max(c1.x, c2.x);
+                const minY = Math.min(c1.y, c2.y);
+                const maxY = Math.max(c1.y, c2.y);
+
                 const selectedIds = [];
+                const currentVisibleNodes = getFilteredNodes();
 
-                for (const [id, pos] of Object.entries(allPositions)) {
-                    if (pos.x >= c1.x && pos.x <= c2.x && pos.y >= c1.y && pos.y <= c2.y) {
-                        const node = allDiscoveredNodes.get(id) || graphData.nodes.find(n => n.id === id);
-                        if (node) {
-                            const nodeType = node.type || node.Type;
-                            if (activeTypes.has(nodeType)) {
-                                selectedIds.push(id);
-                            }
-                        } else {
-                            selectedIds.push(id);
-                        }
+                for (const node of currentVisibleNodes) {
+                    // node.x and node.y are populated by force-graph
+                    if (node.x >= minX && node.x <= maxX && node.y >= minY && node.y <= maxY) {
+                        selectedIds.push(node.id);
                     }
                 }
 
                 if (selectedIds.length > 0) {
-                    network.selectNodes(selectedIds);
+                    // ForceGraph doesn't have native multi-select, but we select the first one for the drawer
                     selectNode(selectedIds[0]);
 
                     const capsuleQueryInput = document.getElementById('capsule-query');
@@ -1279,69 +1286,90 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // PERFORM FTS5 GRAPH SEARCH
-    async function performSearch() {
-        const query = globalSearchInput.value.trim();
-        if (!query) {
-            showToast("Search query cannot be empty.");
-            return;
+            console.error(window.t("Error loading statistics:"), err);
         }
+    }
+
+    let currentSearchOffset = 0;
+    let currentSearchLimit = 20;
+    let currentSearchQuery = "";
+
+    async function performSearch(query, isLoadMore = false) {
+        if (!query) return;
 
         hideDashboard();
 
-        resultsCountEl.textContent = "Searching...";
-        resultsListEl.innerHTML = "";
+        if (!isLoadMore) {
+            currentSearchOffset = 0;
+            currentSearchQuery = query;
+            resultsCountEl.textContent = window.t("Searching...");
+            resultsListEl.innerHTML = "";
+            lastSearchResults = [];
+        } else {
+            const loadMoreBtn = document.getElementById('load-more-btn');
+            if (loadMoreBtn) {
+                loadMoreBtn.textContent = window.t("Loading...");
+                loadMoreBtn.disabled = true;
+            }
+        }
         
-        updateLoadingState("Querying database...", true);
+        updateLoadingState(window.t("Querying database..."), true);
 
         try {
-            let limit = 20;
-            if (query.toLowerCase() === 'all' || query === '*') {
-                // Bounded: the graph is capped at MAX_GRAPH_NODES anyway, and rendering
-                // tens of thousands of sidebar rows freezes the page.
-                limit = 2000;
+            currentSearchLimit = 20;
+            if (currentSearchQuery.toLowerCase() === 'all' || currentSearchQuery === '*') {
+                currentSearchLimit = 2000;
             }
             
             const typeFilter = document.getElementById('type-filter').value;
-            let url = `/api/search?q=${encodeURIComponent(query)}&limit=${limit}`;
+            let url = `/api/search?q=${encodeURIComponent(currentSearchQuery)}&limit=${currentSearchLimit}&offset=${currentSearchOffset}`;
             if (typeFilter) {
                 url += `&type=${encodeURIComponent(typeFilter)}`;
             }
             
             const res = await fetch(url);
             if (res.ok) {
-                updateLoadingState("Processing results...", true);
+                updateLoadingState(window.t("Processing results..."), true);
                 const results = await res.json();
                 results.forEach(normalizeResult);
-                resultsCountEl.textContent = `Found ${results.length} matched node(s):`;
                 
-                displaySearchResults(results);
+                if (isLoadMore) {
+                    lastSearchResults = lastSearchResults.concat(results);
+                } else {
+                    lastSearchResults = results;
+                }
+
+                resultsCountEl.textContent = `${window.t("Found")} ${lastSearchResults.length} ${window.t("matched node(s)")}:`;
                 
-                updateLoadingState("Building graph...", true);
-                renderSearchInGraph(results);
+                const hasMore = results.length === currentSearchLimit;
+                displaySearchResults(lastSearchResults, hasMore);
+                
+                updateLoadingState(window.t("Building graph..."), true);
+                renderSearchInGraph(lastSearchResults);
                 updateFilterBar();
             } else {
                 updateLoadingState(null, false);
-                resultsCountEl.textContent = "Search failed.";
-                showToast("Search failed. Verify query syntax.");
+                resultsCountEl.textContent = window.t("Search failed.");
+                showToast(window.t("Search failed. Verify query syntax."));
             }
         } catch (err) {
             updateLoadingState(null, false);
-            resultsCountEl.textContent = "Search error.";
-            console.error("Search failed:", err);
+            resultsCountEl.textContent = window.t("Search error.");
+            console.error(window.t("Search failed:"), err);
         }
     }
 
     // DISPLAY SIDEBAR RESULTS
-    function displaySearchResults(results) {
+    function displaySearchResults(results, hasMore = false) {
         resultsListEl.innerHTML = "";
-        lastSearchResults = results || lastSearchResults || [];
+        lastSearchResults = results || [];
         
         const filtered = lastSearchResults.filter(res => {
             const node = res.Node;
             return activeTypes.has(node.Type);
         });
 
-        resultsCountEl.textContent = `Found ${filtered.length} matching nodes`;
+        resultsCountEl.textContent = `${window.t("Found")} ${filtered.length} ${window.t("matching nodes")}`;
 
         filtered.forEach(res => {
             const node = res.Node;
@@ -1355,7 +1383,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             li.innerHTML = `
                 <div class="result-item-header">
-                    <div class="node-name" title="${node.Name}">${node.Name}</div>
+                    <div class="node-name" title="${escapeHtml(node.Name)}">${escapeHtml(node.Name)}</div>
                     <span class="node-type-badge ${badgeClass}">${node.Type}</span>
                 </div>
                 <div class="node-path" title="${node.FilePath}">${relativePath}</div>
@@ -1375,6 +1403,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
             resultsListEl.appendChild(li);
         });
+
+        if (hasMore) {
+            const loadMoreLi = document.createElement('li');
+            loadMoreLi.style.textAlign = 'center';
+            loadMoreLi.style.padding = '0.5rem';
+            const loadMoreBtn = document.createElement('button');
+            loadMoreBtn.id = 'load-more-btn';
+            loadMoreBtn.className = 'btn btn-secondary';
+            loadMoreBtn.style.width = '100%';
+            loadMoreBtn.textContent = window.t('Load More');
+            loadMoreBtn.addEventListener('click', () => {
+                currentSearchOffset += currentSearchLimit;
+                performSearch(currentSearchQuery, true);
+            });
+            loadMoreLi.appendChild(loadMoreBtn);
+            resultsListEl.appendChild(loadMoreLi);
+        }
     }
 
     // RENDER NODES AND EDGES IN VIS GRAPH CONTAINER
@@ -1475,8 +1520,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 nodes: currentFilteredNodes,
                 links: graphData.links.filter(link => {
                     const s = link.source.id || link.source;
-                    const t = link.target.id || link.target;
-                    return validNodes.has(s) && validNodes.has(t);
+                    const tgt = link.target.id || link.target;
+                    return validNodes.has(s) && validNodes.has(tgt);
                 })
             };
             network.graphData(filteredData);
@@ -1549,6 +1594,16 @@ document.addEventListener('DOMContentLoaded', () => {
         drawerNodeName.textContent = node.Name;
         drawerNodePath.textContent = node.FilePath || "Virtual Namespace Node";
 
+        // AI Summary section
+        const drawerSummarySection = document.getElementById('drawer-summary-section');
+        const drawerNodeSummary = document.getElementById('drawer-node-summary');
+        if (node.Summary) {
+            drawerNodeSummary.textContent = node.Summary;
+            drawerSummarySection.style.display = 'flex';
+        } else {
+            drawerSummarySection.style.display = 'none';
+        }
+
         // Properties section
         drawerNodeProperties.innerHTML = "";
         const properties = node.Properties || {};
@@ -1591,7 +1646,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const isSource = s === nodeId;
                 const partnerId = isSource ? t : s;
                 const relationship = e.name || "Connected";
-                const direction = isSource ? "â†’" : "â†";
+                const direction = isSource ? "→" : "←";
                 
                 const partnerNode = allDiscoveredNodes.get(partnerId);
                 const partnerName = partnerNode ? partnerNode.Name : partnerId.split('/').pop().split('\\').pop();
@@ -1718,7 +1773,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (res.ok) {
                 const data = await res.json();
                 
-                showToast(`âœ… Scan complete! Scanned ${data.result.filesScanned} files. Created ${data.result.nodesCreated} nodes.`, 6000);
+                showToast(`✅ Scan complete! Scanned ${data.result.filesScanned} files. Created ${data.result.nodesCreated} nodes.`, 6000);
                 
                 // Reload stats
                 loadStats();
@@ -1729,11 +1784,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 allDiscoveredNodes.clear();
                 loadDefaultGraph();
             } else {
-                showToast("âŒ Scanning failed.");
+                showToast("❌ Scanning failed.");
             }
         } catch (err) {
             console.error("Indexing failed:", err);
-            showToast("âŒ Error executing indexing scan.");
+            showToast("❌ Error executing indexing scan.");
         } finally {
             // Restore original visual states
             if (icon) icon.classList.remove('spin-animation');
@@ -1902,12 +1957,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const li = document.createElement('li');
             li.className = `project-item ${isActive ? 'active' : ''}`;
             
+            const iconClass = proj.name === activeProject ? 'lucide-check-circle' : 'lucide-folder';
+            const iconColor = proj.name === activeProject ? 'var(--color-success)' : 'currentColor';
             li.innerHTML = `
-                <div class="project-item-header">
-                    <span class="project-name">${proj.name}</span>
-                    ${isActive ? '<span class="active-badge">Active</span>' : ''}
-                </div>
-                <span class="project-path" title="${proj.path}">${proj.path}</span>
+                <i data-lucide="${iconClass}" style="color: ${iconColor};"></i>
+                <span class="project-name">${escapeHtml(proj.name)}</span>
+                ${proj.name === activeProject ? '<span class="active-badge">Active</span>' : ''}
+                <span class="project-path" title="${escapeHtml(proj.path)}">${escapeHtml(proj.path)}</span>
             `;
             
             li.addEventListener('click', () => {
@@ -2126,7 +2182,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (res.ok) {
                 const data = await res.json();
-                showToast(`âœ… Scan complete for '${projName}'! Scanned ${data.result.filesScanned} files. Created ${data.result.nodesCreated} nodes.`, 6000);
+                showToast(`✅ Scan complete for '${projName}'! Scanned ${data.result.filesScanned} files. Created ${data.result.nodesCreated} nodes.`, 6000);
                 
                 // Hide modal and refresh graph/stats
                 projectModal.classList.add('hidden');
@@ -2139,11 +2195,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 loadStats();
                 loadDefaultGraph();
             } else {
-                showToast("âŒ Deregistered or invalid directories. Scanning failed.");
+                showToast("❌ Deregistered or invalid directories. Scanning failed.");
             }
         } catch (err) {
             console.error("Scanning failed:", err);
-            showToast("âŒ Error executing indexing scan.");
+            showToast("❌ Error executing indexing scan.");
         } finally {
             // Restore original visual states
             if (icon) icon.classList.remove('spin-animation');

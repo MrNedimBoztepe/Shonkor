@@ -10,6 +10,7 @@ using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Services;
 using Shonkor.Infrastructure.Storage;
 using Shonkor.Web.Endpoints;
+using Shonkor.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,6 +34,10 @@ builder.Services.AddSingleton<IEnumerable<IFileParser>>(sp => new List<IFilePars
 });
 
 builder.Services.AddSingleton<ContextCapsuleSynthesizer>();
+
+// Register Semantic Analyzer Backend (Phase 2 - Ollama Integration)
+builder.Services.AddHttpClient<ISemanticAnalyzer, OllamaSemanticAnalyzer>();
+builder.Services.AddHostedService<SemanticEnrichmentService>();
 
 var app = builder.Build();
 
@@ -62,7 +67,7 @@ app.MapGet("/api/stats", async (HttpContext context, ProjectManager pm, Cancella
     {
         var projectName = context.Request.Headers["X-Project-Name"].ToString();
         var storage = string.IsNullOrEmpty(projectName) ? pm.GetActiveStorageProvider() : pm.GetStorageProvider(projectName);
-        var stats = await storage.GetStatisticsAsync();
+        var stats = await storage.GetStatisticsAsync(ct);
         return Results.Ok(stats);
     }
     catch (Exception ex)
@@ -124,7 +129,7 @@ app.MapPost("/api/interactions/status", async (UpdateStatusRequest req, HttpCont
 });
 
 // 2. GET /api/search - Semantic search over nodes in active project
-app.MapGet("/api/search", async (string q, int? limit, string? type, HttpContext context, ProjectManager pm, CancellationToken ct) =>
+app.MapGet("/api/search", async (string q, int? limit, int? offset, string? type, HttpContext context, ProjectManager pm, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(q))
     {
@@ -134,9 +139,10 @@ app.MapGet("/api/search", async (string q, int? limit, string? type, HttpContext
     try
     {
         var projectName = context.Request.Headers["X-Project-Name"].ToString();
-        var storage = pm.GetStorageProvider(projectName);
+        var storage = string.IsNullOrEmpty(projectName) ? pm.GetActiveStorageProvider() : pm.GetStorageProvider(projectName);
         var maxResults = limit ?? 15;
-        var results = await storage.SearchAsync(q, maxResults, type, ct);
+        var skip = offset ?? 0;
+        var results = await storage.SearchAsync(q, maxResults, skip, type, ct);
         return Results.Ok(results);
     }
     catch (Exception ex)
@@ -180,7 +186,7 @@ app.MapPost("/api/capsule", async (CapsuleRequest request, HttpContext context, 
     {
         var projectName = context.Request.Headers["X-Project-Name"].ToString();
         var storage = pm.GetStorageProvider(projectName);
-        var searchResults = await storage.SearchAsync(request.Query, 5, null, ct);
+        var searchResults = await storage.SearchAsync(request.Query, 5, 0, null, ct);
         if (searchResults.Count == 0)
         {
             return Results.NotFound("No seed nodes matched the capsule query.");
@@ -614,6 +620,12 @@ namespace Shonkor.Plugins;
 public class {className} : IFileParser
 {{
     public IReadOnlySet<string> SupportedExtensions {{ get; }} = new HashSet<string> {{ ""{extension}"" }};
+    
+    public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors {{ get; }} = new[]
+    {{
+        new NodeTypeDescriptor(""Method"", ""Code"", true),
+        // Add more descriptors here if you extract classes, structs, etc.
+    }};
 
     public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(
         string filePath, string content)

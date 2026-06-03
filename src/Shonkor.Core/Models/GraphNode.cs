@@ -26,6 +26,9 @@ public record GraphNode
     /// <summary>SHA256 content hash, used for incremental indexing of File nodes.</summary>
     public string? ContentHash { get; init; }
 
+    /// <summary>An AI-generated semantic summary of the node's business purpose or functionality.</summary>
+    public string? Summary { get; set; }
+
     /// <summary>
     /// Dynamic, parser-specific attributes (e.g. <c>modifiers</c>, <c>returnType</c>,
     /// <c>referencedTypes</c>, <c>status</c>, <c>sitecorePath</c>). Persisted as JSON.

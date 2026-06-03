@@ -106,10 +106,16 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
                 FilePath    TEXT,
                 StartLine   INTEGER,
                 EndLine     INTEGER,
-                ContentHash TEXT
+                ContentHash TEXT,
+                Summary     TEXT,
+                NeedsSemanticAnalysis INTEGER DEFAULT 1
             );
             """,
             cancellationToken).ConfigureAwait(false);
+
+        // Migration for existing databases
+        try { await ExecuteNonQueryAsync(connection, "ALTER TABLE Nodes ADD COLUMN Summary TEXT;", cancellationToken).ConfigureAwait(false); } catch { /* Ignore if already exists */ }
+        try { await ExecuteNonQueryAsync(connection, "ALTER TABLE Nodes ADD COLUMN NeedsSemanticAnalysis INTEGER DEFAULT 1;", cancellationToken).ConfigureAwait(false); } catch { /* Ignore if already exists */ }
 
         await ExecuteNonQueryAsync(connection,
             """
@@ -192,8 +198,8 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT OR REPLACE INTO Nodes (Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash)
-            VALUES (@Id, @Type, @Name, @Content, @Metadata, @FilePath, @StartLine, @EndLine, @ContentHash);
+            INSERT OR REPLACE INTO Nodes (Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash, Summary, NeedsSemanticAnalysis)
+            VALUES (@Id, @Type, @Name, @Content, @Metadata, @FilePath, @StartLine, @EndLine, @ContentHash, @Summary, @NeedsSemanticAnalysis);
             """;
 
         var pId = command.Parameters.Add("@Id", SqliteType.Text);
@@ -205,6 +211,8 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var pStartLine = command.Parameters.Add("@StartLine", SqliteType.Integer);
         var pEndLine = command.Parameters.Add("@EndLine", SqliteType.Integer);
         var pContentHash = command.Parameters.Add("@ContentHash", SqliteType.Text);
+        var pSummary = command.Parameters.Add("@Summary", SqliteType.Text);
+        var pNeedsAnalysis = command.Parameters.Add("@NeedsSemanticAnalysis", SqliteType.Integer);
 
         await command.PrepareAsync(cancellationToken).ConfigureAwait(false);
 
@@ -219,6 +227,8 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             pStartLine.Value = node.StartLine.HasValue ? node.StartLine.Value : DBNull.Value;
             pEndLine.Value = node.EndLine.HasValue ? node.EndLine.Value : DBNull.Value;
             pContentHash.Value = (object?)node.ContentHash ?? DBNull.Value;
+            pSummary.Value = (object?)node.Summary ?? DBNull.Value;
+            pNeedsAnalysis.Value = string.IsNullOrEmpty(node.Summary) ? 1 : 0; // If no summary, needs analysis
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -262,6 +272,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     public async Task<IReadOnlyList<SearchResult>> SearchAsync(
         string query,
         int maxResults = 20,
+        int offset = 0,
         string? filterType = null,
         CancellationToken cancellationToken = default)
     {
@@ -281,14 +292,15 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             var typeClause = string.IsNullOrWhiteSpace(filterType) ? "" : "WHERE Type = @typeFilter";
             allCmd.CommandText =
                 $"""
-                SELECT Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash,
+                SELECT Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash, Summary,
                        1.0 AS Score
                 FROM Nodes
                 {typeClause}
-                LIMIT @limit;
+                LIMIT @limit OFFSET @offset;
                 """;
 
             allCmd.Parameters.AddWithValue("@limit", maxResults);
+            allCmd.Parameters.AddWithValue("@offset", offset);
             if (!string.IsNullOrWhiteSpace(filterType))
             {
                 allCmd.Parameters.AddWithValue("@typeFilter", filterType);
@@ -311,17 +323,18 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             command.CommandText =
                 $"""
                 SELECT n.Id, n.Type, n.Name, n.Content, n.Metadata, n.FilePath,
-                       n.StartLine, n.EndLine, n.ContentHash,
+                       n.StartLine, n.EndLine, n.ContentHash, n.Summary,
                        bm25(NodesFts) AS Score
                 FROM NodesFts fts
                 JOIN Nodes n ON fts.Id = n.Id
                 WHERE NodesFts MATCH @query {typeClause}
                 ORDER BY Score
-                LIMIT @limit;
+                LIMIT @limit OFFSET @offset;
                 """;
 
             command.Parameters.AddWithValue("@query", trimmedQuery);
             command.Parameters.AddWithValue("@limit", maxResults);
+            command.Parameters.AddWithValue("@offset", offset);
             if (!string.IsNullOrWhiteSpace(filterType))
             {
                 command.Parameters.AddWithValue("@typeFilter", filterType);
@@ -345,18 +358,19 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             var typeClause = string.IsNullOrWhiteSpace(filterType) ? "" : "AND Type = @typeFilter";
             command.CommandText =
                 $"""
-                SELECT Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash,
+                SELECT Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash, Summary,
                        1.0 AS Score
                 FROM Nodes
                 WHERE (Name LIKE @likeQuery
                    OR Content LIKE @likeQuery
                    OR FilePath LIKE @likeQuery)
                    {typeClause}
-                LIMIT @limit;
+                LIMIT @limit OFFSET @offset;
                 """;
 
             command.Parameters.AddWithValue("@likeQuery", $"%{query}%");
             command.Parameters.AddWithValue("@limit", maxResults);
+            command.Parameters.AddWithValue("@offset", offset);
             if (!string.IsNullOrWhiteSpace(filterType))
             {
                 command.Parameters.AddWithValue("@typeFilter", filterType);
@@ -437,7 +451,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             $"""
             WITH RECURSIVE Subgraph(Id, Depth) AS (
                 SELECT Id, 0 FROM Nodes WHERE Id IN ({seedList})
-                UNION ALL
+                UNION
                 SELECT CASE WHEN e.SourceId = s.Id THEN e.TargetId ELSE e.SourceId END, s.Depth + 1
                 FROM Edges e
                 JOIN Subgraph s ON (e.SourceId = s.Id OR e.TargetId = s.Id)
@@ -870,6 +884,10 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             }
         }
 
+        // Summary may not be present in all queries (e.g. GetNodesPendingSemanticAnalysisAsync)
+        string? summary = null;
+        try { summary = GetStringOrNull("Summary"); } catch { /* column not in result set */ }
+
         return new GraphNode
         {
             Id = reader.GetString(reader.GetOrdinal("Id")),
@@ -880,6 +898,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             StartLine = GetIntOrNull("StartLine"),
             EndLine = GetIntOrNull("EndLine"),
             ContentHash = GetStringOrNull("ContentHash"),
+            Summary = summary,
             Properties = properties
         };
     }
@@ -901,6 +920,41 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     /// </summary>
     private static object SerializeMetadata(Dictionary<string, string> properties) =>
         properties.Count > 0 ? JsonSerializer.Serialize(properties) : DBNull.Value;
+
+    public async Task<IReadOnlyList<GraphNode>> GetNodesPendingSemanticAnalysisAsync(int batchSize, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash
+            FROM Nodes 
+            WHERE NeedsSemanticAnalysis = 1 AND Type != 'Concept'
+            LIMIT @BatchSize;";
+        command.Parameters.AddWithValue("@BatchSize", batchSize);
+
+        var nodes = new List<GraphNode>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            nodes.Add(ReadNode(reader));
+        }
+
+        return nodes;
+    }
+
+    public async Task UpdateNodeSemanticDataAsync(string nodeId, string summary, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE Nodes 
+            SET Summary = @Summary, NeedsSemanticAnalysis = 0 
+            WHERE Id = @Id;";
+        command.Parameters.AddWithValue("@Summary", (object?)summary ?? DBNull.Value);
+        command.Parameters.AddWithValue("@Id", nodeId);
+
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     #endregion
 }

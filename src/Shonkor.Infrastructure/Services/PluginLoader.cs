@@ -72,26 +72,92 @@ public static class PluginLoader
 
         try
         {
+            var syntaxTrees = new List<SyntaxTree>();
             foreach (var file in files)
             {
                 try
                 {
                     var code = File.ReadAllText(file);
-                    var parser = CompileAndLoadParser(context, code, Path.GetFileNameWithoutExtension(file));
-                    if (parser != null)
-                    {
-                        parsers.Add(parser);
-                        Console.WriteLine($"[PluginLoader] Loaded dynamic parser plugin: {file}");
-                    }
+                    syntaxTrees.Add(CSharpSyntaxTree.ParseText(code));
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[PluginLoader] Error compiling/loading plugin '{file}': {ex.Message}");
+                    Console.WriteLine($"[PluginLoader] Error reading plugin '{file}': {ex.Message}");
+                }
+            }
+
+            if (syntaxTrees.Count == 0)
+            {
+                context.Unload();
+                return PluginLoadResult.Empty;
+            }
+
+            // Gather metadata references from current AppDomain ONCE (O(1) compilation)
+            var references = new List<MetadataReference>();
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (!assembly.IsDynamic && !string.IsNullOrEmpty(assembly.Location))
+                {
+                    try
+                    {
+                        references.Add(MetadataReference.CreateFromFile(assembly.Location));
+                    }
+                    catch
+                    {
+                        // Ignore assemblies that cannot be referenced
+                    }
+                }
+            }
+
+            // Explicitly add YamlDotNet just in case it wasn't picked up
+            var yamlAssemblyPath = typeof(YamlDotNet.Serialization.Deserializer).Assembly.Location;
+            if (!string.IsNullOrEmpty(yamlAssemblyPath))
+            {
+                references.Add(MetadataReference.CreateFromFile(yamlAssemblyPath));
+            }
+
+            var compilation = CSharpCompilation.Create(
+                $"Shonkor.Plugins_{Guid.NewGuid():N}",
+                syntaxTrees,
+                references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            );
+
+            using var ms = new MemoryStream();
+            var result = compilation.Emit(ms);
+
+            if (!result.Success)
+            {
+                var failures = result.Diagnostics.Where(diagnostic =>
+                    diagnostic.IsWarningAsError ||
+                    diagnostic.Severity == DiagnosticSeverity.Error);
+
+                var errorMsg = string.Join("\n", failures.Select(f => $"{f.Id}: {f.GetMessage()}"));
+                Console.WriteLine($"[PluginLoader] Compilation failed:\n{errorMsg}");
+                context.Unload();
+                return PluginLoadResult.Empty;
+            }
+
+            ms.Seek(0, SeekOrigin.Begin);
+
+            // Load into the dedicated collectible context so it can be unloaded later.
+            var loadedAssembly = context.LoadFromStream(ms);
+
+            foreach (var type in loadedAssembly.GetTypes())
+            {
+                if (typeof(IFileParser).IsAssignableFrom(type) && !type.IsInterface && !type.IsAbstract)
+                {
+                    if (Activator.CreateInstance(type) is IFileParser parser)
+                    {
+                        parsers.Add(parser);
+                        Console.WriteLine($"[PluginLoader] Loaded dynamic parser plugin: {type.Name}");
+                    }
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
+            Console.WriteLine($"[PluginLoader] Fatal error loading plugins: {ex.Message}");
             context.Unload();
             throw;
         }
@@ -104,72 +170,5 @@ public static class PluginLoader
         }
 
         return new PluginLoadResult(parsers, context);
-    }
-
-    private static IFileParser? CompileAndLoadParser(AssemblyLoadContext context, string sourceCode, string assemblyName)
-    {
-        var syntaxTree = CSharpSyntaxTree.ParseText(sourceCode);
-
-        // Gather metadata references from current AppDomain for robust in-memory compilation
-        var references = new List<MetadataReference>();
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (!assembly.IsDynamic && !string.IsNullOrEmpty(assembly.Location))
-            {
-                try
-                {
-                    references.Add(MetadataReference.CreateFromFile(assembly.Location));
-                }
-                catch
-                {
-                    // Ignore assemblies that cannot be referenced
-                }
-            }
-        }
-
-        // Explicitly add YamlDotNet just in case it wasn't picked up
-        var yamlAssemblyPath = typeof(YamlDotNet.Serialization.Deserializer).Assembly.Location;
-        if (!string.IsNullOrEmpty(yamlAssemblyPath))
-        {
-            references.Add(MetadataReference.CreateFromFile(yamlAssemblyPath));
-        }
-
-        var compilation = CSharpCompilation.Create(
-            $"Shonkor.Plugin.{assemblyName}_{Guid.NewGuid():N}",
-            new[] { syntaxTree },
-            references,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-        );
-
-        using var ms = new MemoryStream();
-        var result = compilation.Emit(ms);
-
-        if (!result.Success)
-        {
-            var failures = result.Diagnostics.Where(diagnostic =>
-                diagnostic.IsWarningAsError ||
-                diagnostic.Severity == DiagnosticSeverity.Error);
-
-            var errorMsg = string.Join("\n", failures.Select(f => $"{f.Id}: {f.GetMessage()}"));
-            throw new InvalidOperationException($"Compilation failed:\n{errorMsg}");
-        }
-
-        ms.Seek(0, SeekOrigin.Begin);
-
-        // Load into the dedicated collectible context so it can be unloaded later.
-        var loadedAssembly = context.LoadFromStream(ms);
-
-        foreach (var type in loadedAssembly.GetTypes())
-        {
-            if (typeof(IFileParser).IsAssignableFrom(type) && !type.IsInterface && !type.IsAbstract)
-            {
-                if (Activator.CreateInstance(type) is IFileParser parser)
-                {
-                    return parser;
-                }
-            }
-        }
-
-        return null;
     }
 }

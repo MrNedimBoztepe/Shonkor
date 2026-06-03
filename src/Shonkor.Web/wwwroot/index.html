@@ -252,8 +252,13 @@
 
                 <div class="drawer-content">
                     <div class="info-group">
-                        <div class="info-label"><i data-lucide="file"></i> File Path</div>
+                        <label class="info-label" data-i18n="drawer_path">Path</label>
                         <div id="drawer-node-path" class="info-val">c:\Projects\Brain\src\Shonkor.Core\Services\RoslynAstParser.cs</div>
+                    </div>
+
+                    <div id="drawer-summary-section" class="info-group" style="display: none;">
+                        <label class="info-label" style="color: var(--color-primary);">AI Summary</label>
+                        <div id="drawer-node-summary" class="info-val" style="font-style: italic;"></div>
                     </div>
 
                     <div id="drawer-properties-section" class="info-group">
