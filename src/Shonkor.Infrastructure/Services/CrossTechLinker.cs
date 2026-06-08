@@ -57,16 +57,7 @@ public static class CrossTechLinker
                 var scNorm = NormalizeName(scItem.Name);
                 if (scNorm == jsNorm)
                 {
-                    newEdges.Add(new GraphEdge
-                    {
-                        SourceId = jsComp.Id,
-                        TargetId = scItem.Id,
-                        Relationship = "BINDS_TO",
-                        Properties = new Dictionary<string, string>
-                        {
-                            ["MappingType"] = "ImplicitNameMatch"
-                        }
-                    });
+                    newEdges.Add(new GraphEdge { SourceId = jsComp.Id, TargetId = scItem.Id, Relationship = "BINDS_TO" });
                 }
             }
         }
@@ -81,16 +72,7 @@ public static class CrossTechLinker
                 var match = jsComponents.FirstOrDefault(js => NormalizeName(js.Name) == normComp);
                 if (match != null)
                 {
-                    newEdges.Add(new GraphEdge
-                    {
-                        SourceId = match.Id,
-                        TargetId = scItem.Id,
-                        Relationship = "BINDS_TO",
-                        Properties = new Dictionary<string, string>
-                        {
-                            ["MappingType"] = "ExplicitComponentName"
-                        }
-                    });
+                    newEdges.Add(new GraphEdge { SourceId = match.Id, TargetId = scItem.Id, Relationship = "BINDS_TO" });
                 }
             }
 
@@ -102,17 +84,7 @@ public static class CrossTechLinker
                 var match = csharpClasses.FirstOrDefault(c => string.Equals(c.Name, controllerClass, StringComparison.OrdinalIgnoreCase));
                 if (match != null)
                 {
-                    newEdges.Add(new GraphEdge
-                    {
-                        SourceId = match.Id,
-                        TargetId = scItem.Id,
-                        Relationship = "CONTROLLER_OF",
-                        Properties = new Dictionary<string, string>
-                        {
-                            ["MappingType"] = "ExplicitControllerName",
-                            ["ControllerAction"] = scItem.Properties.TryGetValue("controllerAction", out var act) ? act : ""
-                        }
-                    });
+                    newEdges.Add(new GraphEdge { SourceId = match.Id, TargetId = scItem.Id, Relationship = "CONTROLLER_OF" });
                 }
             }
         }
@@ -129,16 +101,7 @@ public static class CrossTechLinker
                     var match = sitecoreTemplates.FirstOrDefault(t => NormalizeName(t.Name) == normTemp);
                     if (match != null)
                     {
-                        newEdges.Add(new GraphEdge
-                        {
-                            SourceId = gqlNode.Id,
-                            TargetId = match.Id,
-                            Relationship = "QUERIES_TEMPLATE",
-                            Properties = new Dictionary<string, string>
-                            {
-                                ["MappingType"] = "InlineFragmentReference"
-                            }
-                        });
+                        newEdges.Add(new GraphEdge { SourceId = gqlNode.Id, TargetId = match.Id, Relationship = "QUERIES_TEMPLATE" });
                     }
                 }
             }
@@ -177,16 +140,7 @@ public static class CrossTechLinker
                 {
                     if (definition.Id == node.Id) continue; // skip self
 
-                    newEdges.Add(new GraphEdge
-                    {
-                        SourceId = node.Id,
-                        TargetId = definition.Id,
-                        Relationship = "REFERENCES_TYPE",
-                        Properties = new Dictionary<string, string>
-                        {
-                            ["MappingType"] = "ResolvedTypeReference"
-                        }
-                    });
+                    newEdges.Add(new GraphEdge { SourceId = node.Id, TargetId = definition.Id, Relationship = "REFERENCES_TYPE" });
                 }
             }
         }

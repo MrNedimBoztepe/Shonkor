@@ -251,8 +251,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const dropdownSearchInput = document.getElementById('dropdown-search-input');
     const dropdownProjectList = document.getElementById('dropdown-project-list');
     const openSettingsBtn = document.getElementById('open-settings-btn');
+    const openAdminBtn = document.getElementById('open-admin-btn');
     const projectModal = document.getElementById('project-modal');
+    const adminModal = document.getElementById('admin-modal');
     const closeProjectModalBtn = document.getElementById('close-project-modal-btn');
+    const closeAdminModalBtn = document.getElementById('close-admin-modal-btn');
     const projectListEl = document.getElementById('project-list');
     
     // New project registration inputs
@@ -812,6 +815,253 @@ document.addEventListener('DOMContentLoaded', () => {
             dropdownProjectList.appendChild(li);
         });
     }
+
+    // ============================
+    // ============================
+    // ADMIN MODAL (B2B SaaS)
+    // ============================
+
+    if (openAdminBtn) {
+        openAdminBtn.addEventListener('click', () => {
+            document.querySelectorAll('.modal-tab').forEach(t => {
+                if (t.dataset.tab?.startsWith('admin')) t.classList.remove('active');
+            });
+            document.querySelectorAll('.modal-tab-content').forEach(c => {
+                if (c.id.startsWith('admin')) c.classList.remove('active');
+            });
+            const orgsTabBtn = document.querySelector('.modal-tab[data-tab="admin-orgs-tab"]');
+            const orgsTabContent = document.getElementById('admin-orgs-tab');
+            if (orgsTabBtn) orgsTabBtn.classList.add('active');
+            if (orgsTabContent) orgsTabContent.classList.add('active');
+
+            loadAdminData();
+            adminModal.classList.remove('hidden');
+        });
+    }
+
+    if (closeAdminModalBtn) {
+        closeAdminModalBtn.addEventListener('click', () => {
+            adminModal.classList.add('hidden');
+            document.getElementById('new-token-display').classList.add('hidden');
+        });
+    }
+
+    // Modal Tabs logic (works for both modals)
+    document.querySelectorAll('.modal-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            const tabId = tab.getAttribute('data-tab');
+            const parentHeader = tab.closest('.modal-header');
+            const parentBody = tab.closest('.modal-container').querySelector('.modal-body');
+
+            parentHeader.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+            parentBody.querySelectorAll('.modal-tab-content').forEach(c => c.classList.remove('active'));
+
+            tab.classList.add('active');
+            const targetContent = document.getElementById(tabId);
+            if (targetContent) targetContent.classList.add('active');
+        });
+    });
+
+    async function loadAdminData() {
+        try {
+            const orgsResponse = await fetch('/api/admin/orgs');
+            if (orgsResponse.ok) {
+                const orgs = await orgsResponse.json();
+                renderOrgsList(orgs);
+                updateUserOrgSelects(orgs);
+                
+                // If there are orgs, load users for the first one by default
+                const filterOrgSelect = document.getElementById('filter-users-org');
+                if (orgs.length > 0 && !filterOrgSelect.value) {
+                    filterOrgSelect.value = orgs[0].id;
+                    loadUsers(orgs[0].id);
+                } else if (filterOrgSelect.value) {
+                    loadUsers(filterOrgSelect.value);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load admin data', error);
+            showToast('Failed to load admin data');
+        }
+    }
+
+    function renderOrgsList(orgs) {
+        const orgsList = document.getElementById('orgs-list');
+        orgsList.innerHTML = '';
+        if (orgs.length === 0) {
+            orgsList.innerHTML = '<div class="empty-state">No organizations found.</div>';
+            return;
+        }
+
+        orgs.forEach(org => {
+            const li = document.createElement('div');
+            li.className = 'plugin-item';
+            li.innerHTML = `
+                <div class="plugin-info">
+                    <div class="plugin-name"><i data-lucide="building"></i> ${org.name}</div>
+                    <div class="plugin-desc">ID: ${org.id}</div>
+                </div>
+            `;
+            orgsList.appendChild(li);
+        });
+        lucide.createIcons();
+    }
+
+    function updateUserOrgSelects(orgs) {
+        const createSelect = document.getElementById('new-user-org');
+        const filterSelect = document.getElementById('filter-users-org');
+        
+        // Preserve selections if possible
+        const createVal = createSelect.value;
+        const filterVal = filterSelect.value;
+
+        createSelect.innerHTML = '<option value="">Select Organization...</option>';
+        filterSelect.innerHTML = '<option value="">Select Organization to view users...</option>';
+
+        orgs.forEach(org => {
+            const opt1 = document.createElement('option');
+            opt1.value = org.id;
+            opt1.textContent = org.name;
+            createSelect.appendChild(opt1);
+
+            const opt2 = document.createElement('option');
+            opt2.value = org.id;
+            opt2.textContent = org.name;
+            filterSelect.appendChild(opt2);
+        });
+
+        if (createVal) createSelect.value = createVal;
+        if (filterVal) filterSelect.value = filterVal;
+    }
+
+    async function loadUsers(orgId) {
+        if (!orgId) return;
+        try {
+            const res = await fetch(`/api/admin/users/${orgId}`);
+            if (res.ok) {
+                const users = await res.json();
+                renderUsersList(users);
+            }
+        } catch (error) {
+            console.error('Failed to load users', error);
+        }
+    }
+
+    function renderUsersList(users) {
+        const usersList = document.getElementById('users-list');
+        usersList.innerHTML = '';
+        if (users.length === 0) {
+            usersList.innerHTML = '<div class="empty-state">No users found for this organization.</div>';
+            return;
+        }
+
+        users.forEach(user => {
+            const li = document.createElement('div');
+            li.className = 'plugin-item';
+            li.innerHTML = `
+                <div class="plugin-info">
+                    <div class="plugin-name"><i data-lucide="user"></i> ${user.username}</div>
+                    <div class="plugin-desc">ID: ${user.id} | GitHub: ${user.gitHubUsername || 'None'}</div>
+                </div>
+                <div class="plugin-actions">
+                    <button class="glass-btn hover-glow-red icon-only-btn" onclick="deleteUser('${user.id}')" title="Delete User">
+                        <i data-lucide="trash-2"></i>
+                    </button>
+                </div>
+            `;
+            usersList.appendChild(li);
+        });
+        lucide.createIcons();
+    }
+
+    document.getElementById('create-org-btn')?.addEventListener('click', async () => {
+        const input = document.getElementById('new-org-name');
+        const name = input.value.trim();
+        if (!name) return;
+
+        try {
+            const res = await fetch('/api/admin/orgs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            if (res.ok) {
+                input.value = '';
+                showToast('Organization created successfully');
+                loadAdminData();
+            } else {
+                showToast('Failed to create organization');
+            }
+        } catch (error) {
+            console.error(error);
+            showToast('Error creating organization');
+        }
+    });
+
+    document.getElementById('create-user-btn')?.addEventListener('click', async () => {
+        const orgId = document.getElementById('new-user-org').value;
+        const username = document.getElementById('new-user-name').value.trim();
+        const github = document.getElementById('new-user-github').value.trim();
+
+        if (!orgId || !username) {
+            showToast('Please provide an organization and username');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/admin/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ organizationId: orgId, username, githubUsername: github })
+            });
+
+            if (res.ok) {
+                const user = await res.json();
+                document.getElementById('new-user-name').value = '';
+                document.getElementById('new-user-github').value = '';
+                
+                // Show PAT
+                const tokenDisplay = document.getElementById('new-token-display');
+                const tokenInput = document.getElementById('new-pat-input');
+                tokenInput.value = user.apiToken;
+                tokenDisplay.classList.remove('hidden');
+
+                // Reload users if the current view is for this org
+                if (document.getElementById('filter-users-org').value === orgId) {
+                    loadUsers(orgId);
+                }
+                
+                showToast('User created and token generated');
+            } else {
+                showToast('Failed to create user');
+            }
+        } catch (error) {
+            console.error(error);
+            showToast('Error creating user');
+        }
+    });
+
+    document.getElementById('filter-users-org')?.addEventListener('change', (e) => {
+        loadUsers(e.target.value);
+    });
+
+    window.deleteUser = async function(userId) {
+        if (!confirm('Are you sure you want to delete this user? Their token will be revoked immediately.')) return;
+        
+        try {
+            const res = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+            if (res.ok) {
+                showToast('User deleted successfully');
+                const orgId = document.getElementById('filter-users-org').value;
+                if (orgId) loadUsers(orgId);
+            } else {
+                showToast('Failed to delete user');
+            }
+        } catch (error) {
+            console.error(error);
+            showToast('Error deleting user');
+        }
+    };
 
     // ============================
     // SETTINGS MODAL (Config + Plugins)

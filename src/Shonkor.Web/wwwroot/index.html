@@ -111,6 +111,10 @@
                     <i data-lucide="settings"></i>
                 </button>
 
+                <button id="open-admin-btn" class="glass-btn hover-glow-blue" title="B2B SaaS Administration" aria-label="Open user and organization administration" aria-haspopup="dialog">
+                    <i data-lucide="users"></i>
+                </button>
+
                 <div class="custom-lang-dropdown" id="lang-dropdown">
                     <button class="glass-btn lang-dropdown-btn" id="lang-dropdown-btn" title="Select Language" aria-label="Select language" aria-haspopup="true" aria-expanded="false">
                         <img src="https://flagcdn.com/w20/gb.png" alt="EN" id="current-lang-flag">
@@ -515,6 +519,78 @@
                     <div class="browse-action-buttons">
                         <button id="browse-cancel-btn" class="glass-btn" type="button">Cancel</button>
                         <button id="browse-confirm-btn" class="glow-btn blue-btn" type="button"><i data-lucide="folder-check"></i> Choose Folder</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- MODAL FOR SAAS ADMIN -->
+    <div id="admin-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="B2B SaaS Administration">
+        <div class="modal-container project-modal-container glass-panel">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2><i data-lucide="users" class="purple-glow"></i> SaaS Administration</h2>
+                    <p>Manage Organizations, Projects, and Users.</p>
+                </div>
+                <div class="modal-tabs">
+                    <button class="modal-tab active" data-tab="admin-orgs-tab"><i data-lucide="building"></i> Organizations</button>
+                    <button class="modal-tab" data-tab="admin-users-tab"><i data-lucide="user"></i> Users & Tokens</button>
+                </div>
+                <button id="close-admin-modal-btn" class="close-btn" aria-label="Close admin dialog"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="modal-body project-modal-body">
+                <!-- ORGANIZATIONS TAB -->
+                <div id="admin-orgs-tab" class="modal-tab-content active">
+                    <div class="setting-group">
+                        <h3><i data-lucide="plus-circle"></i> Create Organization</h3>
+                        <p class="setting-desc">Add a new agency or client organization.</p>
+                        <div style="display: flex; gap: 10px; margin-top: 10px;">
+                            <input type="text" id="new-org-name" placeholder="Organization Name" class="glass-input" style="flex:1;">
+                            <button id="create-org-btn" class="glow-btn blue-btn">Create</button>
+                        </div>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <h3><i data-lucide="building"></i> Registered Organizations</h3>
+                        <div class="plugin-list" id="orgs-list">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- USERS TAB -->
+                <div id="admin-users-tab" class="modal-tab-content">
+                    <div class="setting-group">
+                        <h3><i data-lucide="user-plus"></i> Create User</h3>
+                        <p class="setting-desc">Create a new user and generate a Personal Access Token (PAT).</p>
+                        
+                        <div style="display: flex; gap: 10px; margin-top: 10px; flex-direction: column;">
+                            <select id="new-user-org" class="glass-select">
+                                <option value="">Select Organization...</option>
+                            </select>
+                            <input type="text" id="new-user-name" placeholder="Username (e.g. jdoe)" class="glass-input">
+                            <input type="text" id="new-user-github" placeholder="GitHub Username (Optional)" class="glass-input">
+                            <button id="create-user-btn" class="glow-btn blue-btn" style="align-self: flex-start;">Generate Token</button>
+                        </div>
+                        
+                        <div id="new-token-display" class="hidden" style="margin-top: 15px; padding: 15px; background: rgba(16,185,129,0.1); border: 1px solid var(--color-success); border-radius: 8px;">
+                            <p style="color: var(--color-success); margin-bottom: 5px;"><strong>Success! Token generated.</strong></p>
+                            <p style="font-size: 0.85rem; margin-bottom: 10px;">Please copy this Personal Access Token now. You won't be able to see it again!</p>
+                            <div style="display: flex; gap: 10px;">
+                                <input type="text" id="new-pat-input" readonly class="glass-input" style="flex:1; font-family: monospace; color: var(--color-success);">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3><i data-lucide="users"></i> Registered Users</h3>
+                        <select id="filter-users-org" class="glass-select" style="margin-bottom: 10px;">
+                            <option value="">Select Organization to view users...</option>
+                        </select>
+                        <div class="plugin-list" id="users-list">
+                            <!-- Populated dynamically -->
+                        </div>
                     </div>
                 </div>
             </div>

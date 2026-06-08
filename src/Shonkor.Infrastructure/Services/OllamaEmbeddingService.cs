@@ -22,10 +22,12 @@ public class OllamaEmbeddingService : IEmbeddingService
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-        _ollamaUrl = configuration["EmbeddingService:OllamaUrl"] ?? "http://localhost:11434";
+        _ollamaUrl = (configuration["EmbeddingService:OllamaUrl"] ?? "http://localhost:11434").TrimEnd('/');
         _ollamaModel = configuration["EmbeddingService:OllamaModel"] ?? "nomic-embed-text";
 
-        _httpClient.BaseAddress = new Uri(_ollamaUrl);
+        // Do NOT set _httpClient.BaseAddress here — mutating a shared HttpClient after construction
+        // is not thread-safe and would affect any other service using the same instance.
+        // Instead we build the full URL per request (see below).
         _httpClient.Timeout = TimeSpan.FromMinutes(1);
     }
 
@@ -42,12 +44,14 @@ public class OllamaEmbeddingService : IEmbeddingService
             prompt = text
         };
 
+        var endpoint = $"{_ollamaUrl}/api/embeddings";
+
         const int maxRetries = 3;
         for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
             try
             {
-                var response = await _httpClient.PostAsJsonAsync("/api/embeddings", requestBody, cancellationToken).ConfigureAwait(false);
+                var response = await _httpClient.PostAsJsonAsync(endpoint, requestBody, cancellationToken).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
                 var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);

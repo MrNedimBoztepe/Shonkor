@@ -24,11 +24,13 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        
-        _ollamaUrl = configuration["SemanticAnalyzer:OllamaUrl"] ?? "http://localhost:11434";
+
+        _ollamaUrl = (configuration["SemanticAnalyzer:OllamaUrl"] ?? "http://localhost:11434").TrimEnd('/');
         _ollamaModel = configuration["SemanticAnalyzer:OllamaModel"] ?? "qwen2.5-coder";
 
-        _httpClient.BaseAddress = new Uri(_ollamaUrl);
+        // Do NOT set _httpClient.BaseAddress here — mutating a shared HttpClient after construction
+        // is not thread-safe and would affect any other service using the same instance.
+        // Instead we build the full URL per request (see below).
         _httpClient.Timeout = TimeSpan.FromMinutes(2); // Local LLM generation can take a bit
     }
 
@@ -66,14 +68,16 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             format = "json" // Tell Ollama to enforce JSON output (supported in recent versions)
         };
 
+        var endpoint = $"{_ollamaUrl}/api/generate";
+
         const int maxRetries = 3;
         for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
             try
             {
                 _logger.LogDebug("Sending node {NodeId} to Ollama ({Model}) for analysis... (Attempt {Attempt})", node.Id, _ollamaModel, attempt);
-                
-                var response = await _httpClient.PostAsJsonAsync("/api/generate", requestBody, cancellationToken).ConfigureAwait(false);
+
+                var response = await _httpClient.PostAsJsonAsync(endpoint, requestBody, cancellationToken).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
                 var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -171,14 +175,34 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             stream = false
         };
 
+        var ragEndpoint = $"{_ollamaUrl}/api/generate";
         _logger.LogInformation("Generating RAG response via Ollama ({Model}) for query: {Query}", _ollamaModel, query);
-        
-        var response = await _httpClient.PostAsJsonAsync("/api/generate", requestBody, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
 
-        var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
-        var responseText = responseJson?["response"]?.ToString();
+        const int maxRetries = 3;
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                var response = await _httpClient.PostAsJsonAsync(ragEndpoint, requestBody, cancellationToken).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
 
-        return responseText ?? "Es konnte keine Antwort generiert werden.";
+                var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
+                var responseText = responseJson?["response"]?.ToString();
+
+                return responseText ?? "Es konnte keine Antwort generiert werden.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to generate RAG response via Ollama on attempt {Attempt}.", attempt);
+                if (attempt == maxRetries)
+                {
+                    _logger.LogError("Max retries reached for RAG response generation.");
+                    throw;
+                }
+                await Task.Delay(TimeSpan.FromSeconds(2 * attempt), cancellationToken);
+            }
+        }
+
+        return "Es konnte keine Antwort generiert werden.";
     }
 }

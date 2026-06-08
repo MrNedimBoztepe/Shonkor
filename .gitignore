@@ -34,6 +34,10 @@ dist/
 scratch/
 publish/
 
+# Test artifacts & local benchmark outputs (machine-specific paths, internal data)
+test.json
+*.benchmark.json
+
 # Logs
 *.log
 

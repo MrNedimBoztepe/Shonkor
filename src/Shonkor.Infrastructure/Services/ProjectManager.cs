@@ -5,11 +5,30 @@ using Shonkor.Infrastructure.Storage;
 
 namespace Shonkor.Infrastructure.Services;
 
+public class Organization
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString();
+    public string Name { get; set; } = string.Empty;
+}
+
+public class User
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString();
+    public string OrganizationId { get; set; } = string.Empty;
+    public string Username { get; set; } = string.Empty;
+    public string ApiToken { get; set; } = string.Empty;
+    public string GitHubUsername { get; set; } = string.Empty; // For future GitHub SSO integration
+}
+
 public class Project
 {
     public string Name { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;
     public string DatabasePath { get; set; } = string.Empty;
+    public string OrganizationId { get; set; } = string.Empty;
+    public string RepositoryUrl { get; set; } = string.Empty;
+    
+    // Legacy field for backward compatibility during deserialization
     public string ApiKey { get; set; } = string.Empty;
 }
 
@@ -32,7 +51,13 @@ public class WebConfig
     };
 }
 
-public class ProjectManager
+/// <summary>
+/// Owns the multi-project registry (<c>projects.json</c>): the list of projects, the active project,
+/// per-project storage providers (cached + lifecycle), and index-scan locking. Organization/user
+/// management lives in the <c>ProjectManager.Users.cs</c> partial; they share this type's registry
+/// state and persistence.
+/// </summary>
+public partial class ProjectManager
 {
     private readonly string _projectsFilePath;
     // Lazy<> guarantees the provider factory (which initializes the schema) runs exactly once
@@ -41,6 +66,8 @@ public class ProjectManager
     // Tracks projects with an in-flight index scan so concurrent scans don't duplicate work or race.
     private readonly ConcurrentDictionary<string, byte> _activeScans = new();
     private readonly object _lock = new();
+    private List<Organization> _organizations = new();
+    private List<User> _users = new();
     private List<Project> _projects = new();
     private string _activeProjectName = string.Empty;
     private DateTime _lastLoadTime = DateTime.MinValue;
@@ -52,44 +79,56 @@ public class ProjectManager
         WorkspacePath = currentWorkspace;
         _projectsFilePath = Path.Combine(currentWorkspace, "projects.json");
         LoadProjects(currentWorkspace);
-        EnsureStandardPlugins();
+        StandardPluginsInstaller.Install(WorkspacePath);
     }
 
     private void EnsureUpToDate()
     {
-        if (File.Exists(_projectsFilePath))
+        // Read the file timestamp OUTSIDE the lock — File.GetLastWriteTimeUtc is a cheap kernel
+        // call but still I/O, and holding _lock during I/O serializes all concurrent readers.
+        // We only enter the lock (and potentially do a full reload) when the timestamp has changed.
+        if (!File.Exists(_projectsFilePath)) return;
+
+        var currentWriteTime = File.GetLastWriteTimeUtc(_projectsFilePath);
+
+        bool needsReload;
+        lock (_lock)
         {
-            var currentWriteTime = File.GetLastWriteTimeUtc(_projectsFilePath);
-            if (currentWriteTime > _lastLoadTime)
-            {
-                LoadProjects(WorkspacePath);
-            }
+            needsReload = currentWriteTime > _lastLoadTime;
+        }
+
+        if (needsReload)
+        {
+            // LoadProjects acquires _lock internally for writes, so we don't hold it here.
+            // A second concurrent caller might also enter here and call LoadProjects; that is safe
+            // because LoadProjects is idempotent and the final _lastLoadTime write is under _lock.
+            LoadProjects(WorkspacePath);
         }
     }
 
     public List<Project> GetProjects()
     {
+        EnsureUpToDate(); // I/O outside the lock; acquires lock internally only for the swap
         lock (_lock)
         {
-            EnsureUpToDate();
             return _projects.ToList();
         }
     }
 
     public string GetActiveProjectName()
     {
+        EnsureUpToDate();
         lock (_lock)
         {
-            EnsureUpToDate();
             return _activeProjectName;
         }
     }
 
     public Project? GetActiveProject()
     {
+        EnsureUpToDate();
         lock (_lock)
         {
-            EnsureUpToDate();
             return _projects.FirstOrDefault(p => p.Name.Equals(_activeProjectName, StringComparison.OrdinalIgnoreCase));
         }
     }
@@ -169,28 +208,25 @@ public class ProjectManager
         }
     }
 
+    /// <summary>
+    /// Returns an already-initialized storage provider for the given project, or the active project
+    /// when <paramref name="projectName"/> is null/empty.
+    /// <para>
+    /// <b>Prefer <see cref="GetStorageProviderAsync"/> in async contexts (web requests, MCP handlers).</b>
+    /// This synchronous overload blocks the calling thread during the first-time schema initialization
+    /// (which includes an FTS5 integrity check). It is safe for CLI use where there is no thread-pool
+    /// to exhaust, but can cause latency spikes under concurrent web traffic.
+    /// </para>
+    /// </summary>
     public IGraphStorageProvider GetStorageProvider(string? projectName)
     {
-        Project? project = null;
-        if (!string.IsNullOrWhiteSpace(projectName))
-        {
-            lock (_lock)
-            {
-                project = _projects.FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
-            }
-        }
-
-        if (project == null)
-        {
-            project = GetActiveProject();
-        }
-
-        if (project == null)
-        {
-            throw new InvalidOperationException("No active project configured.");
-        }
+        var project = ResolveProject(projectName);
 
         var key = project.Name.ToLowerInvariant();
+
+        // The Lazy factory blocks the calling thread during InitializeAsync. The FTS5 rebuild guard
+        // added in InitializeAsync means this is now fast for already-synced databases, but it is
+        // still synchronous I/O. Prefer GetStorageProviderAsync in async callers.
         var lazy = _providers.GetOrAdd(key, _ => new Lazy<SqliteGraphStorageProvider>(() =>
         {
             var provider = new SqliteGraphStorageProvider(project.DatabasePath);
@@ -201,9 +237,65 @@ public class ProjectManager
         return lazy.Value;
     }
 
+    /// <summary>
+    /// Async version of <see cref="GetStorageProvider"/>. Returns an initialized storage provider
+    /// without blocking the thread-pool thread during schema initialization.
+    /// Use this in all async contexts (ASP.NET Core endpoints, MCP handlers, background services).
+    /// </summary>
+    public async Task<IGraphStorageProvider> GetStorageProviderAsync(string? projectName, CancellationToken cancellationToken = default)
+    {
+        var project = ResolveProject(projectName);
+        var key = project.Name.ToLowerInvariant();
+
+        // Fast path: provider already initialized — return immediately.
+        if (_providers.TryGetValue(key, out var existing) && existing.IsValueCreated)
+        {
+            return existing.Value;
+        }
+
+        // Slow path: initialize the provider asynchronously, then register it.
+        // GetOrAdd with a Lazy ensures only one initialization runs even under concurrency.
+        var provider = new SqliteGraphStorageProvider(project.DatabasePath);
+        await provider.InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        var newLazy = new Lazy<SqliteGraphStorageProvider>(() => provider, LazyThreadSafetyMode.ExecutionAndPublication);
+
+        // Only keep our provider if no other thread won the race.
+        var winner = _providers.GetOrAdd(key, newLazy);
+        if (!ReferenceEquals(winner, newLazy))
+        {
+            // We lost the race — dispose ours and return the winner's value.
+            provider.Dispose();
+        }
+
+        return winner.Value;
+    }
+
     public IGraphStorageProvider GetActiveStorageProvider()
     {
         return GetStorageProvider(null);
+    }
+
+    public Task<IGraphStorageProvider> GetActiveStorageProviderAsync(CancellationToken cancellationToken = default)
+    {
+        return GetStorageProviderAsync(null, cancellationToken);
+    }
+
+    /// <summary>Resolves the project for a given name, or falls back to the active project.</summary>
+    private Project ResolveProject(string? projectName)
+    {
+        Project? project = null;
+        if (!string.IsNullOrWhiteSpace(projectName))
+        {
+            lock (_lock)
+            {
+                project = _projects.FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        project ??= GetActiveProject();
+
+        return project ?? throw new InvalidOperationException("No active project configured.");
     }
 
     /// <summary>
@@ -296,9 +388,10 @@ public class ProjectManager
                     return config;
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Fallback
+                // Malformed shonkor.json — fall back to the default config but surface the reason.
+                Console.Error.WriteLine($"[ProjectManager] Failed to read config for '{projectName}': {ex.Message}");
             }
         }
 
@@ -307,6 +400,32 @@ public class ProjectManager
         {
             DatabasePath = project.DatabasePath
         };
+    }
+
+    public Project? FindProjectByRepoUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+
+        // Normalize URL by removing .git suffix, trailing slashes, and maybe credentials
+        var normalized = NormalizeGitUrl(url);
+
+        lock (_lock)
+        {
+            return _projects.FirstOrDefault(p =>
+                !string.IsNullOrWhiteSpace(p.RepositoryUrl) &&
+                NormalizeGitUrl(p.RepositoryUrl).Equals(normalized, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+    }
+
+    private static string NormalizeGitUrl(string url)
+    {
+        url = url.Trim();
+        if (url.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            url = url.Substring(0, url.Length - 4);
+        }
+        return url.TrimEnd('/');
     }
 
     public void SaveProjectConfig(string projectName, WebConfig newConfig)
@@ -358,38 +477,100 @@ public class ProjectManager
 
     private void LoadProjects(string currentWorkspace)
     {
+        // Phase 1: read + parse the file WITHOUT the lock (I/O can be slow).
+        List<Organization>? orgs = null;
+        List<User>? users = null;
+        List<Project>? projects = null;
+        string? activeName = null;
+        DateTime fileTime = DateTime.MinValue;
+        bool needsSave = false;
+
         if (File.Exists(_projectsFilePath))
         {
             try
             {
                 var json = File.ReadAllText(_projectsFilePath);
+                fileTime = File.GetLastWriteTimeUtc(_projectsFilePath);
                 var registry = JsonSerializer.Deserialize<ProjectRegistryData>(json);
                 if (registry != null)
                 {
-                    _projects = registry.Projects ?? new();
-                    _activeProjectName = registry.ActiveProjectName ?? string.Empty;
+                    orgs = registry.Organizations ?? new();
+                    users = registry.Users ?? new();
+                    projects = registry.Projects ?? new();
+                    activeName = registry.ActiveProjectName ?? string.Empty;
+
+                    // Migration: projects that have ApiKey but no OrganizationId are moved to a
+                    // "Legacy Agency" org so that ApiKeyMiddleware can find them via User.ApiToken.
+                    foreach (var proj in projects.Where(p => string.IsNullOrEmpty(p.OrganizationId) && !string.IsNullOrEmpty(p.ApiKey)))
+                    {
+                        var defaultOrg = orgs.FirstOrDefault(o => o.Name == "Legacy Agency");
+                        if (defaultOrg == null)
+                        {
+                            defaultOrg = new Organization { Name = "Legacy Agency" };
+                            orgs.Add(defaultOrg);
+                        }
+
+                        var defaultUser = users.FirstOrDefault(u => u.ApiToken == proj.ApiKey);
+                        if (defaultUser == null)
+                        {
+                            defaultUser = new User
+                            {
+                                OrganizationId = defaultOrg.Id,
+                                Username = "LegacyAdmin",
+                                ApiToken = proj.ApiKey
+                            };
+                            users.Add(defaultUser);
+                        }
+
+                        proj.OrganizationId = defaultOrg.Id;
+                        proj.ApiKey = string.Empty; // clear legacy field
+                        needsSave = true;
+                    }
                 }
-                _lastLoadTime = File.GetLastWriteTimeUtc(_projectsFilePath);
             }
-            catch
+            catch (Exception ex)
             {
-                // Fallback
+                // Corrupt/unreadable projects.json — keep whatever is already in memory, but log it
+                // so silent data loss doesn't go unnoticed.
+                Console.Error.WriteLine($"[ProjectManager] Failed to load projects.json: {ex.Message}");
             }
         }
 
-        // If empty, auto-register current workspace as default
-        if (_projects.Count == 0)
+        // Phase 2: swap the parsed data in under the lock (fast — no I/O).
+        lock (_lock)
+        {
+            if (orgs != null)    _organizations = orgs;
+            if (users != null)   _users = users;
+            if (projects != null) _projects = projects;
+            if (activeName != null) _activeProjectName = activeName;
+            if (fileTime > _lastLoadTime) _lastLoadTime = fileTime;
+        }
+
+        // Phase 3: if migration produced changes, persist them (I/O again, outside lock).
+        if (needsSave)
+        {
+            lock (_lock) { SaveProjects(); }
+        }
+
+        // If still empty after load, auto-register current workspace as default.
+        bool isEmpty;
+        lock (_lock) { isEmpty = _projects.Count == 0; }
+
+        if (isEmpty)
         {
             var folderName = new DirectoryInfo(currentWorkspace).Name;
             var defaultDb = Path.Combine(currentWorkspace, "shonkor.db");
-            _projects.Add(new Project
+            lock (_lock)
             {
-                Name = folderName,
-                Path = currentWorkspace,
-                DatabasePath = defaultDb
-            });
-            _activeProjectName = folderName;
-            SaveProjects();
+                _projects.Add(new Project
+                {
+                    Name = folderName,
+                    Path = currentWorkspace,
+                    DatabasePath = defaultDb
+                });
+                _activeProjectName = folderName;
+                SaveProjects();
+            }
         }
     }
 
@@ -397,6 +578,8 @@ public class ProjectManager
     {
         var data = new ProjectRegistryData
         {
+            Organizations = _organizations,
+            Users = _users,
             Projects = _projects,
             ActiveProjectName = _activeProjectName
         };
@@ -406,45 +589,10 @@ public class ProjectManager
 
     private class ProjectRegistryData
     {
+        public List<Organization> Organizations { get; set; } = new();
+        public List<User> Users { get; set; } = new();
         public List<Project> Projects { get; set; } = new();
         public string ActiveProjectName { get; set; } = string.Empty;
     }
 
-    private void EnsureStandardPlugins()
-    {
-        try
-        {
-            var pluginsDir = Path.Combine(WorkspacePath, "plugins");
-            if (!Directory.Exists(pluginsDir))
-            {
-                Directory.CreateDirectory(pluginsDir);
-            }
-
-            var coreAssembly = typeof(Shonkor.Core.Interfaces.IFileParser).Assembly;
-            var resourceNames = coreAssembly.GetManifestResourceNames()
-                .Where(n => n.Contains(".StandardPlugins.") && n.EndsWith(".cs"));
-
-            foreach (var res in resourceNames)
-            {
-                // Extract filename like OptimizelyPlugin.cs from Shonkor.Core.StandardPlugins.OptimizelyPlugin.cs
-                var parts = res.Split('.');
-                var fileName = parts[^2] + "." + parts[^1];
-                var destPath = Path.Combine(pluginsDir, fileName);
-
-                if (!File.Exists(destPath))
-                {
-                    using var stream = coreAssembly.GetManifestResourceStream(res);
-                    if (stream != null)
-                    {
-                        using var reader = new StreamReader(stream);
-                        File.WriteAllText(destPath, reader.ReadToEnd());
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[ProjectManager] Failed to ensure standard plugins: {ex.Message}");
-        }
-    }
 }

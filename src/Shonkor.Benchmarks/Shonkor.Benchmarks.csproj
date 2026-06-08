@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -8,8 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.8" />
+    <ProjectReference Include="..\Shonkor.Core\Shonkor.Core.csproj" />
+    <ProjectReference Include="..\Shonkor.Infrastructure\Shonkor.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
