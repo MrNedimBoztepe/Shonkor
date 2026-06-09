@@ -46,12 +46,13 @@ public sealed class McpRequestHandler
             ? _contextProjectName
             : (!string.IsNullOrWhiteSpace(projectName) ? projectName : _contextProjectName);
 
-    private IGraphStorageProvider GetStorage(string? projectName)
+    private Task<IGraphStorageProvider> GetStorageAsync(string? projectName)
     {
         var effective = ResolveProjectName(projectName);
+        // Async resolution so the HTTP relay path doesn't block a thread on first-time schema init.
         return string.IsNullOrWhiteSpace(effective)
-            ? _projectManager.GetActiveStorageProvider()
-            : _projectManager.GetStorageProvider(effective);
+            ? _projectManager.GetActiveStorageProviderAsync()
+            : _projectManager.GetStorageProviderAsync(effective);
     }
 
     /// <summary>Resolves the filesystem root of the requested (or context) project, for path shortening.</summary>
@@ -401,7 +402,7 @@ public sealed class McpRequestHandler
         try
         {
             var projectName = args?["projectName"]?.ToString();
-            var storage = GetStorage(projectName);
+            var storage = await GetStorageAsync(projectName).ConfigureAwait(false);
 
             switch (toolName)
             {

@@ -209,38 +209,10 @@ public partial class ProjectManager
     }
 
     /// <summary>
-    /// Returns an already-initialized storage provider for the given project, or the active project
-    /// when <paramref name="projectName"/> is null/empty.
-    /// <para>
-    /// <b>Prefer <see cref="GetStorageProviderAsync"/> in async contexts (web requests, MCP handlers).</b>
-    /// This synchronous overload blocks the calling thread during the first-time schema initialization
-    /// (which includes an FTS5 integrity check). It is safe for CLI use where there is no thread-pool
-    /// to exhaust, but can cause latency spikes under concurrent web traffic.
-    /// </para>
-    /// </summary>
-    public IGraphStorageProvider GetStorageProvider(string? projectName)
-    {
-        var project = ResolveProject(projectName);
-
-        var key = project.Name.ToLowerInvariant();
-
-        // The Lazy factory blocks the calling thread during InitializeAsync. The FTS5 rebuild guard
-        // added in InitializeAsync means this is now fast for already-synced databases, but it is
-        // still synchronous I/O. Prefer GetStorageProviderAsync in async callers.
-        var lazy = _providers.GetOrAdd(key, _ => new Lazy<SqliteGraphStorageProvider>(() =>
-        {
-            var provider = new SqliteGraphStorageProvider(project.DatabasePath);
-            provider.InitializeAsync().GetAwaiter().GetResult();
-            return provider;
-        }, LazyThreadSafetyMode.ExecutionAndPublication));
-
-        return lazy.Value;
-    }
-
-    /// <summary>
-    /// Async version of <see cref="GetStorageProvider"/>. Returns an initialized storage provider
-    /// without blocking the thread-pool thread during schema initialization.
-    /// Use this in all async contexts (ASP.NET Core endpoints, MCP handlers, background services).
+    /// Returns an initialized storage provider for the given project (or the active project when
+    /// <paramref name="projectName"/> is null/empty), without blocking the calling thread during
+    /// first-time schema initialization. Providers are cached per project, so only the first call
+    /// per project performs I/O. Used in all contexts (ASP.NET Core endpoints, MCP handlers).
     /// </summary>
     public async Task<IGraphStorageProvider> GetStorageProviderAsync(string? projectName, CancellationToken cancellationToken = default)
     {
@@ -269,11 +241,6 @@ public partial class ProjectManager
         }
 
         return winner.Value;
-    }
-
-    public IGraphStorageProvider GetActiveStorageProvider()
-    {
-        return GetStorageProvider(null);
     }
 
     public Task<IGraphStorageProvider> GetActiveStorageProviderAsync(CancellationToken cancellationToken = default)
