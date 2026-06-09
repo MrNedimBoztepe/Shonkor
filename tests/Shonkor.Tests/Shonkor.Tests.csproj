@@ -19,8 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- ASP.NET Core types (DefaultHttpContext, IHostEnvironment, …) for Web middleware/endpoint tests. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\..\src\Shonkor.Core\Shonkor.Core.csproj" />
     <ProjectReference Include="..\..\src\Shonkor.Infrastructure\Shonkor.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Shonkor.Web\Shonkor.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>

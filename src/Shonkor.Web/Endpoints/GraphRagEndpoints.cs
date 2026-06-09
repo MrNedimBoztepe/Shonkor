@@ -16,7 +16,7 @@ public static class GraphRagEndpoints
         // POST /api/rag/query
         // Exposes Shonkor's structural graph directly to external AI Agents (e.g. ChatGPT, Antigravity)
         // using the X-API-Key for multi-tenant security.
-        app.MapPost("/api/rag/query", async (RagQueryRequest request, HttpContext context, ProjectManager pm, ContextCapsuleSynthesizer synthesizer) =>
+        app.MapPost("/api/rag/query", async (RagQueryRequest request, HttpContext context, ProjectManager pm, ContextCapsuleSynthesizer synthesizer, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Query))
             {
@@ -26,7 +26,9 @@ public static class GraphRagEndpoints
             try
             {
                 var projectName = context.Request.Headers["X-Project-Name"].ToString();
-                var storage = string.IsNullOrWhiteSpace(projectName) ? pm.GetActiveStorageProvider() : pm.GetStorageProvider(projectName);
+                var storage = string.IsNullOrWhiteSpace(projectName)
+                    ? await pm.GetActiveStorageProviderAsync(ct)
+                    : await pm.GetStorageProviderAsync(projectName, ct);
 
                 var searchResults = await storage.SearchAsync(request.Query, 5);
                 if (searchResults.Count == 0)

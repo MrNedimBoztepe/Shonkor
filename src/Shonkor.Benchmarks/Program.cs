@@ -1,110 +1,110 @@
-using System;
-using System.IO;
-using System.Linq;
-using System.Collections.Generic;
-using Microsoft.Data.Sqlite;
+// Licensed to Shonkor under the MIT License.
 
-namespace Shonkor.Benchmarks
+using Shonkor.Core.Models;
+using Shonkor.Infrastructure.Storage;
+
+namespace Shonkor.Benchmarks;
+
+/// <summary>
+/// Token &amp; latency benchmark: compares sending whole file contents to an LLM ("classic RAG")
+/// versus Shonkor's pre-computed AI summaries. Reads the graph through the storage abstraction
+/// (<see cref="SqliteGraphStorageProvider"/>) rather than hand-rolled SQL.
+/// </summary>
+internal static class Program
 {
-    class Program
+    // Cost/latency model constants.
+    private const double CharsPerToken = 4.0;          // ~4 chars/token for code+English
+    private const double CostPer1MTokens = 2.50;       // USD, GPT-4o / Claude 3.5 Sonnet average
+    private const double SecondsPerToken = 0.005;      // context reading speed
+    private const double BaseLatencySeconds = 0.5;     // average TTFB
+    private const long MissingFileFallbackChars = 2000;
+    private const int SampleSize = 50;
+
+    private static async Task<int> Main(string[] args)
     {
-        static void Main(string[] args)
+        Console.WriteLine("=== Shonkor Token & Latency Benchmark ===");
+        Console.WriteLine("Comparing classic full-content RAG vs Shonkor pre-computed summaries...\n");
+
+        // DB path: first CLI arg, else SHONKOR_BENCHMARK_DB env var, else ./shonkor.db.
+        var dbPath = args.FirstOrDefault()
+                     ?? Environment.GetEnvironmentVariable("SHONKOR_BENCHMARK_DB")
+                     ?? "shonkor.db";
+
+        if (!File.Exists(dbPath))
         {
-            Console.WriteLine("=== Shonkor Token & Latency Benchmark ===");
-            Console.WriteLine("Simulating a standard Architectural RAG Search vs Shonkor Graph Search...\n");
+            Console.Error.WriteLine($"[Error] Database not found at '{dbPath}'.");
+            Console.Error.WriteLine("Usage: Shonkor.Benchmarks <path-to-shonkor.db>   (or set SHONKOR_BENCHMARK_DB)");
+            return 1;
+        }
 
-            string dbPath = @"C:\Projects\sitecoreMuM\shonkor.db";
-            
-            if (!File.Exists(dbPath))
+        var provider = new SqliteGraphStorageProvider(dbPath);
+        await provider.InitializeAsync();
+        var allNodes = await provider.GetAllNodesAsync();
+
+        // Nodes carrying a real AI-generated summary (skip placeholders / error markers).
+        var summarized = allNodes
+            .Where(n => !string.IsNullOrEmpty(n.Summary)
+                        && !n.Summary!.StartsWith("Dies ist", StringComparison.Ordinal)
+                        && !n.Summary!.StartsWith("[Ollama Error]", StringComparison.Ordinal))
+            .Take(SampleSize)
+            .ToList();
+
+        if (summarized.Count == 0)
+        {
+            Console.WriteLine("No AI-generated summaries found in the database. Run the enrichment worker first.");
+            return 0;
+        }
+
+        long classicChars = 0;
+        long shonkorChars = 0;
+        var countedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var node in summarized)
+        {
+            // Classic RAG would send the whole source file (once per distinct file).
+            var filePath = node.FilePath;
+            if (!string.IsNullOrEmpty(filePath) && countedFiles.Add(filePath))
             {
-                Console.WriteLine($"[Error] Database not found at {dbPath}. Please run the scanner on the sitecoreMuM project first.");
-                return;
+                classicChars += File.Exists(filePath) ? new FileInfo(filePath).Length : MissingFileFallbackChars;
             }
 
-            // Metrics
-            int totalFilesProcessed = 0;
-            long classicTotalChars = 0;
-            long shonkorTotalChars = 0;
+            // Shonkor sends only the compact summary.
+            shonkorChars += node.Summary!.Length;
+        }
 
-            using var connection = new SqliteConnection($"Data Source={dbPath}");
-            connection.Open();
+        PrintReport(summarized.Count, classicChars, shonkorChars);
+        return 0;
+    }
 
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = @"
-                SELECT FilePath, Summary 
-                FROM Nodes 
-                WHERE Summary IS NOT NULL 
-                  AND Summary NOT LIKE 'Dies ist%' 
-                  AND Summary NOT LIKE '[Ollama Error]%'
-                LIMIT 50;
-            ";
+    private static void PrintReport(int nodeCount, long classicChars, long shonkorChars)
+    {
+        var classicTokens = (long)(classicChars / CharsPerToken);
+        var shonkorTokens = (long)(shonkorChars / CharsPerToken);
 
-            using var reader = cmd.ExecuteReader();
-            var distinctFiles = new HashSet<string>();
+        var classicCost = classicTokens / 1_000_000.0 * CostPer1MTokens;
+        var shonkorCost = shonkorTokens / 1_000_000.0 * CostPer1MTokens;
 
-            while (reader.Read())
-            {
-                var filePath = reader.GetString(0);
-                var summary = reader.GetString(1);
+        var classicLatency = classicTokens * SecondsPerToken + BaseLatencySeconds;
+        var shonkorLatency = shonkorTokens * SecondsPerToken + BaseLatencySeconds;
 
-                if (distinctFiles.Add(filePath))
-                {
-                    if (File.Exists(filePath))
-                    {
-                        var fileContent = File.ReadAllText(filePath);
-                        classicTotalChars += fileContent.Length;
-                    }
-                    else
-                    {
-                        // Fallback average class size if file is missing/mocked
-                        classicTotalChars += 2000; 
-                    }
-                }
+        Console.WriteLine($"Analyzed {nodeCount} nodes for a hypothetical broad RAG query.");
+        Console.WriteLine("\n[1] Classic RAG Search (sending full file contents):");
+        Console.WriteLine($"    - Input Tokens Sent: {classicTokens:N0}");
+        Console.WriteLine($"    - Estimated Cost:    ${classicCost:F5}");
+        Console.WriteLine($"    - Est. Latency:      {classicLatency:F2} seconds");
 
-                shonkorTotalChars += summary.Length;
-                totalFilesProcessed++;
-            }
+        Console.WriteLine("\n[2] Shonkor Graph Search (sending only pre-computed summaries):");
+        Console.WriteLine($"    - Input Tokens Sent: {shonkorTokens:N0}");
+        Console.WriteLine($"    - Estimated Cost:    ${shonkorCost:F5}");
+        Console.WriteLine($"    - Est. Latency:      {shonkorLatency:F2} seconds");
 
-            if (totalFilesProcessed == 0)
-            {
-                Console.WriteLine("No AI-generated summaries found in the database. Please run the background worker first.");
-                return;
-            }
-
-            // Estimate Tokens (1 token ~ 4 chars for code/english)
-            long classicTokens = classicTotalChars / 4;
-            long shonkorTokens = shonkorTotalChars / 4;
-            
-            // Assume $2.50 per 1M input tokens (GPT-4o / Claude 3.5 Sonnet average)
-            double costPer1M = 2.50;
-            double classicCost = (classicTokens / 1_000_000.0) * costPer1M;
-            double shonkorCost = (shonkorTokens / 1_000_000.0) * costPer1M;
-
-            // Speed estimation (Average TTFB + reading speed of LLM on input tokens)
-            // Typically context reading speed is fast (~5ms per input token)
-            double classicLatencySec = (classicTokens * 0.005) + 0.5; 
-            double shonkorLatencySec = (shonkorTokens * 0.005) + 0.5;
-
-            Console.WriteLine($"Analyzed {totalFilesProcessed} Nodes for a hypothetical broad RAG query.");
-            Console.WriteLine("\n[1] Classic RAG Search (Sending full file contents):");
-            Console.WriteLine($"    - Input Tokens Sent: {classicTokens:N0}");
-            Console.WriteLine($"    - Estimated Cost:    ${classicCost:F5}");
-            Console.WriteLine($"    - Est. Latency:      {classicLatencySec:F2} seconds");
-
-            Console.WriteLine("\n[2] Shonkor Graph Search (Sending only Pre-computed Summaries):");
-            Console.WriteLine($"    - Input Tokens Sent: {shonkorTokens:N0}");
-            Console.WriteLine($"    - Estimated Cost:    ${shonkorCost:F5}");
-            Console.WriteLine($"    - Est. Latency:      {shonkorLatencySec:F2} seconds");
-
-            Console.WriteLine("\n--- SAVINGS ---");
-            if (classicTokens > 0)
-            {
-                double tokenSavings = (1.0 - ((double)shonkorTokens / classicTokens)) * 100;
-                double speedup = classicLatencySec / shonkorLatencySec;
-                
-                Console.WriteLine($"Tokens Saved: {tokenSavings:F1} %");
-                Console.WriteLine($"Speedup:      {speedup:F1}x faster context processing");
-            }
+        Console.WriteLine("\n--- SAVINGS ---");
+        if (classicTokens > 0)
+        {
+            var tokenSavings = (1.0 - (double)shonkorTokens / classicTokens) * 100;
+            var speedup = shonkorLatency > 0 ? classicLatency / shonkorLatency : 0;
+            Console.WriteLine($"Tokens Saved: {tokenSavings:F1} %");
+            Console.WriteLine($"Speedup:      {speedup:F1}x faster context processing");
         }
     }
 }

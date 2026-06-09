@@ -38,14 +38,33 @@ Alternatively, configure it manually in the client configuration (e.g. `~/.claud
 ```json
 {
   "mcpServers": {
-    "shonkor": {
-      "command": "C:\\Path\\to\\Shonkor.CLI.exe",
+    "shonkor-local": {
+      "command": "shonkor",
       "args": ["mcp"]
     }
   }
 }
 ```
 After registration, **restart** the client so the server gets loaded.
+
+### SaaS Integration via MCP Proxy
+If you host Shonkor as a centralized SaaS application (e.g. in Kubernetes), your local AI assistant can connect to the remote graph using the `mcp-proxy` command. This bridges standard input/output from the AI to HTTP POST requests against the Shonkor Web API.
+
+```json
+{
+  "mcpServers": {
+    "shonkor-remote": {
+      "command": "shonkor",
+      "args": [
+        "mcp-proxy",
+        "--url", "https://shonkor.yourdomain.com/api/mcp/relay",
+        "--project", "YourProjectName"
+      ]
+    }
+  }
+}
+```
+*Note: You can omit `--project` if the `SHONKOR_PROJECT` environment variable is set.*
 
 ### Project Context from the Working Directory
 The MCP server determines the active project **from its working directory** – which is the directory where the client is running. There is **no** global "active project" that can be influenced externally (e.g. from the web dashboard). Override via the `SHONKOR_PROJECT` environment variable. Each tool additionally accepts an optional `projectName` argument for cross-project queries.

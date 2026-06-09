@@ -41,6 +41,9 @@ public static class Program
             case "mcp":
                 return await RunMcpServerAsync(args);
 
+            case "mcp-proxy":
+                return await McpProxyClient.RunAsync(args);
+
             default:
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine($"Unknown command: '{args[0]}'");
@@ -85,6 +88,10 @@ public static class Program
         Console.Write("  mcp     ");
         Console.ResetColor();
         Console.WriteLine("Start standard Model Context Protocol (MCP) JSON-RPC stdio server.");
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.Write("  mcp-proxy ");
+        Console.ResetColor();
+        Console.WriteLine("Proxy MCP JSON-RPC traffic over HTTP to a Shonkor SaaS remote backend.");
         Console.WriteLine();
 
         Console.WriteLine("Command Details & Options:");
@@ -117,6 +124,11 @@ public static class Program
         Console.WriteLine("  mcp");
         Console.ResetColor();
         Console.WriteLine("    -c, --config <file>      Path to config json file (defaults to 'shonkor.json')");
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.WriteLine("  mcp-proxy");
+        Console.ResetColor();
+        Console.WriteLine("    -u, --url <url>          The remote Shonkor Web API endpoint for MCP relay (default: http://localhost:5000/api/mcp/relay)");
+        Console.WriteLine("    -p, --project <name>     Target project on the remote server (optional, usually provided by env var SHONKOR_PROJECT)");
         Console.WriteLine(@"==========================================================================");
     }
 
@@ -461,7 +473,7 @@ public static class Program
                 : $"[MCP] No project matched the working directory ({Directory.GetCurrentDirectory()}); falling back to the registry's active project.");
 
             var synthesizer = new ContextCapsuleSynthesizer();
-            var server = new McpServer(pm, synthesizer, contextProjectName);
+            var server = new McpRequestHandler(pm, synthesizer, contextProjectName);
 
             await server.StartAsync().ConfigureAwait(false);
             return 0;

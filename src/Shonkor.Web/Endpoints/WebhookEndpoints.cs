@@ -198,7 +198,7 @@ public static class WebhookEndpoints
                 {
                     try
                     {
-                        var storage = pm.GetStorageProvider(project.Name);
+                        var storage = await pm.GetStorageProviderAsync(project.Name, ct);
 
                         // Load dynamic plugins only when explicitly enabled (RCE risk otherwise).
                         var activeParsers = new List<IFileParser>(parsers);
@@ -257,7 +257,7 @@ public static class WebhookEndpoints
 
                 // In a real scenario, we read `pull_request.changed_files` from the JSON payload.
                 // For this phase, we mock "changed files" to traverse the graph and return an Impact Report.
-                var storage = pm.GetStorageProvider(project.Name);
+                var storage = await pm.GetStorageProviderAsync(project.Name, ct);
                 
                 // Example simulation: Search for a core term to simulate changed files
                 var search = await storage.SearchAsync("Controller", 3);

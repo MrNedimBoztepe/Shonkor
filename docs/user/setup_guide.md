@@ -27,6 +27,28 @@ For semantic search and the built-in "Ask AI" GraphRAG feature to work, Shonkor 
 
 ---
 
+## 🐳 Docker Deployment (Alternative)
+
+Instead of compiling Shonkor locally, you can run the entire stack (Shonkor Web Dashboard + Ollama) using Docker Compose.
+
+### Step 1: Configure Workspace
+Rename `.env.example` to `.env` in the root directory.
+Edit `.env` to point `TARGET_PROJECTS_DIR` to your primary projects folder (e.g., `C:\Projects` or `~/workspace`). This folder will be mounted into the container at `/projects`.
+
+### Step 2: Start the Stack
+Run the following command from the repository root:
+```bash
+docker-compose up -d --build
+```
+This will:
+1. Build the Shonkor .NET container.
+2. Spin up an Ollama container and automatically pull the `qwen2.5-coder` model.
+3. Expose the dashboard at `http://localhost:5290`.
+
+*Note: If you have an NVIDIA GPU, edit `docker-compose.yml` and uncomment the `deploy` section under the `ollama` service for massive performance gains.*
+
+---
+
 ## 🛠️ Configuration (`shonkor.json`)
 
 The first step in any new project workspace is the initialization of the configuration file. Open your terminal in the root directory of your target project and run:

@@ -1,0 +1,142 @@
+// Licensed to Shonkor under the MIT License.
+
+using Microsoft.Data.Sqlite;
+
+namespace Shonkor.Infrastructure.Storage;
+
+/// <summary>
+/// Owns the SQLite schema for the knowledge graph: table/index/FTS5 creation, the additive column
+/// migrations for pre-existing databases, and the FTS-rebuild-on-drift guard. Kept separate from
+/// <see cref="SqliteGraphStorageProvider"/> so the DDL is in one auditable place.
+/// </summary>
+internal static class SqliteSchema
+{
+    /// <summary>
+    /// Creates all tables, indexes, FTS5 virtual table and sync triggers if absent, applies additive
+    /// migrations, and rebuilds the FTS index only when it has drifted out of sync with the Nodes table.
+    /// </summary>
+    public static async Task InitializeAsync(SqliteConnection connection, bool isMemory, CancellationToken cancellationToken)
+    {
+        // Write-Ahead Logging improves concurrency for file-based databases (no-op for memory).
+        if (!isMemory)
+        {
+            await ExecuteAsync(connection, "PRAGMA journal_mode = WAL;", cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        await ExecuteAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS Nodes (
+                Id          TEXT PRIMARY KEY,
+                Type        TEXT NOT NULL,
+                Name        TEXT NOT NULL,
+                Content     TEXT,
+                Metadata    TEXT,
+                FilePath    TEXT,
+                StartLine   INTEGER,
+                EndLine     INTEGER,
+                ContentHash TEXT,
+                Summary     TEXT,
+                NeedsSemanticAnalysis INTEGER DEFAULT 1,
+                Embedding   BLOB
+            );
+            """,
+            cancellationToken).ConfigureAwait(false);
+
+        // Additive migrations for databases created before these columns existed (ignore if present).
+        await TryExecuteAsync(connection, "ALTER TABLE Nodes ADD COLUMN Summary TEXT;", cancellationToken).ConfigureAwait(false);
+        await TryExecuteAsync(connection, "ALTER TABLE Nodes ADD COLUMN NeedsSemanticAnalysis INTEGER DEFAULT 1;", cancellationToken).ConfigureAwait(false);
+        await TryExecuteAsync(connection, "ALTER TABLE Nodes ADD COLUMN Embedding BLOB;", cancellationToken).ConfigureAwait(false);
+
+        await ExecuteAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS Edges (
+                SourceId     TEXT NOT NULL,
+                TargetId     TEXT NOT NULL,
+                RelationType TEXT NOT NULL,
+                PRIMARY KEY (SourceId, TargetId, RelationType)
+            );
+            """,
+            cancellationToken).ConfigureAwait(false);
+
+        await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_edges_source ON Edges(SourceId);", cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_edges_target ON Edges(TargetId);", cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_nodes_filepath ON Nodes(FilePath);", cancellationToken).ConfigureAwait(false);
+
+        await ExecuteAsync(connection,
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS NodesFts USING fts5(
+                Id, Name, Content,
+                content=Nodes,
+                content_rowid=rowid
+            );
+            """,
+            cancellationToken).ConfigureAwait(false);
+
+        // Triggers keep the FTS5 index synchronized with the Nodes table during normal operation.
+        await ExecuteAsync(connection,
+            """
+            CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON Nodes BEGIN
+                INSERT INTO NodesFts(rowid, Id, Name, Content)
+                VALUES (new.rowid, new.Id, new.Name, new.Content);
+            END;
+            """,
+            cancellationToken).ConfigureAwait(false);
+
+        await ExecuteAsync(connection,
+            """
+            CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON Nodes BEGIN
+                INSERT INTO NodesFts(NodesFts, rowid, Id, Name, Content)
+                VALUES ('delete', old.rowid, old.Id, old.Name, old.Content);
+            END;
+            """,
+            cancellationToken).ConfigureAwait(false);
+
+        await ExecuteAsync(connection,
+            """
+            CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON Nodes BEGIN
+                INSERT INTO NodesFts(NodesFts, rowid, Id, Name, Content)
+                VALUES ('delete', old.rowid, old.Id, old.Name, old.Content);
+                INSERT INTO NodesFts(rowid, Id, Name, Content)
+                VALUES (new.rowid, new.Id, new.Name, new.Content);
+            END;
+            """,
+            cancellationToken).ConfigureAwait(false);
+
+        // Rebuild the FTS5 index only when it is out of sync with the Nodes table. A full rebuild is
+        // O(N) and can take seconds on large databases, so running it unconditionally on every startup
+        // is a performance regression. The triggers keep FTS in sync during normal operation; a rebuild
+        // is only needed when FTS missed updates (direct DB edits, migration, or first open after the
+        // FTS table was added to a pre-existing database).
+        var nodeCount = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM Nodes;", cancellationToken).ConfigureAwait(false);
+        var ftsCount = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM NodesFts;", cancellationToken).ConfigureAwait(false);
+        if (nodeCount != ftsCount)
+        {
+            await ExecuteAsync(connection, "INSERT INTO NodesFts(NodesFts) VALUES('rebuild');", cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task ExecuteAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task TryExecuteAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)
+    {
+        try { await ExecuteAsync(connection, sql, cancellationToken).ConfigureAwait(false); }
+        catch (SqliteException) { /* Column/object already exists — migration is a no-op. */ }
+    }
+
+    private static async Task<long> ScalarLongAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result is null ? 0 : Convert.ToInt64(result);
+    }
+}
