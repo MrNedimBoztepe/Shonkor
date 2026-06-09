@@ -212,6 +212,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let aiChatContextIds = [];
     // Running conversation transcript so follow-up questions have prior context.
     let aiChatHistory = [];
+    // Signature of the context nodes the current conversation was started with; used to detect
+    // when a new search changed the context so the chat can reset instead of mixing sessions.
+    let aiChatSessionKey = null;
 
     function aiChatScrollToBottom() {
         if (aiChatMessages) aiChatMessages.scrollTop = aiChatMessages.scrollHeight;
@@ -226,6 +229,16 @@ document.addEventListener('DOMContentLoaded', () => {
         return el;
     }
 
+    // Render model/markdown output safely: sanitize (DOMPurify) before insertion so an answer that
+    // echoes raw HTML (e.g. from indexed file content) can't inject script. Falls back to plain text.
+    function renderMarkdownSafe(md, el) {
+        if (window.marked && window.DOMPurify) {
+            el.innerHTML = window.DOMPurify.sanitize(window.marked.parse(md));
+        } else {
+            el.textContent = md;
+        }
+    }
+
     function openAiChat() {
         if (!aiChatPanel) return;
 
@@ -234,15 +247,23 @@ document.addEventListener('DOMContentLoaded', () => {
             .map(res => (res.Node || res.node)?.Id)
             .filter(Boolean);
 
+        // If the context changed since the conversation started, reset the chat — otherwise a new
+        // session would carry over the old messages/transcript and ask them against the new nodes.
+        const sessionKey = aiChatContextIds.join('|');
+        if (sessionKey !== aiChatSessionKey) {
+            aiChatSessionKey = sessionKey;
+            aiChatHistory = [];
+            if (aiChatMessages) aiChatMessages.innerHTML = '';
+        }
+
         if (aiChatContext) {
             aiChatContext.textContent = aiChatContextIds.length
-                ? `${aiChatContextIds.length} ${window.t ? window.t('nodes') : 'nodes'} in context`
+                ? `${aiChatContextIds.length} ${window.t ? window.t('nodes') : 'nodes'}`
                 : '';
         }
 
-        // Greeting / empty-state only when there is no conversation yet.
+        // Greeting / empty-state when there is no conversation yet.
         if (aiChatMessages && aiChatMessages.childElementCount === 0) {
-            aiChatHistory = []; // fresh session
             const hint = aiChatContextIds.length
                 ? 'Ask me anything about the nodes from your current search.'
                 : 'Run a search first so I have nodes to reason about, then ask your question here.';
@@ -302,8 +323,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await res.json();
                 const answer = data.response || 'No answer.';
                 aiChatHistory.push({ role: 'assistant', text: answer });
-                thinking.innerHTML = window.marked ? window.marked.parse(answer) : '';
-                if (!window.marked) thinking.textContent = answer;
+                renderMarkdownSafe(answer, thinking);
             } else {
                 // Most failures here are the AI backend (Ollama) being unreachable.
                 thinking.className = 'ai-msg error';

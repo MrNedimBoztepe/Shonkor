@@ -27,8 +27,11 @@
     <!-- Marked.js for RAG Markdown parsing -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
+    <!-- DOMPurify to sanitize AI/markdown HTML before insertion (XSS protection) -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+
     <!-- Custom app.css?v=2.0.12 -->
-    <link rel="stylesheet" href="/app.css?v=2.0.22">
+    <link rel="stylesheet" href="/app.css?v=2.0.23">
 </head>
 <body>
     <div class="stars"></div>
@@ -624,6 +627,6 @@
         <span id="toast-message">Message text</span>
     </div>
     <!-- Custom App JS -->
-    <script defer src="/app.js?v=2.0.25"></script>
+    <script defer src="/app.js?v=2.0.26"></script>
 </body>
 </html>
