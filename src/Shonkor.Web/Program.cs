@@ -9,6 +9,17 @@ using Shonkor.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// In Production, emit structured (JSON) logs so a container/k8s log pipeline can parse them.
+// Development keeps the readable default console.
+if (builder.Environment.IsProduction())
+{
+    builder.Logging.ClearProviders();
+    builder.Logging.AddJsonConsole();
+}
+
+// Liveness/readiness probe endpoint (mapped + exempted from auth below).
+builder.Services.AddHealthChecks();
+
 // --- Composition root ---
 
 // Multi-project registry, rooted at the nearest ancestor workspace containing a shonkor.json.
@@ -70,6 +81,9 @@ app.UseStaticFiles(new StaticFileOptions
 app.UseMiddleware<Shonkor.Web.Middleware.ApiKeyMiddleware>();
 
 // --- Endpoints ---
+
+// Liveness/readiness probe (public — exempted from the API key in ApiKeyMiddleware).
+app.MapHealthChecks("/health");
 
 // SaaS / integration endpoints.
 app.MapGraphRagEndpoints();

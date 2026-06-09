@@ -96,6 +96,14 @@ public class ApiKeyMiddlewareTests
     }
 
     [Fact]
+    public async Task HealthEndpoint_IsPublic()
+    {
+        // /health must stay reachable without a key (container/k8s probes), even in Production.
+        var (_, nextCalled, _) = await RunAsync("Production", IPAddress.Parse("203.0.113.5"), "/health", apiKey: null);
+        Assert.True(nextCalled);
+    }
+
+    [Fact]
     public async Task Production_WrongKey_Returns401()
     {
         var cfg = new Dictionary<string, string?> { ["ApiKeys:valid-key"] = "ProjA" };

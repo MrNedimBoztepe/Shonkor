@@ -49,6 +49,13 @@ public class ApiKeyMiddleware
             return;
         }
 
+        // Health probe must stay public so container/k8s liveness/readiness checks work.
+        if (context.Request.Path.Equals("/health", StringComparison.OrdinalIgnoreCase))
+        {
+            await _next(context);
+            return;
+        }
+
         if (!context.Request.Headers.TryGetValue(APIKEYNAME, out var extractedApiKey))
         {
             context.Response.StatusCode = 401;
