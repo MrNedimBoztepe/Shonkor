@@ -2647,6 +2647,11 @@ select.glass-btn option {
     .viewport-container {
         min-height: 62vh;
     }
+    /* The graph's top control bar (filter + layout/view tabs) must wrap instead of overflowing. */
+    .graph-header-controls {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
     .drawer-container {
         position: fixed;
         top: 0;
@@ -2674,6 +2679,31 @@ select.glass-btn option {
     .logo-text .tagline {
         display: none;
     }
+    /* Keep the project selector and graph view-tabs from overflowing on phones. */
+    .project-selector-container,
+    #active-project-btn {
+        max-width: 150px;
+    }
+    #active-project-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .view-tabs {
+        flex-wrap: wrap;
+        gap: 0.4rem;
+    }
+}
+
+/* Kanban per-column empty state */
+.kanban-empty {
+    padding: 1rem 0.75rem;
+    text-align: center;
+    font-size: 0.82rem;
+    color: var(--color-text-muted);
+    border: 1px dashed var(--border-glass);
+    border-radius: 10px;
+    background: var(--bg-glass-sm);
 }
 
 /* =====================================================================

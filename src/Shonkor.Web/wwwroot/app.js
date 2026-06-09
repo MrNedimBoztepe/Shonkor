@@ -210,6 +210,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Node IDs (top search hits) used as RAG context for the whole chat session.
     let aiChatContextIds = [];
+    // Running conversation transcript so follow-up questions have prior context.
+    let aiChatHistory = [];
 
     function aiChatScrollToBottom() {
         if (aiChatMessages) aiChatMessages.scrollTop = aiChatMessages.scrollHeight;
@@ -240,6 +242,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Greeting / empty-state only when there is no conversation yet.
         if (aiChatMessages && aiChatMessages.childElementCount === 0) {
+            aiChatHistory = []; // fresh session
             const hint = aiChatContextIds.length
                 ? 'Ask me anything about the nodes from your current search.'
                 : 'Run a search first so I have nodes to reason about, then ask your question here.';
@@ -273,6 +276,15 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Record the turn and build a transcript-aware query (last few turns) so the
+        // model can answer follow-ups in context. The endpoint is stateless, so we pass
+        // the short transcript as the query alongside the same context nodes.
+        aiChatHistory.push({ role: 'user', text: question });
+        const recent = aiChatHistory.slice(-6);
+        const composedQuery = recent.length > 1
+            ? recent.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n')
+            : question;
+
         const thinking = aiAppendMessage('assistant',
             `<div style="display:flex; align-items:center; gap:0.5rem;"><div class="spinner" style="width:16px; height:16px; border-width:2px;"></div><span>Thinking…</span></div>`, true);
 
@@ -283,23 +295,26 @@ document.addEventListener('DOMContentLoaded', () => {
                     'Content-Type': 'application/json',
                     'X-Project-Name': activeProjectName.textContent
                 },
-                body: JSON.stringify({ query: question, nodeIds: aiChatContextIds })
+                body: JSON.stringify({ query: composedQuery, nodeIds: aiChatContextIds })
             });
 
             if (res.ok) {
                 const data = await res.json();
                 const answer = data.response || 'No answer.';
+                aiChatHistory.push({ role: 'assistant', text: answer });
                 thinking.innerHTML = window.marked ? window.marked.parse(answer) : '';
                 if (!window.marked) thinking.textContent = answer;
             } else {
-                const errText = await res.text();
+                // Most failures here are the AI backend (Ollama) being unreachable.
                 thinking.className = 'ai-msg error';
-                thinking.textContent = `Error: ${errText}`;
+                thinking.textContent = res.status >= 500
+                    ? "Couldn't reach the AI backend. Make sure Ollama is running with the configured model, then try again."
+                    : `Error: ${await res.text()}`;
             }
         } catch (err) {
             console.error('Ask AI Error:', err);
             thinking.className = 'ai-msg error';
-            thinking.textContent = 'Error: network or server problem.';
+            thinking.textContent = "Couldn't reach the AI backend. Make sure Ollama is running, then try again.";
         }
         aiChatScrollToBottom();
     }
@@ -650,6 +665,22 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (item.type === 'Decision') dCol.appendChild(card);
             else if (item.type === 'Milestone') mCol.appendChild(card);
         });
+
+        // Per-column empty states so a board with no items isn't four blank columns.
+        const emptyHints = [
+            [qCol, 'No open questions yet.'],
+            [tCol, 'No tasks recorded yet.'],
+            [dCol, 'No decisions logged yet.'],
+            [mCol, 'No milestones yet.']
+        ];
+        for (const [col, hint] of emptyHints) {
+            if (col.childElementCount === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'kanban-empty';
+                empty.textContent = hint;
+                col.appendChild(empty);
+            }
+        }
     }
 
     // Persist a new status for an interaction node, then refresh the board.
@@ -2055,15 +2086,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const properties = node.Properties || {};
         
         let hasProps = false;
+        // Core fields are shown elsewhere; match case-insensitively (keys arrive as camelCase).
+        const coreFields = new Set(["content", "filepath", "startline", "endline", "contenthash"]);
         for (const [key, value] of Object.entries(properties)) {
-            // Skip core fields already printed
-            if (["Content", "FilePath", "StartLine", "EndLine", "ContentHash"].includes(key)) {
-                continue;
-            }
+            if (coreFields.has(key.toLowerCase())) continue;
+
+            // Skip empty / null-ish values so the drawer doesn't show "startLine null" noise.
+            if (value === null || value === undefined) continue;
+            const v = String(value).trim();
+            if (v === '' || v.toLowerCase() === 'null') continue;
+
             hasProps = true;
             const propEl = document.createElement('div');
             propEl.className = 'prop-pill';
-            propEl.innerHTML = `<span class="prop-key">${key}</span><span class="prop-val">${value}</span>`;
+            propEl.innerHTML = `<span class="prop-key">${escapeHtml(key)}</span><span class="prop-val">${escapeHtml(v)}</span>`;
             drawerNodeProperties.appendChild(propEl);
         }
 
