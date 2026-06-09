@@ -28,7 +28,7 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
     <!-- Custom app.css?v=2.0.12 -->
-    <link rel="stylesheet" href="/app.css?v=2.0.15">
+    <link rel="stylesheet" href="/app.css?v=2.0.18">
 </head>
 <body>
     <div class="stars"></div>
@@ -245,7 +245,28 @@
                 </div>
                 
                 <div id="network-graph" class="graph-canvas"></div>
-                
+
+                <!-- AI CHAT PANEL — opens over the graph when "Ask AI" is pressed (graph hidden behind) -->
+                <div id="ai-chat-panel" class="ai-chat-panel hidden">
+                    <div class="ai-chat-header">
+                        <div class="ai-chat-title">
+                            <i data-lucide="sparkles"></i>
+                            <div>
+                                <h2 data-i18n="ai_chat_title">Shonkor AI</h2>
+                                <span class="ai-chat-context" id="ai-chat-context"></span>
+                            </div>
+                        </div>
+                        <button id="close-ai-chat-btn" class="glass-btn" title="Back to graph" aria-label="Close AI chat and return to graph"><i data-lucide="x"></i></button>
+                    </div>
+                    <div class="ai-chat-messages" id="ai-chat-messages">
+                        <!-- messages injected by JS -->
+                    </div>
+                    <form class="ai-chat-input-bar" id="ai-chat-form" autocomplete="off">
+                        <textarea id="ai-chat-input" rows="1" data-i18n-placeholder="ai_chat_placeholder" placeholder="Ask a question about the current context…"></textarea>
+                        <button type="submit" id="ai-chat-send" class="glow-btn" title="Send" aria-label="Send question"><i data-lucide="send"></i></button>
+                    </form>
+                </div>
+
                 <!-- RAG AI Answer Overlay -->
                 <div id="rag-answer-overlay" class="glass-panel hidden" style="position: absolute; top: 1.5rem; left: 1.5rem; width: 450px; max-height: 80vh; overflow-y: auto; z-index: 100; border: 1px solid var(--color-accent); padding: 1.2rem; box-shadow: 0 10px 30px rgba(0,0,0,0.5); backdrop-filter: blur(12px);">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.5rem;">
@@ -603,6 +624,6 @@
         <span id="toast-message">Message text</span>
     </div>
     <!-- Custom App JS -->
-    <script defer src="/app.js?v=2.0.22"></script>
+    <script defer src="/app.js?v=2.0.24"></script>
 </body>
 </html>

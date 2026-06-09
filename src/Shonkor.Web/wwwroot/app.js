@@ -200,47 +200,127 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    if (askAiBtn) {
-        askAiBtn.addEventListener('click', async () => {
-            if (!lastSearchResults || lastSearchResults.length === 0) return;
-            
-            const query = globalSearchInput.value.trim();
-            if (!query) return;
+    // ===== AI Chat panel (opens over the graph; graph hidden behind) =====
+    const aiChatPanel = document.getElementById('ai-chat-panel');
+    const aiChatMessages = document.getElementById('ai-chat-messages');
+    const aiChatForm = document.getElementById('ai-chat-form');
+    const aiChatInput = document.getElementById('ai-chat-input');
+    const aiChatContext = document.getElementById('ai-chat-context');
+    const closeAiChatBtn = document.getElementById('close-ai-chat-btn');
 
-            ragAnswerContent.innerHTML = `<div style="display:flex; align-items:center; gap:0.5rem;"><div class="spinner" style="width:20px; height:20px; border-width:2px;"></div> <span>Denke nach... (Analysiere ${Math.min(lastSearchResults.length, 10)} Knoten)</span></div>`;
-            ragAnswerOverlay.classList.remove('hidden');
+    // Node IDs (top search hits) used as RAG context for the whole chat session.
+    let aiChatContextIds = [];
 
-            try {
-                // Take top 10 nodes for context to avoid huge payloads
-                const topNodes = lastSearchResults.slice(0, 10).map(res => {
-                    const node = res.Node || res.node;
-                    return node.Id;
-                }).filter(id => !!id);
+    function aiChatScrollToBottom() {
+        if (aiChatMessages) aiChatMessages.scrollTop = aiChatMessages.scrollHeight;
+    }
 
-                const res = await fetch('/api/rag/ask', {
-                    method: 'POST',
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'X-Project-Name': activeProjectName.textContent
-                    },
-                    body: JSON.stringify({ query: query, nodeIds: topNodes })
-                });
+    function aiAppendMessage(role, html, isHtml = true) {
+        const el = document.createElement('div');
+        el.className = `ai-msg ${role}`;
+        if (isHtml) el.innerHTML = html; else el.textContent = html;
+        aiChatMessages.appendChild(el);
+        aiChatScrollToBottom();
+        return el;
+    }
 
-                if (res.ok) {
-                    const data = await res.json();
-                    if (window.marked) {
-                        ragAnswerContent.innerHTML = window.marked.parse(data.response || "Keine Antwort.");
-                    } else {
-                        ragAnswerContent.textContent = data.response || "Keine Antwort.";
-                    }
-                } else {
-                    const errText = await res.text();
-                    ragAnswerContent.innerHTML = `<span style="color: #f87171;">Fehler: ${errText}</span>`;
-                }
-            } catch (err) {
-                console.error("Ask AI Error:", err);
-                ragAnswerContent.innerHTML = `<span style="color: #f87171;">Fehler: Netzwerk- oder Serverproblem.</span>`;
+    function openAiChat() {
+        if (!aiChatPanel) return;
+
+        // Capture the current search hits as the context for this chat session.
+        aiChatContextIds = (lastSearchResults || []).slice(0, 10)
+            .map(res => (res.Node || res.node)?.Id)
+            .filter(Boolean);
+
+        if (aiChatContext) {
+            aiChatContext.textContent = aiChatContextIds.length
+                ? `${aiChatContextIds.length} ${window.t ? window.t('nodes') : 'nodes'} in context`
+                : '';
+        }
+
+        // Greeting / empty-state only when there is no conversation yet.
+        if (aiChatMessages && aiChatMessages.childElementCount === 0) {
+            const hint = aiChatContextIds.length
+                ? 'Ask me anything about the nodes from your current search.'
+                : 'Run a search first so I have nodes to reason about, then ask your question here.';
+            aiChatMessages.innerHTML =
+                `<div class="ai-chat-empty"><i data-lucide="sparkles"></i><p>${hint}</p></div>`;
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        aiChatPanel.classList.remove('hidden');
+        setTimeout(() => aiChatInput && aiChatInput.focus(), 60);
+    }
+
+    function closeAiChat() {
+        if (aiChatPanel) aiChatPanel.classList.add('hidden');
+    }
+
+    async function sendAiChatQuestion() {
+        const question = (aiChatInput.value || '').trim();
+        if (!question) return;
+
+        // Clear the empty-state greeting on first real message.
+        const empty = aiChatMessages.querySelector('.ai-chat-empty');
+        if (empty) empty.remove();
+
+        aiAppendMessage('user', escapeHtml(question), true);
+        aiChatInput.value = '';
+        aiChatInput.style.height = 'auto';
+
+        if (aiChatContextIds.length === 0) {
+            aiAppendMessage('error', 'No context nodes available. Please run a search first.', false);
+            return;
+        }
+
+        const thinking = aiAppendMessage('assistant',
+            `<div style="display:flex; align-items:center; gap:0.5rem;"><div class="spinner" style="width:16px; height:16px; border-width:2px;"></div><span>Thinking…</span></div>`, true);
+
+        try {
+            const res = await fetch('/api/ask', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Project-Name': activeProjectName.textContent
+                },
+                body: JSON.stringify({ query: question, nodeIds: aiChatContextIds })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                const answer = data.response || 'No answer.';
+                thinking.innerHTML = window.marked ? window.marked.parse(answer) : '';
+                if (!window.marked) thinking.textContent = answer;
+            } else {
+                const errText = await res.text();
+                thinking.className = 'ai-msg error';
+                thinking.textContent = `Error: ${errText}`;
             }
+        } catch (err) {
+            console.error('Ask AI Error:', err);
+            thinking.className = 'ai-msg error';
+            thinking.textContent = 'Error: network or server problem.';
+        }
+        aiChatScrollToBottom();
+    }
+
+    if (askAiBtn) {
+        askAiBtn.addEventListener('click', openAiChat);
+    }
+    if (closeAiChatBtn) {
+        closeAiChatBtn.addEventListener('click', closeAiChat);
+    }
+    if (aiChatForm) {
+        aiChatForm.addEventListener('submit', (e) => { e.preventDefault(); sendAiChatQuestion(); });
+    }
+    if (aiChatInput) {
+        // Enter sends, Shift+Enter inserts a newline; textarea auto-grows.
+        aiChatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiChatQuestion(); }
+        });
+        aiChatInput.addEventListener('input', () => {
+            aiChatInput.style.height = 'auto';
+            aiChatInput.style.height = Math.min(aiChatInput.scrollHeight, 140) + 'px';
         });
     }
 

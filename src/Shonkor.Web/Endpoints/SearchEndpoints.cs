@@ -66,8 +66,11 @@ public static class SearchEndpoints
             }
         });
 
-        // POST /api/rag/ask - generate a natural-language answer grounded in the given node ids.
-        app.MapPost("/api/rag/ask", async (AskRagRequest req, HttpContext context, ProjectManager pm, ISemanticAnalyzer semanticAnalyzer, CancellationToken ct) =>
+        // POST /api/ask - generate a natural-language answer grounded in the given node ids.
+        // NOTE: intentionally NOT under /api/rag/* — that prefix is reserved for the SaaS, API-key-gated
+        // endpoints (ApiKeyMiddleware never loopback-bypasses /api/rag). This is the local dashboard's
+        // AI chat, so it lives under /api/* and follows the normal dashboard auth (dev loopback bypass).
+        app.MapPost("/api/ask", async (AskRagRequest req, HttpContext context, ProjectManager pm, ISemanticAnalyzer semanticAnalyzer, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(req.Query) || req.NodeIds == null || req.NodeIds.Length == 0)
             {

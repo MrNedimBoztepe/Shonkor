@@ -47,7 +47,23 @@ app.UseDefaultFiles();
 
 var contentTypeProvider = new FileExtensionContentTypeProvider();
 contentTypeProvider.Mappings[".po"] = "text/plain";
-app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = contentTypeProvider });
+app.UseStaticFiles(new StaticFileOptions
+{
+    ContentTypeProvider = contentTypeProvider,
+    // Never cache HTML: the shell references versioned assets (app.js?v=, app.css?v=), so the browser
+    // must always re-fetch index.html to learn the current versions. Otherwise a stale cached shell
+    // keeps loading old JS/CSS (e.g. an old API path) even after an update.
+    OnPrepareResponse = ctx =>
+    {
+        var path = ctx.File.Name;
+        if (path.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+            ctx.Context.Response.Headers.Pragma = "no-cache";
+            ctx.Context.Response.Headers.Expires = "0";
+        }
+    }
+});
 
 // API key middleware for SaaS multi-tenancy. Runs AFTER static files so it only authenticates
 // dynamic API requests, not public UI assets.
