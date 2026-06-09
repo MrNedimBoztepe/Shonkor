@@ -46,34 +46,25 @@ public partial class ProjectManager
     }
 
     /// <summary>
-    /// Looks up a user by their API token using a plain (non-constant-time) comparison.
-    /// Use <see cref="GetUserByTokenConstantTime"/> for auth-critical paths.
+    /// Looks up a user by their (plaintext) API token. Tokens are stored hashed, so the presented
+    /// token is hashed and compared constant-time. Use <see cref="GetUserByTokenConstantTime"/> in
+    /// auth-critical paths (identical here, kept for call-site clarity).
     /// </summary>
-    public User? GetUserByToken(string token)
-    {
-        lock (_lock)
-        {
-            return _users.FirstOrDefault(u => u.ApiToken == token);
-        }
-    }
+    public User? GetUserByToken(string token) => GetUserByTokenConstantTime(token);
 
     /// <summary>
-    /// Looks up a user by their API token using a constant-time comparison to prevent
-    /// timing-based side-channel attacks. Use this for every authentication code path.
+    /// Looks up a user by their presented (plaintext) API token using a constant-time hash comparison.
+    /// Use this for every authentication code path.
     /// </summary>
     public User? GetUserByTokenConstantTime(string token)
     {
         if (string.IsNullOrEmpty(token)) return null;
 
-        var tokenBytes = Encoding.UTF8.GetBytes(token);
-
         lock (_lock)
         {
             foreach (var user in _users)
             {
-                if (string.IsNullOrEmpty(user.ApiToken)) continue;
-                var storedBytes = Encoding.UTF8.GetBytes(user.ApiToken);
-                if (CryptographicOperations.FixedTimeEquals(storedBytes, tokenBytes))
+                if (TokenHasher.Verify(token, user.ApiToken))
                 {
                     return user;
                 }
@@ -87,6 +78,8 @@ public partial class ProjectManager
     {
         lock (_lock)
         {
+            // Never store the plaintext token — persist only its hash.
+            user.ApiToken = TokenHasher.EnsureHashed(user.ApiToken);
             _users.Add(user);
             SaveProjects();
         }
