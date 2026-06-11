@@ -9,11 +9,23 @@ using Shonkor.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// In Production, emit structured (JSON) logs so a container/k8s log pipeline can parse them.
+// Development keeps the readable default console.
+if (builder.Environment.IsProduction())
+{
+    builder.Logging.ClearProviders();
+    builder.Logging.AddJsonConsole();
+}
+
+// Liveness/readiness probe endpoint (mapped + exempted from auth below).
+builder.Services.AddHealthChecks();
+
 // --- Composition root ---
 
 // Multi-project registry, rooted at the nearest ancestor workspace containing a shonkor.json.
-var projectManager = new ProjectManager(FindWorkspacePath());
-builder.Services.AddSingleton(projectManager);
+// Registered lazily (via factory) so tests can substitute a ProjectManager rooted at a temp workspace
+// instead of the developer's real one.
+builder.Services.AddSingleton(_ => new ProjectManager(FindWorkspacePath()));
 
 // Force-load YamlDotNet into the AppDomain so dynamic plugins can reference it.
 _ = typeof(YamlDotNet.Serialization.Deserializer);
@@ -71,6 +83,9 @@ app.UseMiddleware<Shonkor.Web.Middleware.ApiKeyMiddleware>();
 
 // --- Endpoints ---
 
+// Liveness/readiness probe (public — exempted from the API key in ApiKeyMiddleware).
+app.MapHealthChecks("/health");
+
 // SaaS / integration endpoints.
 app.MapGraphRagEndpoints();
 app.MapWebhookEndpoints();
@@ -108,3 +123,6 @@ static string FindWorkspacePath()
     }
     return currentDir;
 }
+
+// Exposed so integration tests can host the app via WebApplicationFactory<Program>.
+public partial class Program { }

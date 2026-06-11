@@ -171,12 +171,14 @@ public partial class ProjectManager
             // Remove existing project with same name
             _projects.RemoveAll(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
+            // Store only the hash of the (provided or generated) key — never the plaintext.
+            var rawKey = string.IsNullOrWhiteSpace(apiKey) ? "sk-" + Guid.NewGuid().ToString("N") : apiKey;
             _projects.Add(new Project
             {
                 Name = name,
                 Path = path,
                 DatabasePath = resolvedDbPath,
-                ApiKey = string.IsNullOrWhiteSpace(apiKey) ? "sk-" + Guid.NewGuid().ToString("N") : apiKey
+                ApiKey = TokenHasher.EnsureHashed(rawKey)
             });
 
             if (string.IsNullOrEmpty(_activeProjectName))
@@ -477,20 +479,33 @@ public partial class ProjectManager
                             orgs.Add(defaultOrg);
                         }
 
-                        var defaultUser = users.FirstOrDefault(u => u.ApiToken == proj.ApiKey);
+                        var projKeyHash = TokenHasher.EnsureHashed(proj.ApiKey);
+                        var defaultUser = users.FirstOrDefault(u => u.ApiToken == projKeyHash);
                         if (defaultUser == null)
                         {
                             defaultUser = new User
                             {
                                 OrganizationId = defaultOrg.Id,
                                 Username = "LegacyAdmin",
-                                ApiToken = proj.ApiKey
+                                ApiToken = projKeyHash // stored hashed
                             };
                             users.Add(defaultUser);
                         }
 
                         proj.OrganizationId = defaultOrg.Id;
                         proj.ApiKey = string.Empty; // clear legacy field
+                        needsSave = true;
+                    }
+
+                    // Self-heal: hash any tokens still stored in plaintext (older projects.json).
+                    foreach (var u in users.Where(u => !string.IsNullOrEmpty(u.ApiToken) && !TokenHasher.LooksHashed(u.ApiToken)))
+                    {
+                        u.ApiToken = TokenHasher.Hash(u.ApiToken);
+                        needsSave = true;
+                    }
+                    foreach (var p in projects.Where(p => !string.IsNullOrEmpty(p.ApiKey) && !TokenHasher.LooksHashed(p.ApiKey)))
+                    {
+                        p.ApiKey = TokenHasher.Hash(p.ApiKey);
                         needsSave = true;
                     }
                 }

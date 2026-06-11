@@ -54,7 +54,7 @@ public static class AdminEndpoints
             if (org == null)
                 return Results.NotFound(new { error = "Organization not found." });
 
-            // Generate a secure personal access token
+            // Generate a secure personal access token (shown to the caller exactly once).
             var token = "sk_" + GenerateSecureToken(32);
 
             var user = new User
@@ -65,10 +65,18 @@ public static class AdminEndpoints
                 ApiToken = token
             };
 
+            // AddUser stores only the hash of the token. Return the plaintext once — it is not
+            // recoverable afterwards (the registry never holds the plaintext).
             projectManager.AddUser(user);
 
-            // We only return the ApiToken on creation
-            return Results.Ok(user);
+            return Results.Ok(new
+            {
+                user.Id,
+                user.OrganizationId,
+                user.Username,
+                user.GitHubUsername,
+                apiToken = token
+            });
         });
 
         group.MapDelete("/users/{id}", (string id, [FromServices] ProjectManager projectManager) =>

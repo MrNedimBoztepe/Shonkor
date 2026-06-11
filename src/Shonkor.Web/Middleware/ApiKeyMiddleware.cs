@@ -49,6 +49,13 @@ public class ApiKeyMiddleware
             return;
         }
 
+        // Health probe must stay public so container/k8s liveness/readiness checks work.
+        if (context.Request.Path.Equals("/health", StringComparison.OrdinalIgnoreCase))
+        {
+            await _next(context);
+            return;
+        }
+
         if (!context.Request.Headers.TryGetValue(APIKEYNAME, out var extractedApiKey))
         {
             context.Response.StatusCode = 401;
@@ -64,8 +71,8 @@ public class ApiKeyMiddleware
         string? projectName = null;
         var presentedKey = extractedApiKey.ToString();
 
-        // 1a. Check legacy project-level ApiKey (pre-migration projects; constant-time comparison).
-        var matchingProject = projects.FirstOrDefault(p => !string.IsNullOrEmpty(p.ApiKey) && FixedTimeEquals(p.ApiKey, presentedKey));
+        // 1a. Check legacy project-level ApiKey (pre-migration projects). Stored hashed -> hash & compare.
+        var matchingProject = projects.FirstOrDefault(p => Shonkor.Infrastructure.Services.TokenHasher.Verify(presentedKey, p.ApiKey));
         if (matchingProject != null)
         {
             projectName = matchingProject.Name;
