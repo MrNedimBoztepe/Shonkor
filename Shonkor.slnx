@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Shonkor.Benchmarks/Shonkor.Benchmarks.csproj" />
     <Project Path="src/Shonkor.CLI/Shonkor.CLI.csproj" />
     <Project Path="src/Shonkor.Core/Shonkor.Core.csproj" />
     <Project Path="src/Shonkor.Infrastructure/Shonkor.Infrastructure.csproj" />

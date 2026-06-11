@@ -1,0 +1,83 @@
+// Licensed to Shonkor under the MIT License.
+
+using System.Linq;
+using System.Net;
+using System.Text;
+
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+
+using Shonkor.Infrastructure.Services;
+using Shonkor.Web.Services;
+
+namespace Shonkor.Tests;
+
+/// <summary>
+/// End-to-end pipeline tests booting the real Web app via <see cref="WebApplicationFactory{TEntryPoint}"/>:
+/// the health probe is public, static assets are served before the API-key gate, and the auth gate
+/// (incl. the /api/rag SaaS guard) is wired into the actual request pipeline.
+/// </summary>
+public class WebPipelineTests : IClassFixture<WebPipelineTests.AppFactory>
+{
+    private readonly HttpClient _client;
+
+    public WebPipelineTests(AppFactory factory)
+    {
+        _client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+    }
+
+    [Fact]
+    public async Task Health_IsPublic()
+    {
+        var res = await _client.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task Root_ServesDashboardShell_WithoutKey()
+    {
+        // Static files are served before the API-key middleware, so the public shell loads.
+        var res = await _client.GetAsync("/");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task ApiEndpoint_WithoutKey_Returns401()
+    {
+        var res = await _client.GetAsync("/api/stats");
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task RagSaaSEndpoint_WithoutKey_Returns401()
+    {
+        var res = await _client.PostAsync("/api/rag/query",
+            new StringContent("{}", Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+    }
+
+    public sealed class AppFactory : WebApplicationFactory<Program>
+    {
+        private readonly string _workspace = Path.Combine(Path.GetTempPath(), $"shonkor_itest_{Guid.NewGuid():N}");
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            Directory.CreateDirectory(_workspace);
+            // Production so the loopback bypass never applies — the auth gate is always enforced.
+            builder.UseEnvironment("Production");
+
+            builder.ConfigureServices(services =>
+            {
+                // Root the registry at a throwaway temp workspace instead of the developer's real one.
+                services.RemoveAll<ProjectManager>();
+                services.AddSingleton(_ => new ProjectManager(_workspace));
+
+                // Drop the Ollama-polling background worker so tests don't make network calls.
+                var enrichment = services.FirstOrDefault(d => d.ImplementationType == typeof(SemanticEnrichmentService));
+                if (enrichment != null) services.Remove(enrichment);
+            });
+        }
+    }
+}

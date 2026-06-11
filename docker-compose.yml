@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  shonkor-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shonkor-web
+    ports:
+      - "5290:8080" # Maps local 5290 to container 8080
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - SemanticAnalyzer__OllamaUrl=http://ollama:11434
+      - EmbeddingService__OllamaUrl=http://ollama:11434
+    volumes:
+      # We map the host directory specified in the .env file to /projects in the container.
+      # If .env is missing, it falls back to the current directory (./).
+      - ${TARGET_PROJECTS_DIR:-./}:/projects
+    # Shonkor will run with /projects as its working directory, meaning it will create projects.json there.
+    working_dir: /projects
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: shonkor-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # A small entrypoint to ensure the qwen2.5-coder model is automatically pulled when starting up
+    command: >
+      bash -c "ollama serve & 
+      sleep 5 && 
+      ollama pull qwen2.5-coder && 
+      wait"
+    # ---------------------------------------------------------
+    # UNCOMMENT BELOW TO ENABLE NVIDIA GPU ACCELERATION
+    # ---------------------------------------------------------
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  ollama_data:

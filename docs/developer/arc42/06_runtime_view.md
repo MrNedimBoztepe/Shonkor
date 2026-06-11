@@ -1,17 +1,17 @@
-# arc42 Kapitel 6: Laufzeitsicht 🎬
+# arc42 Chapter 6: Runtime View 🎬
 
-Dieses Kapitel beschreibt das dynamische Verhalten des Systems anhand wesentlicher Szenarien.
+This chapter describes the dynamic behavior of the system based on essential scenarios.
 
 ---
 
-## 6.1 Szenario 1: Inkrementelle Indexierung
+## 6.1 Scenario 1: Incremental Indexing
 
-Dieses Szenario zeigt den Ablauf, wenn der Entwickler den Befehl `shonkor index .` aufruft, um Änderungen in seiner Codebasis in den Graphen einzupflegen.
+This scenario illustrates the workflow when the developer invokes the command `shonkor index .` to ingest changes in their codebase into the graph.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Dev as Entwickler
+    actor Dev as Developer
     participant CLI as Shonkor.CLI
     participant Scan as GraphIndexScanner
     participant Db as SqliteGraphStorageProvider
@@ -22,54 +22,54 @@ sequenceDiagram
     Db-->>CLI: DB schema ready
     CLI->>Scan: ScanDirectoryAsync(path, exclusions)
     
-    loop Für jede Datei im Workspace
-        Scan->>Scan: Überprüfe Exclude-Patterns
-        Scan->>Scan: Bestimme passenden Parser anhand Extension (.cs)
-        Scan->>Scan: Berechne SHA256-Hash des Inhalts
+    loop For each file in workspace
+        Scan->>Scan: Check exclude patterns
+        Scan->>Scan: Determine appropriate parser based on extension (.cs)
+        Scan->>Scan: Calculate SHA256 hash of content
         
-        Note over Scan, Db: (Optimierung) Hash-Prüfung zur Vermeidung unnötiger Arbeit
+        Note over Scan, Db: (Optimization) Hash check to avoid unnecessary work
         
         Scan->>Db: DeleteByFilePathAsync(filePath)
-        Db-->>Scan: Vorhandene Knoten/Kanten gelöscht
+        Db-->>Scan: Existing nodes/edges deleted
         
         Scan->>Parser: ParseAsync(filePath, content)
-        Parser-->>Scan: Gibt (Nodes, Edges) zurück
+        Parser-->>Scan: Returns (Nodes, Edges)
         
         Scan->>Db: UpsertNodesAsync(Nodes + Hash)
         Scan->>Db: UpsertEdgesAsync(Edges)
     end
     
     Scan-->>CLI: IndexResult (Scanned, Created)
-    CLI-->>Dev: Konsolen-Bericht mit Statistiken
+    CLI-->>Dev: Console report with statistics
 ```
 
 ---
 
-## 6.2 Szenario 2: Kontext-Synthese (Capsule)
+## 6.2 Scenario 2: Context Synthesis (Capsule)
 
-Dieses Szenario zeigt den Ablauf, wenn der Entwickler eine Kontextkapsel generiert, um sie an ein LLM zu übergeben.
+This scenario illustrates the workflow when the developer generates a context capsule to pass to an LLM.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Dev as Entwickler
+    actor Dev as Developer
     participant CLI as Shonkor.CLI
     participant Db as SqliteGraphStorageProvider
     participant Synth as ContextCapsuleSynthesizer
 
     Dev->>CLI: capsule "Parser" --hops 2
     CLI->>Db: SearchAsync("Parser", maxResults: 5)
-    Note over Db: FTS5 MATCH mit BM25 Scoring
-    Db-->>CLI: Gibt passende Seed-Knoten zurück (z.B. RoslynAstParser)
+    Note over Db: FTS5 MATCH with BM25 Scoring
+    Db-->>CLI: Returns matching seed nodes (e.g., RoslynAstParser)
     
     CLI->>Db: GetSubgraphAsync(seeds, hops: 2)
-    Note over Db: Rekursiver CTE-Join über Edges-Tabelle
-    Db-->>CLI: Gibt alle Knoten & Kanten innerhalb von 2 Hops zurück
+    Note over Db: Recursive CTE join over Edges table
+    Db-->>CLI: Returns all nodes & edges within 2 hops
     
     CLI->>Synth: Synthesize(Nodes, Edges)
-    Note over Synth: Generiert Markdown + Mermaid.js Architektur-Graph
-    Synth-->>CLI: Markdown-String (Capsule)
+    Note over Synth: Generates Markdown + Mermaid.js architecture graph
+    Synth-->>CLI: Markdown string (Capsule)
     
-    CLI->>CLI: Schreibe capsule.md in Datei
-    CLI-->>Dev: Erfolgsmeldung mit Token-Statistiken
+    CLI->>CLI: Write capsule.md to file
+    CLI-->>Dev: Success message with token statistics
 ```

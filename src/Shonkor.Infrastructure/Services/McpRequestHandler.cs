@@ -8,14 +8,14 @@ using Shonkor.Core.Services;
 
 using Shonkor.Infrastructure.Services;
 
-namespace Shonkor.CLI;
+namespace Shonkor.Infrastructure.Services;
 
 /// <summary>
 /// A lightweight, robust implementation of a Model Context Protocol (MCP) server 
 /// communicating over standard input/output (stdio) using JSON-RPC.
 /// Exposes high-precision GraphRAG tools to AI assistants like Claude Code and Antigravity.
 /// </summary>
-public sealed class McpServer
+public sealed class McpRequestHandler
 {
     private readonly ProjectManager _projectManager;
     private readonly ContextCapsuleSynthesizer _synthesizer;
@@ -27,16 +27,32 @@ public sealed class McpServer
     /// </summary>
     private readonly string? _contextProjectName;
 
-    /// <summary>Resolves the project name to use for a call: explicit argument wins, else the directory-derived context.</summary>
-    private string? ResolveProjectName(string? projectName) =>
-        !string.IsNullOrWhiteSpace(projectName) ? projectName : _contextProjectName;
+    /// <summary>
+    /// When true, the session is hard-bound to <see cref="_contextProjectName"/> and the per-tool
+    /// <c>projectName</c> argument is ignored. Set for authenticated multi-tenant (SaaS) requests so a
+    /// caller authorized for tenant A cannot reach tenant B's graph by passing a different projectName.
+    /// Left false for the local/stdio CLI and the trusted-local dev bypass, where free project switching
+    /// is intentional.
+    /// </summary>
+    private readonly bool _lockToContextProject;
 
-    private IGraphStorageProvider GetStorage(string? projectName)
+    /// <summary>
+    /// Resolves the project name to use for a call. When the session is tenant-locked the context
+    /// project always wins (the explicit argument is ignored, preventing cross-tenant access).
+    /// Otherwise the explicit argument wins, falling back to the directory-derived context.
+    /// </summary>
+    private string? ResolveProjectName(string? projectName) =>
+        _lockToContextProject
+            ? _contextProjectName
+            : (!string.IsNullOrWhiteSpace(projectName) ? projectName : _contextProjectName);
+
+    private Task<IGraphStorageProvider> GetStorageAsync(string? projectName)
     {
         var effective = ResolveProjectName(projectName);
+        // Async resolution so the HTTP relay path doesn't block a thread on first-time schema init.
         return string.IsNullOrWhiteSpace(effective)
-            ? _projectManager.GetActiveStorageProvider()
-            : _projectManager.GetStorageProvider(effective);
+            ? _projectManager.GetActiveStorageProviderAsync()
+            : _projectManager.GetStorageProviderAsync(effective);
     }
 
     /// <summary>Resolves the filesystem root of the requested (or context) project, for path shortening.</summary>
@@ -89,7 +105,7 @@ public sealed class McpServer
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="McpServer"/> class.
+    /// Initializes a new instance of the <see cref="McpRequestHandler"/> class.
     /// </summary>
     /// <param name="projectManager">The global project manager.</param>
     /// <param name="synthesizer">The context capsule synthesizer.</param>
@@ -98,11 +114,12 @@ public sealed class McpServer
     /// as the default for all tool calls that don't pass an explicit projectName, decoupling the MCP from
     /// the web dashboard's mutable active-project flag.
     /// </param>
-    public McpServer(ProjectManager projectManager, ContextCapsuleSynthesizer synthesizer, string? contextProjectName = null)
+    public McpRequestHandler(ProjectManager projectManager, ContextCapsuleSynthesizer synthesizer, string? contextProjectName = null, bool lockToContextProject = false)
     {
         _projectManager = projectManager ?? throw new ArgumentNullException(nameof(projectManager));
         _synthesizer = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
         _contextProjectName = contextProjectName;
+        _lockToContextProject = lockToContextProject;
     }
 
     /// <summary>
@@ -132,7 +149,11 @@ public sealed class McpServer
                     continue;
                 }
 
-                await HandleJsonRpcMessageAsync(line).ConfigureAwait(false);
+                var response = await ProcessJsonRpcMessageAsync(line).ConfigureAwait(false);
+                if (response != null)
+                {
+                    Console.WriteLine(response);
+                }
             }
             catch (Exception ex)
             {
@@ -142,7 +163,7 @@ public sealed class McpServer
         }
     }
 
-    private async Task HandleJsonRpcMessageAsync(string json)
+    public async Task<string?> ProcessJsonRpcMessageAsync(string json)
     {
         JsonNode? idNode = null;
         try
@@ -150,24 +171,30 @@ public sealed class McpServer
             var document = JsonNode.Parse(json);
             if (document is not JsonObject obj)
             {
-                return;
+                return null;
             }
 
             var method = obj["method"]?.ToString();
             idNode = obj["id"];
 
-            // If it's a notification (no ID), just ignore or handle it (like initialized notification)
-            if (idNode == null)
+            // JSON-RPC 2.0 notifications have NO "id" key at all (key absent from the object).
+            // A request with "id": null is a valid (if unusual) request and expects a response.
+            // JsonNode returns null both for a missing key AND for an explicit JSON null value —
+            // we disambiguate by checking whether the key is actually present in the object.
+            if (!obj.ContainsKey("id"))
             {
-                return;
+                // True notification — no response should be sent.
+                return null;
             }
 
-            var id = idNode.GetValue<JsonElement>();
+            // "id": null is an unusual but valid JSON-RPC id; idNode is null for an explicit JSON null,
+            // so fall back to a JSON-null element rather than dereferencing it.
+            var id = idNode?.GetValue<JsonElement>() ?? NullJsonElement;
 
             switch (method)
             {
                 case "initialize":
-                    SendResponse(id, new
+                    return SendResponse(id, new
                     {
                         protocolVersion = "2024-11-05",
                         capabilities = new
@@ -180,10 +207,9 @@ public sealed class McpServer
                         version = "1.0.0"
                     }
                 });
-                break;
 
             case "tools/list":
-                SendResponse(id, new
+                return SendResponse(id, new
                 {
                     tools = new object[]
                     {
@@ -338,17 +364,14 @@ public sealed class McpServer
                         }
                     }
                 });
-                break;
 
             case "tools/call":
                 var toolName = obj["params"]?["name"]?.ToString();
                 var args = obj["params"]?["arguments"] as JsonObject;
-                await HandleToolCallAsync(id, toolName, args).ConfigureAwait(false);
-                break;
+                return await HandleToolCallAsync(id, toolName, args).ConfigureAwait(false);
 
             default:
-                SendError(id, -32601, $"Method not found: '{method}'");
-                break;
+                return SendError(id, -32601, $"Method not found: '{method}'");
         }
         }
         catch (Exception ex)
@@ -357,7 +380,7 @@ public sealed class McpServer
             {
                 try
                 {
-                    SendError(idNode.GetValue<JsonElement>(), -32603, $"Internal Error: {ex.Message}");
+                    return SendError(idNode.GetValue<JsonElement>(), -32603, $"Internal Error: {ex.Message}");
                 }
                 catch
                 {
@@ -365,21 +388,21 @@ public sealed class McpServer
                 }
             }
             Console.Error.WriteLine($"[MCP Internal Error] {ex.Message}\n{ex.StackTrace}");
+            return null;
         }
     }
 
-    private async Task HandleToolCallAsync(JsonElement id, string? toolName, JsonObject? args)
+    public async Task<string> HandleToolCallAsync(JsonElement id, string? toolName, JsonObject? args)
     {
         if (string.IsNullOrWhiteSpace(toolName))
         {
-            SendError(id, -32602, "Missing parameter: 'name'");
-            return;
+            return SendError(id, -32602, "Missing parameter: 'name'");
         }
 
         try
         {
             var projectName = args?["projectName"]?.ToString();
-            var storage = GetStorage(projectName);
+            var storage = await GetStorageAsync(projectName).ConfigureAwait(false);
 
             switch (toolName)
             {
@@ -388,8 +411,8 @@ public sealed class McpServer
                         var query = args?["query"]?.ToString();
                         if (string.IsNullOrWhiteSpace(query))
                         {
-                            SendError(id, -32602, "Parameter 'query' is required");
-                            return;
+                            return SendError(id, -32602, "Parameter 'query' is required");
+                            
                         }
                         var limit = args?["limit"]?.GetValue<int>() ?? 10;
                         var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
@@ -403,8 +426,7 @@ public sealed class McpServer
                             // no connections, no indentation. Closer to ripgrep output than verbose JSON.
                             if (results.Count == 0)
                             {
-                                SendToolResponse(id, $"No matches for '{query}'{(typeFilter != null ? $" (type={typeFilter})" : "")}.");
-                                break;
+                                return SendToolResponse(id, $"No matches for '{query}'{(typeFilter != null ? $" (type={typeFilter})" : "")}.");
                             }
 
                             var lines = results.Select(r =>
@@ -415,8 +437,7 @@ public sealed class McpServer
                                 var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t{r.Node.Summary}" : "";
                                 return $"{r.Node.Type}\t{r.Node.Name}\t{loc}{summary}";
                             });
-                            SendToolResponse(id, string.Join("\n", lines));
-                            break;
+                            return SendToolResponse(id, string.Join("\n", lines));
                         }
 
                         // verbose: full structured JSON incl. connections (compact, no indentation).
@@ -440,24 +461,22 @@ public sealed class McpServer
                             })
                         }).ToList();
 
-                        SendToolResponse(id, JsonSerializer.Serialize(formattedResults));
+                        return SendToolResponse(id, JsonSerializer.Serialize(formattedResults));
                     }
-                    break;
 
                 case "locate":
                     {
                         var query = args?["query"]?.ToString();
                         if (string.IsNullOrWhiteSpace(query))
                         {
-                            SendError(id, -32602, "Parameter 'query' is required");
-                            return;
+                            return SendError(id, -32602, "Parameter 'query' is required");
+                            
                         }
                         var limit = args?["limit"]?.GetValue<int>() ?? 15;
                         var results = await storage.SearchAsync(query, limit).ConfigureAwait(false);
                         if (results.Count == 0)
                         {
-                            SendToolResponse(id, $"No matches for '{query}'.");
-                            break;
+                            return SendToolResponse(id, $"No matches for '{query}'.");
                         }
 
                         var basePath = GetProjectBasePath(projectName);
@@ -469,17 +488,16 @@ public sealed class McpServer
                             var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $" | {r.Node.Summary}" : "";
                             return $"{r.Node.Name} -> {loc}{summary}";
                         });
-                        SendToolResponse(id, string.Join("\n", lines));
+                        return SendToolResponse(id, string.Join("\n", lines));
                     }
-                    break;
 
                 case "get_subgraph":
                     {
                         var seedsNode = args?["seeds"] as JsonArray;
                         if (seedsNode == null || seedsNode.Count == 0)
                         {
-                            SendError(id, -32602, "Parameter 'seeds' is required and must be a non-empty array");
-                            return;
+                            return SendError(id, -32602, "Parameter 'seeds' is required and must be a non-empty array");
+                            
                         }
                         var seeds = seedsNode.Select(s => s?.ToString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
                         var hops = args?["hops"]?.GetValue<int>() ?? 2;
@@ -506,8 +524,7 @@ public sealed class McpServer
                             sb.Append(string.Join("\n", nodeLines));
                             sb.Append("\n\nEDGES (").Append(edges.Count).Append("):\n");
                             sb.Append(string.Join("\n", edgeLines));
-                            SendToolResponse(id, sb.ToString());
-                            break;
+                            return SendToolResponse(id, sb.ToString());
                         }
 
                         var formatted = new
@@ -530,17 +547,16 @@ public sealed class McpServer
                             })
                         };
 
-                        SendToolResponse(id, JsonSerializer.Serialize(formatted));
+                        return SendToolResponse(id, JsonSerializer.Serialize(formatted));
                     }
-                    break;
 
                 case "generate_capsule":
                     {
                         var query = args?["query"]?.ToString();
                         if (string.IsNullOrWhiteSpace(query))
                         {
-                            SendError(id, -32602, "Parameter 'query' is required");
-                            return;
+                            return SendError(id, -32602, "Parameter 'query' is required");
+                            
                         }
                         var hops = args?["hops"]?.GetValue<int>() ?? 2;
 
@@ -549,8 +565,8 @@ public sealed class McpServer
 
                         if (seeds.Count == 0)
                         {
-                            SendToolResponse(id, $"No nodes found matching query: '{query}'");
-                            return;
+                            return SendToolResponse(id, $"No nodes found matching query: '{query}'");
+                            
                         }
 
                         var (nodes, edges) = await storage.GetSubgraphAsync(seeds, hops).ConfigureAwait(false);
@@ -563,9 +579,8 @@ public sealed class McpServer
                             markdown = TruncateAtBoundary(markdown, maxChars.Value);
                         }
 
-                        SendToolResponse(id, markdown);
+                        return SendToolResponse(id, markdown);
                     }
-                    break;
 
                 case "get_stats":
                     {
@@ -577,9 +592,8 @@ public sealed class McpServer
                             stats.NodesByType,
                             stats.EdgesByRelation
                         };
-                        SendToolResponse(id, JsonSerializer.Serialize(formattedStats));
+                        return SendToolResponse(id, JsonSerializer.Serialize(formattedStats));
                     }
-                    break;
 
                 case "record_decision":
                     {
@@ -587,52 +601,14 @@ public sealed class McpServer
                         var content = args?["content"]?.ToString();
                         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(content))
                         {
-                            SendError(id, -32602, "Parameters 'name' and 'content' are required");
-                            return;
+                            return SendError(id, -32602, "Parameters 'name' and 'content' are required");
                         }
-                        var connectedNodeIds = args?["connectedNodeIds"] as JsonArray;
-                        var decisionId = $"decision::{Guid.NewGuid().ToString("N").Substring(0, 8)}";
-
-                        var decisionNode = new GraphNode
-                        {
-                            Id = decisionId,
-                            Name = name,
-                            Type = "Decision",
-                            Content = content,
-                            Properties = new Dictionary<string, string>
-                            {
-                                ["created"] = DateTime.UtcNow.ToString("o")
-                            }
-                        };
-
-                        await storage.UpsertNodesAsync(new[] { decisionNode }).ConfigureAwait(false);
-
-                        var edges = new List<GraphEdge>();
-                        if (connectedNodeIds != null)
-                        {
-                            foreach (var connectedNode in connectedNodeIds)
-                            {
-                                var connId = connectedNode?.ToString();
-                                if (!string.IsNullOrEmpty(connId))
-                                {
-                                    edges.Add(new GraphEdge
-                                    {
-                                        SourceId = connId,
-                                        TargetId = decisionId,
-                                        Relationship = "INFLUENCES"
-                                    });
-                                }
-                            }
-                        }
-
-                        if (edges.Count > 0)
-                        {
-                            await storage.UpsertEdgesAsync(edges).ConfigureAwait(false);
-                        }
-
-                        SendToolResponse(id, $"Successfully recorded decision '{name}' (ID: {decisionId}) and connected it to {edges.Count} nodes.");
+                        return await RecordNodeAsync(id, storage, "decision", "Decision", name, content,
+                            new Dictionary<string, string> { ["created"] = UtcNow() },
+                            args?["connectedNodeIds"] as JsonArray, "INFLUENCES",
+                            (nodeId, count) => $"Successfully recorded decision '{name}' (ID: {nodeId}) and connected it to {count} nodes.")
+                            .ConfigureAwait(false);
                     }
-                    break;
 
                 case "record_milestone":
                     {
@@ -640,53 +616,14 @@ public sealed class McpServer
                         var status = args?["status"]?.ToString();
                         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(status))
                         {
-                            SendError(id, -32602, "Parameters 'name' and 'status' are required");
-                            return;
+                            return SendError(id, -32602, "Parameters 'name' and 'status' are required");
                         }
-                        var connectedNodeIds = args?["connectedNodeIds"] as JsonArray;
-                        var milestoneId = $"milestone::{Guid.NewGuid().ToString("N").Substring(0, 8)}";
-
-                        var milestoneNode = new GraphNode
-                        {
-                            Id = milestoneId,
-                            Name = name,
-                            Type = "Milestone",
-                            Content = $"Status: {status}",
-                            Properties = new Dictionary<string, string>
-                            {
-                                ["status"] = status,
-                                ["updated"] = DateTime.UtcNow.ToString("o")
-                            }
-                        };
-
-                        await storage.UpsertNodesAsync(new[] { milestoneNode }).ConfigureAwait(false);
-
-                        var edges = new List<GraphEdge>();
-                        if (connectedNodeIds != null)
-                        {
-                            foreach (var connectedNode in connectedNodeIds)
-                            {
-                                var connId = connectedNode?.ToString();
-                                if (!string.IsNullOrEmpty(connId))
-                                {
-                                    edges.Add(new GraphEdge
-                                    {
-                                        SourceId = connId,
-                                        TargetId = milestoneId,
-                                        Relationship = "AFFECTS"
-                                    });
-                                }
-                            }
-                        }
-
-                        if (edges.Count > 0)
-                        {
-                            await storage.UpsertEdgesAsync(edges).ConfigureAwait(false);
-                        }
-
-                        SendToolResponse(id, $"Successfully recorded milestone '{name}' (ID: {milestoneId}) with status '{status}' connected to {edges.Count} nodes.");
+                        return await RecordNodeAsync(id, storage, "milestone", "Milestone", name, $"Status: {status}",
+                            new Dictionary<string, string> { ["status"] = status, ["updated"] = UtcNow() },
+                            args?["connectedNodeIds"] as JsonArray, "AFFECTS",
+                            (nodeId, count) => $"Successfully recorded milestone '{name}' (ID: {nodeId}) with status '{status}' connected to {count} nodes.")
+                            .ConfigureAwait(false);
                     }
-                    break;
 
                 case "record_task":
                     {
@@ -695,53 +632,14 @@ public sealed class McpServer
                         var status = args?["status"]?.ToString() ?? "Todo";
                         if (string.IsNullOrWhiteSpace(name))
                         {
-                            SendError(id, -32602, "Parameter 'name' is required");
-                            return;
+                            return SendError(id, -32602, "Parameter 'name' is required");
                         }
-                        var connectedNodeIds = args?["connectedNodeIds"] as JsonArray;
-                        var taskId = $"task::{Guid.NewGuid().ToString("N").Substring(0, 8)}";
-
-                        var taskNode = new GraphNode
-                        {
-                            Id = taskId,
-                            Name = name,
-                            Type = "Task",
-                            Content = content ?? $"Status: {status}",
-                            Properties = new Dictionary<string, string>
-                            {
-                                ["status"] = status,
-                                ["created"] = DateTime.UtcNow.ToString("o")
-                            }
-                        };
-
-                        await storage.UpsertNodesAsync(new[] { taskNode }).ConfigureAwait(false);
-
-                        var edges = new List<GraphEdge>();
-                        if (connectedNodeIds != null)
-                        {
-                            foreach (var connectedNode in connectedNodeIds)
-                            {
-                                var connId = connectedNode?.ToString();
-                                if (!string.IsNullOrEmpty(connId))
-                                {
-                                    edges.Add(new GraphEdge
-                                    {
-                                        SourceId = connId,
-                                        TargetId = taskId,
-                                        Relationship = "HasTask"
-                                    });
-                                }
-                            }
-                        }
-
-                        if (edges.Count > 0)
-                        {
-                            await storage.UpsertEdgesAsync(edges).ConfigureAwait(false);
-                        }
-
-                        SendToolResponse(id, $"Successfully recorded task '{name}' (ID: {taskId}) connected to {edges.Count} nodes.");
+                        return await RecordNodeAsync(id, storage, "task", "Task", name, content ?? $"Status: {status}",
+                            new Dictionary<string, string> { ["status"] = status, ["created"] = UtcNow() },
+                            args?["connectedNodeIds"] as JsonArray, "HasTask",
+                            (nodeId, count) => $"Successfully recorded task '{name}' (ID: {nodeId}) connected to {count} nodes.")
+                            .ConfigureAwait(false);
                     }
-                    break;
 
                 case "record_question":
                     {
@@ -749,67 +647,88 @@ public sealed class McpServer
                         var content = args?["content"]?.ToString() ?? "";
                         if (string.IsNullOrWhiteSpace(name))
                         {
-                            SendError(id, -32602, "Parameter 'name' is required");
-                            return;
+                            return SendError(id, -32602, "Parameter 'name' is required");
                         }
-                        var connectedNodeIds = args?["connectedNodeIds"] as JsonArray;
-                        var questionId = $"question::{Guid.NewGuid().ToString("N").Substring(0, 8)}";
-
-                        var questionNode = new GraphNode
-                        {
-                            Id = questionId,
-                            Name = name,
-                            Type = "Question",
-                            Content = content,
-                            Properties = new Dictionary<string, string>
-                            {
-                                ["status"] = "Open",
-                                ["created"] = DateTime.UtcNow.ToString("o")
-                            }
-                        };
-
-                        await storage.UpsertNodesAsync(new[] { questionNode }).ConfigureAwait(false);
-
-                        var edges = new List<GraphEdge>();
-                        if (connectedNodeIds != null)
-                        {
-                            foreach (var connectedNode in connectedNodeIds)
-                            {
-                                var connId = connectedNode?.ToString();
-                                if (!string.IsNullOrEmpty(connId))
-                                {
-                                    edges.Add(new GraphEdge
-                                    {
-                                        SourceId = connId,
-                                        TargetId = questionId,
-                                        Relationship = "RELATES_TO"
-                                    });
-                                }
-                            }
-                        }
-
-                        if (edges.Count > 0)
-                        {
-                            await storage.UpsertEdgesAsync(edges).ConfigureAwait(false);
-                        }
-
-                        SendToolResponse(id, $"Successfully recorded question '{name}' (ID: {questionId}) connected to {edges.Count} nodes.");
+                        return await RecordNodeAsync(id, storage, "question", "Question", name, content,
+                            new Dictionary<string, string> { ["status"] = "Open", ["created"] = UtcNow() },
+                            args?["connectedNodeIds"] as JsonArray, "RELATES_TO",
+                            (nodeId, count) => $"Successfully recorded question '{name}' (ID: {nodeId}) connected to {count} nodes.")
+                            .ConfigureAwait(false);
                     }
-                    break;
 
                 default:
-                    SendError(id, -32601, $"Tool not found: '{toolName}'");
-                    break;
+                    return SendError(id, -32601, $"Tool not found: '{toolName}'");
             }
         }
         catch (Exception ex)
         {
-            SendError(id, -32603, $"Internal tool execution error: {ex.Message}");
             Console.Error.WriteLine($"[MCP Tool Error] {ex.Message}\n{ex.StackTrace}");
+            return SendError(id, -32603, $"Internal tool execution error: {ex.Message}");
         }
     }
 
-    private void SendResponse(JsonElement id, object result)
+    /// <summary>A reusable JSON-null element, used to echo back an explicit <c>"id": null</c> JSON-RPC id.</summary>
+    private static readonly JsonElement NullJsonElement = JsonSerializer.SerializeToElement<object?>(null);
+
+    private static string UtcNow() => DateTime.UtcNow.ToString("o");
+
+    /// <summary>
+    /// Shared implementation for the <c>record_*</c> tools: creates a typed knowledge node, links it
+    /// to the supplied <paramref name="connectedNodeIds"/> via <paramref name="edgeRelationship"/>,
+    /// persists both, and returns the JSON-RPC tool response built by <paramref name="messageFactory"/>.
+    /// </summary>
+    /// <param name="messageFactory">Builds the success message from the new node id and the edge count.</param>
+    private async Task<string> RecordNodeAsync(
+        JsonElement id,
+        IGraphStorageProvider storage,
+        string idPrefix,
+        string nodeType,
+        string name,
+        string content,
+        Dictionary<string, string> properties,
+        JsonArray? connectedNodeIds,
+        string edgeRelationship,
+        Func<string, int, string> messageFactory)
+    {
+        var nodeId = $"{idPrefix}::{Guid.NewGuid().ToString("N")[..8]}";
+
+        var node = new GraphNode
+        {
+            Id = nodeId,
+            Name = name,
+            Type = nodeType,
+            Content = content,
+            Properties = properties
+        };
+        await storage.UpsertNodesAsync(new[] { node }).ConfigureAwait(false);
+
+        var edges = new List<GraphEdge>();
+        if (connectedNodeIds != null)
+        {
+            foreach (var connectedNode in connectedNodeIds)
+            {
+                var connId = connectedNode?.ToString();
+                if (!string.IsNullOrEmpty(connId))
+                {
+                    edges.Add(new GraphEdge
+                    {
+                        SourceId = connId,
+                        TargetId = nodeId,
+                        Relationship = edgeRelationship
+                    });
+                }
+            }
+        }
+
+        if (edges.Count > 0)
+        {
+            await storage.UpsertEdgesAsync(edges).ConfigureAwait(false);
+        }
+
+        return SendToolResponse(id, messageFactory(nodeId, edges.Count));
+    }
+
+    private string SendResponse(JsonElement id, object result)
     {
         var response = new
         {
@@ -818,13 +737,12 @@ public sealed class McpServer
             result = result
         };
 
-        var json = JsonSerializer.Serialize(response);
-        Console.WriteLine(json);
+        return JsonSerializer.Serialize(response);
     }
 
-    private void SendToolResponse(JsonElement id, string text)
+    private string SendToolResponse(JsonElement id, string text)
     {
-        SendResponse(id, new
+        return SendResponse(id, new
         {
             content = new[]
             {
@@ -837,7 +755,7 @@ public sealed class McpServer
         });
     }
 
-    private void SendError(JsonElement id, int code, string message)
+    private string SendError(JsonElement id, int code, string message)
     {
         var response = new
         {
@@ -850,7 +768,6 @@ public sealed class McpServer
             }
         };
 
-        var json = JsonSerializer.Serialize(response);
-        Console.WriteLine(json);
+        return JsonSerializer.Serialize(response);
     }
 }

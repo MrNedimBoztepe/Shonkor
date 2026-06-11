@@ -44,4 +44,9 @@ public class MockSemanticAnalyzer : ISemanticAnalyzer
             ExtractedConcepts = fakeConcepts
         };
     }
+
+    public Task<string> GenerateRAGResponseAsync(string query, IReadOnlyList<GraphNode> contextNodes, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult($"This is a mock RAG response to your query: '{query}'. It is based on {contextNodes.Count} nodes.");
+    }
 }

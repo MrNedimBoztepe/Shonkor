@@ -1,12 +1,12 @@
-# arc42 Kapitel 8: Konzepte 💡
+# arc42 Chapter 8: Concepts 💡
 
-Dieses Kapitel beschreibt die grundlegenden Konzepte, Muster und Implementierungsdetails, die das Fundament von Shonkor bilden.
+This chapter describes the fundamental concepts, patterns, and implementation details that form the foundation of Shonkor.
 
 ---
 
-## 8.1 Das relationale Graph-Metamodell
+## 8.1 The Relational Graph Metamodel
 
-Um Flexibilität für verschiedene Programmiersprachen und Konfigurationsformate zu bieten, wird ein verallgemeinertes relationales Metamodell in SQLite verwendet.
+To provide flexibility for various programming languages and configuration formats, a generalized relational metamodel is used in SQLite.
 
 ```
 +---------------------------------------------------------------------------------+
@@ -26,17 +26,17 @@ Um Flexibilität für verschiedene Programmiersprachen und Konfigurationsformate
 ```
 
 ### 1. Extensible Properties via Key-Value Dictionary
-Um Signaturen schlank und gleichzeitig erweiterbar zu halten (z. B. für Sitecore Templates oder Optimizely Properties), speichert die Klasse `GraphNode` alle anwendungsspezifischen Details in einem `Dictionary<string, string> Properties`. 
-Das SQLite-Repository bildet bekannte Spalten (wie `Content` oder `FilePath`) auf dedizierte Spalten ab – alle anderen dynamischen Schlüssel-Wert-Paare werden vollautomatisch als serialisiertes JSON in der Spalte `Metadata` abgelegt. Dies vereint die Vorteile relationaler Datenhaltung mit schemaloser Flexibilität.
+To keep signatures lean while remaining extensible (e.g., for Sitecore Templates or Optimizely Properties), the `GraphNode` class stores all application-specific details in a `Dictionary<string, string> Properties`. 
+The SQLite repository maps known columns (like `Content` or `FilePath`) to dedicated columns – all other dynamic key-value pairs are fully automatically stored as serialized JSON in the `Metadata` column. This combines the advantages of relational data storage with schema-less flexibility.
 
 ---
 
-## 8.2 SQLite FTS5 & Rekursives CTE (Das Performance-Geheimnis)
+## 8.2 SQLite FTS5 & Recursive CTE (The Performance Secret)
 
-Die Graph-Traversierung in relationalen Datenbanken wird typischerweise durch Joins ausgebremst. Shonkor nutzt hochoptimiertes SQLite-Standard-SQL, um dieses Problem vollständig zu eliminieren.
+Graph traversal in relational databases is typically slowed down by joins. Shonkor uses highly optimized standard SQLite SQL to completely eliminate this problem.
 
-### 1. FTS5 Keyword-Suche (Seeds finden)
-Die FTS5-Virtual-Table `NodesFts` wird über Trigger vollautomatisch mit der `Nodes`-Tabelle synchronisiert:
+### 1. FTS5 Keyword Search (Finding Seeds)
+The FTS5 virtual table `NodesFts` is fully automatically synchronized with the `Nodes` table via triggers:
 ```sql
 SELECT n.Id, n.Type, n.Name, bm25(NodesFts) AS Score
 FROM NodesFts fts
@@ -45,12 +45,12 @@ WHERE NodesFts MATCH @query
 ORDER BY Score
 LIMIT @limit;
 ```
-Dies liefert extrem schnelle, gewichtete Einstiegspunkte für jede Suchanfrage.
+This delivers extremely fast, weighted entry points for any search query.
 
-Die Suche lädt die zugehörigen Kanten aller Treffer in **einer** Batch-Abfrage (statt einer Query pro Treffer) und vermeidet so ein N+1-Problem bei großen Ergebnismengen.
+The search loads the associated edges of all matches in **a single** batch query (instead of one query per match), thus avoiding an N+1 problem with large result sets.
 
-### 2. Rekursives CTE (Graph-Traversierung)
-Ein rekursiver Common Table Expression (CTE)-Join expandiert ausgehend von den Seed-Knoten über N Hops in beide Richtungen (bidirektional):
+### 2. Recursive CTE (Graph Traversal)
+A recursive Common Table Expression (CTE) join expands bidirectionally from the seed nodes over N hops:
 ```sql
 WITH RECURSIVE Subgraph(Id, Depth) AS (
     SELECT Id, 0 FROM Nodes WHERE Id IN (@seeds)
@@ -64,48 +64,60 @@ SELECT DISTINCT n.*
 FROM Nodes n
 JOIN (SELECT Id, MIN(Depth) AS Depth FROM Subgraph GROUP BY Id) s ON n.Id = s.Id;
 ```
-Dieses Statement führt eine N-Hop-Traversierung in einer einzigen SQL-Transaktion aus. Durch `UNION ALL` mit anschließender `MIN(Depth)`-Aggregation wird jeder Knoten von seinem **kürzesten** Pfad aus betrachtet – die Hop-Begrenzung ist damit deterministisch und unabhängig von der Kanten-Reihenfolge.
+This statement executes an N-hop traversal in a single SQL transaction. By using `UNION ALL` followed by a `MIN(Depth)` aggregation, each node is viewed from its **shortest** path – making the hop limit deterministic and independent of edge order.
 
 ---
 
-## 8.3 Typ-Referenzen & Cross-Technology-Linking (Post-Scan)
+## 8.3 Type References & Cross-Technology-Linking (Post-Scan)
 
-Reine Syntaxbäume liefern Containment (`CONTAINS`) und Vererbung (`IMPLEMENTS`/`EXTENDS`), aber keine Verwendungs-Beziehungen. Damit „wer verwendet Typ X?" als Graph-Traversierung beantwortbar ist, läuft nach dem Scan ein **Linker** (`CrossTechLinker`):
+Pure syntax trees provide containment (`CONTAINS`) and inheritance (`IMPLEMENTS`/`EXTENDS`), but no usage relationships. For the question "who uses type X?" to be answerable via graph traversal, a **Linker** (`CrossTechLinker`) runs after the scan:
 
-1. Der `RoslynAstParser` sammelt je Typ die Namen referenzierter Typen (Felder, Properties, Parameter, Rückgabetypen, `new`-Ausdrücke, Generics, Basistypen) und legt sie als Property `referencedTypes` ab.
-2. Der Linker löst diese Namen gegen die Definition-Knoten (Class/Interface/Record/Struct/Enum) auf und erzeugt `REFERENCES_TYPE`-Kanten **Verwender → Definition**.
+1. The `RoslynAstParser` collects the names of referenced types per type (fields, properties, parameters, return types, `new` expressions, generics, base types) and stores them as the `referencedTypes` property.
+2. The Linker resolves these names against the definition nodes (Class/Interface/Record/Struct/Enum) and creates `REFERENCES_TYPE` edges **User → Definition**.
 
-Analog werden Cross-Technology-Kanten (`BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMPLATE`) und Helix-Modul-Zugehörigkeiten (`BELONGS_TO_MODULE`) aufgelöst. Dieses Muster benötigt keine zusätzliche Storage-API – es liest Knoten-Properties und schreibt aufgelöste Kanten zurück.
-
----
-
-## 8.4 Nebenläufigkeit & Verbindungsverwaltung
-
-Da das Web-Dashboard Anfragen parallel bedient, öffnet `SqliteGraphStorageProvider` **pro Operation eine eigene Connection** aus dem Microsoft.Data.Sqlite-Pool (statt eine geteilte, nicht thread-sichere Connection). Datei-DBs nutzen WAL und einen `busy_timeout`; In-Memory-DBs werden über eine eindeutig benannte Shared-Cache-DB mit Keep-Alive-Connection am Leben gehalten. Der `ProjectManager` cached Provider pro Projekt via `Lazy<>` (genau eine Initialisierung) und verhindert über `TryBeginScan`/`EndScan` parallele Scans desselben Projekts.
+Analogously, cross-technology edges (`BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMPLATE`) and Helix module affiliations (`BELONGS_TO_MODULE`) are resolved. This pattern requires no additional storage API – it reads node properties and writes resolved edges back.
 
 ---
 
-## 8.5 Sicherheitsmodell
+## 8.4 Concurrency & Connection Management
 
-Shonkor ist primär lokal, unterstützt aber einen Multi-Tenant-/SaaS-Modus:
-* **API-Keys** werden konstantzeitig verglichen; der Loopback-Bypass ist nur in `Development` aktiv (sonst kollabiert die Auth hinter einem Proxy).
-* **Plugins** sind ein RCE-Vektor: Laufzeit-Kompilierung ist Opt-in (`Security:EnablePlugins`) und lädt in einen entladbaren `AssemblyLoadContext`.
-* **Webhooks** verifizieren `X-Hub-Signature-256` (HMAC) und sanitisieren Repository-Namen gegen Path-Traversal.
-* Fehlerantworten geben **keine** internen Details/Pfade preis; Details landen ausschließlich im Server-Log.
+Since the Web dashboard serves requests in parallel, `SqliteGraphStorageProvider` opens **a dedicated connection per operation** from the Microsoft.Data.Sqlite pool (instead of a shared, non-thread-safe connection). File DBs use WAL and a `busy_timeout`; In-Memory DBs are kept alive via a uniquely named Shared-Cache DB with a keep-alive connection. The `ProjectManager` caches providers per project via `Lazy<>` (exactly one initialization) and prevents parallel scans of the same project via `TryBeginScan`/`EndScan`.
 
 ---
 
-## 8.6 MCP-Projektauflösung & Token-Effizienz
+## 8.5 Security Model
 
-* **Projekt aus dem Arbeitsverzeichnis**: Der MCP-Server leitet das aktive Projekt aus seinem Working Directory ab (`FindProjectByPath`), nicht aus dem web-mutierbaren `ActiveProjectName`. Dadurch sind Dashboard und KI-Kontext entkoppelt.
-* **Lean-Ausgaben**: `locate` und `search_graph` liefern standardmäßig kompakten Text (`name -> datei:zeile`) statt JSON; `get_subgraph` einen kompakten `NODES`/`EDGES`-Block. `verbose: true` schaltet auf volles JSON. Das reduziert den Token-Verbrauch flacher Lookups um ~90 %.
+Shonkor is primarily local but supports a multi-tenant/SaaS mode:
+* **API Keys** are compared in constant time; the loopback bypass is only active in `Development` (otherwise, authentication behind a proxy collapses).
+* **Plugins** are an RCE vector: runtime compilation is opt-in (`Security:EnablePlugins`) and loads into an unloadable `AssemblyLoadContext`.
+* **Webhooks** verify `X-Hub-Signature-256` (HMAC) and sanitize repository names against path traversal.
+* Error responses disclose **no** internal details/paths; details are logged exclusively in the server log.
 
 ---
 
-## 8.7 Token-Optimierung & Pruning (Capsule)
+## 8.6 MCP Project Resolution & Token Efficiency
 
-Für ein LLM ist das Verhältnis von Signal zu Rauschen im Kontext entscheidend.
-* **Größenbegrenzung**: File-Knoten speichern Inhalt gedeckelt (Hash weiterhin über den vollen Inhalt); die Kapsel akzeptiert ein `maxChars`-Budget und kürzt an Sektionsgrenzen.
-* **Filterung**: File-Knoten ohne Textinhalt werden bei der Kapselgenerierung übersprungen.
-* **Formatierte Syntax-Blöcke**: Knoten-Inhalte werden in Markdown-Codeblöcke mit sprachspezifischen Highlight-Bezeichnern verpackt.
-* **Struktur vor Code**: Ein initiales Mermaid.js-Diagramm vermittelt die Beziehungen, bevor das LLM die Quelltext-Blöcke analysiert.
+* **Project from working directory**: The MCP server derives the active project from its working directory (`FindProjectByPath`), not from the web-mutable `ActiveProjectName`. This decouples the dashboard and the AI context.
+* **Lean outputs**: `locate` and `search_graph` output compact text by default (`name -> file:line`) instead of JSON; `get_subgraph` outputs a compact `NODES`/`EDGES` block. `verbose: true` switches to full JSON. This reduces the token consumption of shallow lookups by ~90%.
+
+---
+
+## 8.7 Token Optimization & Pruning (Capsule)
+
+For an LLM, the signal-to-noise ratio in the context is crucial.
+* **Size limit**: File nodes cap stored content (the hash still covers the full content); the capsule accepts a `maxChars` budget and truncates at section boundaries.
+* **Filtering**: File nodes without text content are skipped during capsule generation.
+* **Formatted syntax blocks**: Node contents are wrapped in Markdown code blocks with language-specific highlight identifiers.
+* **Structure over code**: An initial Mermaid.js diagram conveys relationships before the LLM analyzes the source code blocks.
+
+---
+
+## 8.8 GraphRAG & Semantic Search
+
+Shonkor elevates traditional RAG (Retrieval-Augmented Generation) to **GraphRAG**. This is achieved by combining the precision of an AST-based knowledge graph with the fuzziness of semantic vector embeddings.
+
+### 1. Vector Embeddings (Semantic Search)
+In addition to the FTS5 Keyword Search, Shonkor calculates mathematical vectors (embeddings) for every code node's generated summary using a local Ollama embedding model. These embeddings are stored as BLOBs in SQLite. During a semantic search query, the system calculates the cosine similarity to find conceptually related nodes, even if exact keywords like "parser" or "ast" aren't used.
+
+### 2. GraphRAG Context Retrieval
+When the "Ask AI" feature is triggered, the system retrieves the top hits (either via Keyword or Semantic Search) and feeds them into the local LLM (`qwen2.5-coder`). Because these hits are AST nodes with clear boundaries (`StartLine`, `EndLine`, `Properties`), the LLM receives perfectly scoped, highly relevant context, eliminating hallucination and preventing context window overflow.

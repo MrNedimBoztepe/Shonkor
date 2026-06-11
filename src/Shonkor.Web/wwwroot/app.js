@@ -126,9 +126,46 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultsCountEl = document.getElementById('results-count');
     const resultsListEl = document.getElementById('search-results-list');
     const triggerScanBtn = document.getElementById('trigger-scan-btn');
+    const themeToggleBtn = document.getElementById('theme-toggle-btn');
+    const themeIcon = document.getElementById('theme-icon');
+
+    // Theme Toggle Logic
+    let isLightMode = window.matchMedia('(prefers-color-scheme: light)').matches;
+    if (localStorage.getItem('shonkor-theme') === 'light') isLightMode = true;
+    if (localStorage.getItem('shonkor-theme') === 'dark') isLightMode = false;
+
+    function applyTheme() {
+        if (isLightMode) {
+            document.documentElement.classList.add('theme-light');
+            document.documentElement.classList.remove('theme-dark');
+        } else {
+            document.documentElement.classList.add('theme-dark');
+            document.documentElement.classList.remove('theme-light');
+        }
+        
+        if (themeToggleBtn) {
+            themeToggleBtn.innerHTML = `<i data-lucide="${isLightMode ? 'sun' : 'moon'}" id="theme-icon"></i>`;
+        }
+        
+        if (window.lucide) window.lucide.createIcons();
+    }
+    applyTheme();
+
+    if (themeToggleBtn) {
+        themeToggleBtn.addEventListener('click', () => {
+            isLightMode = !isLightMode;
+            localStorage.setItem('shonkor-theme', isLightMode ? 'light' : 'dark');
+            applyTheme();
+        });
+    }
     
     // Capsule synthesis DOM
     const capsuleQueryInput = document.getElementById('capsule-query');
+    const typeFilter = document.getElementById('type-filter');
+    const askAiBtn = document.getElementById('ask-ai-btn');
+    const ragAnswerOverlay = document.getElementById('rag-answer-overlay');
+    const ragAnswerContent = document.getElementById('rag-answer-content');
+    const closeRagBtn = document.getElementById('close-rag-btn');
     const capsuleHopsSelect = document.getElementById('capsule-hops');
     const generateCapsuleBtn = document.getElementById('generate-capsule-btn');
     
@@ -157,6 +194,171 @@ document.addEventListener('DOMContentLoaded', () => {
     const copyCapsuleBtn = document.getElementById('copy-capsule-btn');
     const capsuleText = document.getElementById('capsule-text');
 
+    if (closeRagBtn) {
+        closeRagBtn.addEventListener('click', () => {
+            ragAnswerOverlay.classList.add('hidden');
+        });
+    }
+
+    // ===== AI Chat panel (opens over the graph; graph hidden behind) =====
+    const aiChatPanel = document.getElementById('ai-chat-panel');
+    const aiChatMessages = document.getElementById('ai-chat-messages');
+    const aiChatForm = document.getElementById('ai-chat-form');
+    const aiChatInput = document.getElementById('ai-chat-input');
+    const aiChatContext = document.getElementById('ai-chat-context');
+    const closeAiChatBtn = document.getElementById('close-ai-chat-btn');
+
+    // Node IDs (top search hits) used as RAG context for the whole chat session.
+    let aiChatContextIds = [];
+    // Running conversation transcript so follow-up questions have prior context.
+    let aiChatHistory = [];
+    // Signature of the context nodes the current conversation was started with; used to detect
+    // when a new search changed the context so the chat can reset instead of mixing sessions.
+    let aiChatSessionKey = null;
+
+    function aiChatScrollToBottom() {
+        if (aiChatMessages) aiChatMessages.scrollTop = aiChatMessages.scrollHeight;
+    }
+
+    function aiAppendMessage(role, html, isHtml = true) {
+        const el = document.createElement('div');
+        el.className = `ai-msg ${role}`;
+        if (isHtml) el.innerHTML = html; else el.textContent = html;
+        aiChatMessages.appendChild(el);
+        aiChatScrollToBottom();
+        return el;
+    }
+
+    // Render model/markdown output safely: sanitize (DOMPurify) before insertion so an answer that
+    // echoes raw HTML (e.g. from indexed file content) can't inject script. Falls back to plain text.
+    function renderMarkdownSafe(md, el) {
+        if (window.marked && window.DOMPurify) {
+            el.innerHTML = window.DOMPurify.sanitize(window.marked.parse(md));
+        } else {
+            el.textContent = md;
+        }
+    }
+
+    function openAiChat() {
+        if (!aiChatPanel) return;
+
+        // Capture the current search hits as the context for this chat session.
+        aiChatContextIds = (lastSearchResults || []).slice(0, 10)
+            .map(res => (res.Node || res.node)?.Id)
+            .filter(Boolean);
+
+        // If the context changed since the conversation started, reset the chat — otherwise a new
+        // session would carry over the old messages/transcript and ask them against the new nodes.
+        const sessionKey = aiChatContextIds.join('|');
+        if (sessionKey !== aiChatSessionKey) {
+            aiChatSessionKey = sessionKey;
+            aiChatHistory = [];
+            if (aiChatMessages) aiChatMessages.innerHTML = '';
+        }
+
+        if (aiChatContext) {
+            aiChatContext.textContent = aiChatContextIds.length
+                ? `${aiChatContextIds.length} ${window.t ? window.t('nodes') : 'nodes'}`
+                : '';
+        }
+
+        // Greeting / empty-state when there is no conversation yet.
+        if (aiChatMessages && aiChatMessages.childElementCount === 0) {
+            const hint = aiChatContextIds.length
+                ? 'Ask me anything about the nodes from your current search.'
+                : 'Run a search first so I have nodes to reason about, then ask your question here.';
+            aiChatMessages.innerHTML =
+                `<div class="ai-chat-empty"><i data-lucide="sparkles"></i><p>${hint}</p></div>`;
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        aiChatPanel.classList.remove('hidden');
+        setTimeout(() => aiChatInput && aiChatInput.focus(), 60);
+    }
+
+    function closeAiChat() {
+        if (aiChatPanel) aiChatPanel.classList.add('hidden');
+    }
+
+    async function sendAiChatQuestion() {
+        const question = (aiChatInput.value || '').trim();
+        if (!question) return;
+
+        // Clear the empty-state greeting on first real message.
+        const empty = aiChatMessages.querySelector('.ai-chat-empty');
+        if (empty) empty.remove();
+
+        aiAppendMessage('user', escapeHtml(question), true);
+        aiChatInput.value = '';
+        aiChatInput.style.height = 'auto';
+
+        if (aiChatContextIds.length === 0) {
+            aiAppendMessage('error', 'No context nodes available. Please run a search first.', false);
+            return;
+        }
+
+        // Record the turn and build a transcript-aware query (last few turns) so the
+        // model can answer follow-ups in context. The endpoint is stateless, so we pass
+        // the short transcript as the query alongside the same context nodes.
+        aiChatHistory.push({ role: 'user', text: question });
+        const recent = aiChatHistory.slice(-6);
+        const composedQuery = recent.length > 1
+            ? recent.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n')
+            : question;
+
+        const thinking = aiAppendMessage('assistant',
+            `<div style="display:flex; align-items:center; gap:0.5rem;"><div class="spinner" style="width:16px; height:16px; border-width:2px;"></div><span>Thinking…</span></div>`, true);
+
+        try {
+            const res = await fetch('/api/ask', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Project-Name': activeProjectName.textContent
+                },
+                body: JSON.stringify({ query: composedQuery, nodeIds: aiChatContextIds })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                const answer = data.response || 'No answer.';
+                aiChatHistory.push({ role: 'assistant', text: answer });
+                renderMarkdownSafe(answer, thinking);
+            } else {
+                // Most failures here are the AI backend (Ollama) being unreachable.
+                thinking.className = 'ai-msg error';
+                thinking.textContent = res.status >= 500
+                    ? "Couldn't reach the AI backend. Make sure Ollama is running with the configured model, then try again."
+                    : `Error: ${await res.text()}`;
+            }
+        } catch (err) {
+            console.error('Ask AI Error:', err);
+            thinking.className = 'ai-msg error';
+            thinking.textContent = "Couldn't reach the AI backend. Make sure Ollama is running, then try again.";
+        }
+        aiChatScrollToBottom();
+    }
+
+    if (askAiBtn) {
+        askAiBtn.addEventListener('click', openAiChat);
+    }
+    if (closeAiChatBtn) {
+        closeAiChatBtn.addEventListener('click', closeAiChat);
+    }
+    if (aiChatForm) {
+        aiChatForm.addEventListener('submit', (e) => { e.preventDefault(); sendAiChatQuestion(); });
+    }
+    if (aiChatInput) {
+        // Enter sends, Shift+Enter inserts a newline; textarea auto-grows.
+        aiChatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiChatQuestion(); }
+        });
+        aiChatInput.addEventListener('input', () => {
+            aiChatInput.style.height = 'auto';
+            aiChatInput.style.height = Math.min(aiChatInput.scrollHeight, 140) + 'px';
+        });
+    }
+
     // Project Manager DOM
     const activeProjectBtn = document.getElementById('active-project-btn');
     const activeProjectName = document.getElementById('active-project-name');
@@ -164,8 +366,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const dropdownSearchInput = document.getElementById('dropdown-search-input');
     const dropdownProjectList = document.getElementById('dropdown-project-list');
     const openSettingsBtn = document.getElementById('open-settings-btn');
+    const openAdminBtn = document.getElementById('open-admin-btn');
     const projectModal = document.getElementById('project-modal');
+    const adminModal = document.getElementById('admin-modal');
     const closeProjectModalBtn = document.getElementById('close-project-modal-btn');
+    const closeAdminModalBtn = document.getElementById('close-admin-modal-btn');
     const projectListEl = document.getElementById('project-list');
     
     // New project registration inputs
@@ -480,6 +685,22 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (item.type === 'Decision') dCol.appendChild(card);
             else if (item.type === 'Milestone') mCol.appendChild(card);
         });
+
+        // Per-column empty states so a board with no items isn't four blank columns.
+        const emptyHints = [
+            [qCol, 'No open questions yet.'],
+            [tCol, 'No tasks recorded yet.'],
+            [dCol, 'No decisions logged yet.'],
+            [mCol, 'No milestones yet.']
+        ];
+        for (const [col, hint] of emptyHints) {
+            if (col.childElementCount === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'kanban-empty';
+                empty.textContent = hint;
+                col.appendChild(empty);
+            }
+        }
     }
 
     // Persist a new status for an interaction node, then refresh the board.
@@ -504,9 +725,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Search
-    const typeFilter = document.getElementById('type-filter');
+    const semanticToggleBtn = document.getElementById('semantic-toggle-btn');
+    if (semanticToggleBtn) {
+        semanticToggleBtn.addEventListener('click', () => {
+            const isActive = semanticToggleBtn.classList.toggle('active');
+            semanticToggleBtn.classList.toggle('glow-purple');
+            
+            semanticToggleBtn.innerHTML = `<i data-lucide="${isActive ? 'brain' : 'network'}"></i>`;
+            if (window.lucide) window.lucide.createIcons();
+            
+            if (isActive) {
+                semanticToggleBtn.title = window.t("Semantic Search Active");
+                globalSearchInput.placeholder = window.t("Semantic query (AI)...");
+            } else {
+                semanticToggleBtn.title = window.t("Keyword Search Active");
+                globalSearchInput.placeholder = window.t("Quick graph search... (FTS5 matched)");
+            }
+        });
+    }
 
-    searchBtn.addEventListener('click', performSearch);
+    searchBtn.addEventListener('click', (e) => performSearch(e));
     globalSearchInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') performSearch();
     });
@@ -708,6 +946,253 @@ document.addEventListener('DOMContentLoaded', () => {
             dropdownProjectList.appendChild(li);
         });
     }
+
+    // ============================
+    // ============================
+    // ADMIN MODAL (B2B SaaS)
+    // ============================
+
+    if (openAdminBtn) {
+        openAdminBtn.addEventListener('click', () => {
+            document.querySelectorAll('.modal-tab').forEach(t => {
+                if (t.dataset.tab?.startsWith('admin')) t.classList.remove('active');
+            });
+            document.querySelectorAll('.modal-tab-content').forEach(c => {
+                if (c.id.startsWith('admin')) c.classList.remove('active');
+            });
+            const orgsTabBtn = document.querySelector('.modal-tab[data-tab="admin-orgs-tab"]');
+            const orgsTabContent = document.getElementById('admin-orgs-tab');
+            if (orgsTabBtn) orgsTabBtn.classList.add('active');
+            if (orgsTabContent) orgsTabContent.classList.add('active');
+
+            loadAdminData();
+            adminModal.classList.remove('hidden');
+        });
+    }
+
+    if (closeAdminModalBtn) {
+        closeAdminModalBtn.addEventListener('click', () => {
+            adminModal.classList.add('hidden');
+            document.getElementById('new-token-display').classList.add('hidden');
+        });
+    }
+
+    // Modal Tabs logic (works for both modals)
+    document.querySelectorAll('.modal-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            const tabId = tab.getAttribute('data-tab');
+            const parentHeader = tab.closest('.modal-header');
+            const parentBody = tab.closest('.modal-container').querySelector('.modal-body');
+
+            parentHeader.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+            parentBody.querySelectorAll('.modal-tab-content').forEach(c => c.classList.remove('active'));
+
+            tab.classList.add('active');
+            const targetContent = document.getElementById(tabId);
+            if (targetContent) targetContent.classList.add('active');
+        });
+    });
+
+    async function loadAdminData() {
+        try {
+            const orgsResponse = await fetch('/api/admin/orgs');
+            if (orgsResponse.ok) {
+                const orgs = await orgsResponse.json();
+                renderOrgsList(orgs);
+                updateUserOrgSelects(orgs);
+                
+                // If there are orgs, load users for the first one by default
+                const filterOrgSelect = document.getElementById('filter-users-org');
+                if (orgs.length > 0 && !filterOrgSelect.value) {
+                    filterOrgSelect.value = orgs[0].id;
+                    loadUsers(orgs[0].id);
+                } else if (filterOrgSelect.value) {
+                    loadUsers(filterOrgSelect.value);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load admin data', error);
+            showToast('Failed to load admin data');
+        }
+    }
+
+    function renderOrgsList(orgs) {
+        const orgsList = document.getElementById('orgs-list');
+        orgsList.innerHTML = '';
+        if (orgs.length === 0) {
+            orgsList.innerHTML = '<div class="empty-state">No organizations found.</div>';
+            return;
+        }
+
+        orgs.forEach(org => {
+            const li = document.createElement('div');
+            li.className = 'plugin-item';
+            li.innerHTML = `
+                <div class="plugin-info">
+                    <div class="plugin-name"><i data-lucide="building"></i> ${org.name}</div>
+                    <div class="plugin-desc">ID: ${org.id}</div>
+                </div>
+            `;
+            orgsList.appendChild(li);
+        });
+        lucide.createIcons();
+    }
+
+    function updateUserOrgSelects(orgs) {
+        const createSelect = document.getElementById('new-user-org');
+        const filterSelect = document.getElementById('filter-users-org');
+        
+        // Preserve selections if possible
+        const createVal = createSelect.value;
+        const filterVal = filterSelect.value;
+
+        createSelect.innerHTML = '<option value="">Select Organization...</option>';
+        filterSelect.innerHTML = '<option value="">Select Organization to view users...</option>';
+
+        orgs.forEach(org => {
+            const opt1 = document.createElement('option');
+            opt1.value = org.id;
+            opt1.textContent = org.name;
+            createSelect.appendChild(opt1);
+
+            const opt2 = document.createElement('option');
+            opt2.value = org.id;
+            opt2.textContent = org.name;
+            filterSelect.appendChild(opt2);
+        });
+
+        if (createVal) createSelect.value = createVal;
+        if (filterVal) filterSelect.value = filterVal;
+    }
+
+    async function loadUsers(orgId) {
+        if (!orgId) return;
+        try {
+            const res = await fetch(`/api/admin/users/${orgId}`);
+            if (res.ok) {
+                const users = await res.json();
+                renderUsersList(users);
+            }
+        } catch (error) {
+            console.error('Failed to load users', error);
+        }
+    }
+
+    function renderUsersList(users) {
+        const usersList = document.getElementById('users-list');
+        usersList.innerHTML = '';
+        if (users.length === 0) {
+            usersList.innerHTML = '<div class="empty-state">No users found for this organization.</div>';
+            return;
+        }
+
+        users.forEach(user => {
+            const li = document.createElement('div');
+            li.className = 'plugin-item';
+            li.innerHTML = `
+                <div class="plugin-info">
+                    <div class="plugin-name"><i data-lucide="user"></i> ${user.username}</div>
+                    <div class="plugin-desc">ID: ${user.id} | GitHub: ${user.gitHubUsername || 'None'}</div>
+                </div>
+                <div class="plugin-actions">
+                    <button class="glass-btn hover-glow-red icon-only-btn" onclick="deleteUser('${user.id}')" title="Delete User">
+                        <i data-lucide="trash-2"></i>
+                    </button>
+                </div>
+            `;
+            usersList.appendChild(li);
+        });
+        lucide.createIcons();
+    }
+
+    document.getElementById('create-org-btn')?.addEventListener('click', async () => {
+        const input = document.getElementById('new-org-name');
+        const name = input.value.trim();
+        if (!name) return;
+
+        try {
+            const res = await fetch('/api/admin/orgs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            if (res.ok) {
+                input.value = '';
+                showToast('Organization created successfully');
+                loadAdminData();
+            } else {
+                showToast('Failed to create organization');
+            }
+        } catch (error) {
+            console.error(error);
+            showToast('Error creating organization');
+        }
+    });
+
+    document.getElementById('create-user-btn')?.addEventListener('click', async () => {
+        const orgId = document.getElementById('new-user-org').value;
+        const username = document.getElementById('new-user-name').value.trim();
+        const github = document.getElementById('new-user-github').value.trim();
+
+        if (!orgId || !username) {
+            showToast('Please provide an organization and username');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/admin/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ organizationId: orgId, username, githubUsername: github })
+            });
+
+            if (res.ok) {
+                const user = await res.json();
+                document.getElementById('new-user-name').value = '';
+                document.getElementById('new-user-github').value = '';
+                
+                // Show PAT
+                const tokenDisplay = document.getElementById('new-token-display');
+                const tokenInput = document.getElementById('new-pat-input');
+                tokenInput.value = user.apiToken;
+                tokenDisplay.classList.remove('hidden');
+
+                // Reload users if the current view is for this org
+                if (document.getElementById('filter-users-org').value === orgId) {
+                    loadUsers(orgId);
+                }
+                
+                showToast('User created and token generated');
+            } else {
+                showToast('Failed to create user');
+            }
+        } catch (error) {
+            console.error(error);
+            showToast('Error creating user');
+        }
+    });
+
+    document.getElementById('filter-users-org')?.addEventListener('change', (e) => {
+        loadUsers(e.target.value);
+    });
+
+    window.deleteUser = async function(userId) {
+        if (!confirm('Are you sure you want to delete this user? Their token will be revoked immediately.')) return;
+        
+        try {
+            const res = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+            if (res.ok) {
+                showToast('User deleted successfully');
+                const orgId = document.getElementById('filter-users-org').value;
+                if (orgId) loadUsers(orgId);
+            } else {
+                showToast('Failed to delete user');
+            }
+        } catch (error) {
+            console.error(error);
+            showToast('Error deleting user');
+        }
+    };
 
     // ============================
     // SETTINGS MODAL (Config + Plugins)
@@ -1286,16 +1771,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // PERFORM FTS5 GRAPH SEARCH
-            console.error(window.t("Error loading statistics:"), err);
-        }
-    }
-
     let currentSearchOffset = 0;
     let currentSearchLimit = 20;
     let currentSearchQuery = "";
 
-    async function performSearch(query, isLoadMore = false) {
-        if (!query) return;
+    async function performSearch(queryOrEvent, isLoadMore = false) {
+        let query = (typeof queryOrEvent === 'string') ? queryOrEvent : globalSearchInput.value.trim();
+        if (queryOrEvent instanceof Event) {
+            isLoadMore = false; // ensure event doesn't bleed into loadMore
+        }
+        
+        if (!query && !isLoadMore) return;
 
         hideDashboard();
 
@@ -1322,8 +1808,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             
             const typeFilter = document.getElementById('type-filter').value;
-            let url = `/api/search?q=${encodeURIComponent(currentSearchQuery)}&limit=${currentSearchLimit}&offset=${currentSearchOffset}`;
-            if (typeFilter) {
+            const semanticToggleBtn = document.getElementById('semantic-toggle-btn');
+            const isSemantic = semanticToggleBtn && semanticToggleBtn.classList.contains('active');
+            
+            let url = isSemantic 
+                ? `/api/search/semantic?q=${encodeURIComponent(currentSearchQuery)}&limit=${currentSearchLimit}`
+                : `/api/search?q=${encodeURIComponent(currentSearchQuery)}&limit=${currentSearchLimit}&offset=${currentSearchOffset}`;
+                
+            if (typeFilter && !isSemantic) {
                 url += `&type=${encodeURIComponent(typeFilter)}`;
             }
             
@@ -1347,6 +1839,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateLoadingState(window.t("Building graph..."), true);
                 renderSearchInGraph(lastSearchResults);
                 updateFilterBar();
+
+                // Show Ask AI button if results are found
+                if (askAiBtn && lastSearchResults.length > 0) {
+                    askAiBtn.classList.remove('hidden');
+                }
             } else {
                 updateLoadingState(null, false);
                 resultsCountEl.textContent = window.t("Search failed.");
@@ -1354,7 +1851,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (err) {
             updateLoadingState(null, false);
-            resultsCountEl.textContent = window.t("Search error.");
+            resultsCountEl.textContent = "Search error: " + (err.message || String(err));
             console.error(window.t("Search failed:"), err);
         }
     }
@@ -1609,15 +2106,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const properties = node.Properties || {};
         
         let hasProps = false;
+        // Core fields are shown elsewhere; match case-insensitively (keys arrive as camelCase).
+        const coreFields = new Set(["content", "filepath", "startline", "endline", "contenthash"]);
         for (const [key, value] of Object.entries(properties)) {
-            // Skip core fields already printed
-            if (["Content", "FilePath", "StartLine", "EndLine", "ContentHash"].includes(key)) {
-                continue;
-            }
+            if (coreFields.has(key.toLowerCase())) continue;
+
+            // Skip empty / null-ish values so the drawer doesn't show "startLine null" noise.
+            if (value === null || value === undefined) continue;
+            const v = String(value).trim();
+            if (v === '' || v.toLowerCase() === 'null') continue;
+
             hasProps = true;
             const propEl = document.createElement('div');
             propEl.className = 'prop-pill';
-            propEl.innerHTML = `<span class="prop-key">${key}</span><span class="prop-val">${value}</span>`;
+            propEl.innerHTML = `<span class="prop-key">${escapeHtml(key)}</span><span class="prop-val">${escapeHtml(v)}</span>`;
             drawerNodeProperties.appendChild(propEl);
         }
 
@@ -1686,7 +2188,13 @@ document.addEventListener('DOMContentLoaded', () => {
             codeElement.textContent = `// No source code or block contents available for this [${node.Type}] structural definition.`;
         }
         
-        Prism.highlightElement(codeElement);
+        try {
+            if (window.Prism) {
+                Prism.highlightElement(codeElement);
+            }
+        } catch (e) {
+            console.error("Prism syntax highlighting failed:", e);
+        }
 
         // Slide in Drawer
         detailsDrawer.classList.remove('hidden');

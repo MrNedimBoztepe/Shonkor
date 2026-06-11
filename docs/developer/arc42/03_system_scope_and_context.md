@@ -1,44 +1,44 @@
-# arc42 Kapitel 3: Kontextabgrenzung 🌐
+# arc42 Chapter 3: System Scope and Context 🌐
 
-Dieses Kapitel beschreibt die Schnittstellen von Shonkor zu seiner Umwelt.
+This chapter describes the interfaces of Shonkor with its environment.
 
 ---
 
-## 3.1 Fachlicher Kontext
+## 3.1 Business Context
 
-Aus fachlicher Sicht fungiert Shonkor als Vermittler zwischen dem physischen Quellcode eines Entwicklers und einem Large Language Model (LLM).
+From a business perspective, Shonkor acts as an intermediary between a developer's physical source code and a Large Language Model (LLM).
 
 ```mermaid
 graph LR
-    Dev[Entwickler] -->|Nutzt Dashboard| Web[Shonkor Web]
+    Dev[Developer] -->|Uses Dashboard| Web[Shonkor Web]
     
-    Workspace[Lokales Projekt] -->|Liest Quellcode| CLI[Shonkor CLI / MCP Server]
-    CLI -->|JSON-RPC via stdio| LLM_Lokal[Lokale KI z.B. Antigravity]
+    Workspace[Local Project] -->|Reads Source Code| CLI[Shonkor CLI / MCP Server]
+    CLI -->|JSON-RPC via stdio| LLM_Lokal[Local AI e.g. Antigravity]
     
     GitHub[GitHub Webhooks] -->|Push & PR Events| Web
-    Web -->|Liest Cloud Repositories| CloudWorkspace[SaaS Repositories]
+    Web -->|Reads Cloud Repositories| CloudWorkspace[SaaS Repositories]
     
-    LLM_Remote[Externe Cloud-KI] -->|API Key Auth| Web
-    Web -->|Generiert Capsule| LLM_Remote
+    LLM_Remote[External Cloud AI] -->|API Key Auth| Web
+    Web -->|Generates Capsule| LLM_Remote
 ```
 
-* **Entwickler**: Nutzt das lokale Dashboard oder KI-Agenten zur Architektur-Exploration.
-* **Workspace (Projekt-Quellcode)**: Physische Quelldateien (Lokal oder im SaaS-Tenant).
-* **Lokale KI (z.B. Antigravity/Claude Code)**: Greift über das Model Context Protocol (MCP) direkt auf die `Shonkor.CLI` zu. Das Projekt wird aus dem Arbeitsverzeichnis des Clients abgeleitet (kein globales aktives Flag).
-* **GitHub (SaaS)**: Sendet Push- und Installations-Webhooks (HMAC-signiert via `X-Hub-Signature-256`), woraufhin Shonkor Projekte (Tenants) anlegt und inkrementell indiziert.
-* **Externe Cloud-KI (z.B. ChatGPT)**: Ruft die `/api/rag/query` SaaS-Endpunkte mit `X-API-Key` Authentifizierung auf.
+* **Developer**: Uses the local dashboard or AI agents for architecture exploration.
+* **Workspace (Project Source Code)**: Physical source files (local or in the SaaS tenant).
+* **Local AI (e.g., Antigravity/Claude Code)**: Accesses the `Shonkor.CLI` directly via the Model Context Protocol (MCP). The project is derived from the client's working directory (no global active flag).
+* **GitHub (SaaS)**: Sends push and installation webhooks (HMAC-signed via `X-Hub-Signature-256`), triggering Shonkor to create projects (tenants) and incrementally index them.
+* **External Cloud AI (e.g., ChatGPT)**: Calls the `/api/rag/query` SaaS endpoints with `X-API-Key` authentication.
 
 ---
 
-## 3.2 Technischer Kontext
+## 3.2 Technical Context
 
-Shonkor kann sowohl als **lokales Entwickler-Werkzeug** als auch als **Multi-Tenant SaaS-Plattform** betrieben werden.
+Shonkor can be operated both as a **local developer tool** and as a **multi-tenant SaaS platform**.
 
-* **Dateisystem-Crawler (Infrastructure)**: Liest Quellcodedateien ein und generiert inkrementell den Graphen.
-* **SQLite-Speicher**: Speichert Knoten/Kanten pro Tenant isoliert (`shonkor.db`) und indiziert Code-Ausschnitte via FTS5.
-* **Web-API (ASP.NET Core)**: 
-  * Liefert das Dashboard aus.
-  * `ApiKeyMiddleware`: Schirmt SaaS-Endpunkte ab (konstantzeitiger Key-Vergleich, Loopback-Bypass nur in Development) und leitet Anfragen automatisch auf die Tenant-DB um.
-  * `WebhookEndpoints`: Nimmt GitHub-Events (`install`, `push`, `pr`) entgegen und verifiziert deren HMAC-Signatur (fail-closed ohne Secret).
-  * `GraphRagEndpoints`: Bietet KIs die direkte Schnittstelle zur Kapsel-Generierung.
-* **MCP Server (CLI)**: Stellt KI-Editoren wie Claude Code oder Antigravity über `stdio` einen direkten Zugriff auf den lokalen Graphen bereit. Das aktive Projekt wird aus dem Arbeitsverzeichnis abgeleitet; token-effiziente Tools (`locate`, `search_graph`, `get_subgraph`).
+* **File System Crawler (Infrastructure)**: Reads source code files and incrementally generates the graph.
+* **SQLite Storage**: Stores nodes/edges isolated per tenant (`shonkor.db`) and indexes code snippets via FTS5.
+* **Web API (ASP.NET Core)**: 
+  * Serves the dashboard.
+  * `ApiKeyMiddleware`: Shields SaaS endpoints (constant-time key comparison, loopback bypass only in development) and automatically routes requests to the tenant DB.
+  * `WebhookEndpoints`: Receives GitHub events (`install`, `push`, `pr`) and verifies their HMAC signature (fail-closed without a secret).
+  * `GraphRagEndpoints`: Provides AIs with a direct interface for capsule generation.
+* **MCP Server (CLI)**: Provides AI editors like Claude Code or Antigravity with direct access to the local graph via `stdio`. The active project is derived from the working directory; token-efficient tools (`locate`, `search_graph`, `get_subgraph`).

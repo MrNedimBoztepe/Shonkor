@@ -1,34 +1,66 @@
 # Shonkor Setup & Onboarding Guide ⚙️
 
-Dieses Handbuch beschreibt die Erstinstallation, die Konfiguration und den schnellen Einstieg mit Shonkor in Ihrem lokalen Projekt-Workspace.
+This manual describes the initial installation, configuration, and quick start with Shonkor in your local project workspace.
 
 ---
 
-## 🚀 Erste Schritte & Installation
+## 🚀 First Steps & Installation
 
-Da Shonkor als **100% self-contained** Lösung konzipiert ist, benötigt es weder einen externen Datenbank-Server noch komplexe Docker-Container. Alles, was Sie brauchen, ist das .NET 10 SDK.
+Since Shonkor is designed as a **100% self-contained** solution, it requires neither an external database server nor complex Docker containers. All you need is the .NET 10 SDK.
 
-### Schritt 1: Kompilieren
-Wechseln Sie in das Root-Verzeichnis des Projekts und führen Sie den Build-Befehl aus:
+### Step 1: Compile
+Navigate to the root directory of the project and execute the build command:
 ```powershell
 dotnet build
 ```
-Nach erfolgreichem Build stehen Ihnen das CLI-Tool und das Web Dashboard zur Verfügung.
+After a successful build, the CLI tool and the Web Dashboard will be available to you.
+
+### Step 2: Local LLM Setup (Ollama)
+For semantic search and the built-in "Ask AI" GraphRAG feature to work, Shonkor requires a local Ollama instance.
+1. Install [Ollama](https://ollama.com/).
+2. Run it locally (it defaults to port `11434`).
+3. Pull the default coder model:
+   ```powershell
+   ollama run qwen2.5-coder
+   ```
+*(If you do not install Ollama, Shonkor will still work with FTS5 Keyword Search, but Semantic Search and Ask AI will be disabled).*
 
 ---
 
-## 🛠️ Konfiguration (`shonkor.json`)
+## 🐳 Docker Deployment (Alternative)
 
-Der erste Schritt in jedem neuen Projekt-Workspace ist die Initialisierung der Konfigurationsdatei. Öffnen Sie Ihr Terminal im Root-Verzeichnis Ihres Zielprojekts und führen Sie aus:
+Instead of compiling Shonkor locally, you can run the entire stack (Shonkor Web Dashboard + Ollama) using Docker Compose.
+
+### Step 1: Configure Workspace
+Rename `.env.example` to `.env` in the root directory.
+Edit `.env` to point `TARGET_PROJECTS_DIR` to your primary projects folder (e.g., `C:\Projects` or `~/workspace`). This folder will be mounted into the container at `/projects`.
+
+### Step 2: Start the Stack
+Run the following command from the repository root:
+```bash
+docker-compose up -d --build
+```
+This will:
+1. Build the Shonkor .NET container.
+2. Spin up an Ollama container and automatically pull the `qwen2.5-coder` model.
+3. Expose the dashboard at `http://localhost:5290`.
+
+*Note: If you have an NVIDIA GPU, edit `docker-compose.yml` and uncomment the `deploy` section under the `ollama` service for massive performance gains.*
+
+---
+
+## 🛠️ Configuration (`shonkor.json`)
+
+The first step in any new project workspace is the initialization of the configuration file. Open your terminal in the root directory of your target project and run:
 
 ```powershell
-# Erstellt eine Standard shonkor.json im aktuellen Verzeichnis
+# Creates a default shonkor.json in the current directory
 shonkor init
 ```
 
-### Die Struktur der `shonkor.json`
+### The Structure of `shonkor.json`
 
-Die erzeugte Datei hat folgendes Format:
+The generated file has the following format:
 ```json
 {
   "databasePath": "shonkor.db",
@@ -45,81 +77,81 @@ Die erzeugte Datei hat folgendes Format:
 }
 ```
 
-### Erklärung der Parameter:
-1. **`databasePath`**: Der Pfad zu der lokalen SQLite-Datenbank. Standardmäßig wird `shonkor.db` direkt im aktuellen Verzeichnis angelegt. Sie können diesen Pfad beliebig ändern (z. B. in ein verstecktes Verzeichnis `.shonkor/brain.db`), um Ihren Workspace sauber zu halten.
-2. **`excludePatterns`**: Eine Liste von Glob-Mustern für Dateien und Verzeichnisse, die der Crawler ignorieren soll. 
+### Explanation of Parameters:
+1. **`databasePath`**: The path to the local SQLite database. By default, `shonkor.db` is created directly in the current directory. You can change this path as desired (e.g., to a hidden directory `.shonkor/brain.db`) to keep your workspace clean.
+2. **`excludePatterns`**: A list of glob patterns for files and directories that the crawler should ignore. 
    > [!TIP]
-   > **Performanz-Tipp**: Schließen Sie Build-Ordner (`bin`, `obj`), Abhängigkeiten (`node_modules`, `vendor`) und Versionskontrollordner (`.git`) konsequent aus. Dies beschleunigt den Crawler massiv und verhindert unnötigen Ballast in der Graphdatenbank.
+   > **Performance Tip**: Consistently exclude build folders (`bin`, `obj`), dependencies (`node_modules`, `vendor`), and version control folders (`.git`). This massively accelerates the crawler and prevents unnecessary bloat in the graph database.
 
 ---
 
-## 🔍 Erstmalige Indexierung
+## 🔍 Initial Indexing
 
-Nachdem Sie Ihre `shonkor.json` konfiguriert haben, führen Sie die Indexierung aus:
+After you have configured your `shonkor.json`, execute the indexing:
 
 ```powershell
 shonkor index .
 ```
 
-Der Crawler analysiert nun rekursiv alle unterstützten Dateien, extrahiert die syntaktischen Strukturen und speichert das Ergebnis ab. Sie sehen am Ende eine detaillierte Zusammenfassung der gescannten Dateien, erzeugten Knoten (Klassen, Methoden) und Kanten (Abhängigkeiten, Implementierungen).
+The crawler will now recursively analyze all supported files, extract the syntactic structures, and save the result. At the end, you will see a detailed summary of the scanned files, generated nodes (classes, methods), and edges (dependencies, implementations).
 
-### Inkrementelle Updates (SHA256)
-Bei jedem weiteren Aufruf von `shonkor index` verwendet das System SHA256-Content-Hashes, um geänderte Dateien zu erkennen. Nur modifizierte Dateien werden gelöscht und neu geparst – unveränderte Dateien werden übersprungen. Dies spart wertvolle Rechenzeit bei großen Codebasen. Binärdateien werden anhand von NUL-Bytes im Header erkannt und übersprungen.
+### Incremental Updates (SHA256)
+With each subsequent call to `shonkor index`, the system uses SHA256 content hashes to detect changed files. Only modified files are deleted and re-parsed – unchanged files are skipped. This saves valuable computing time in large codebases. Binary files are detected based on NUL bytes in the header and are skipped.
 
 ---
 
 ## 🖥️ Web Dashboard
 
-Für die visuelle Exploration starten Sie das Dashboard:
+For visual exploration, start the dashboard:
 ```powershell
 cd src/Shonkor.Web
 dotnet run
 # -> http://localhost:5290
 ```
-Das Dashboard bietet Graph-Visualisierung, Suche, Kapsel-Erstellung sowie die Verwaltung mehrerer Projekte und (optionaler) Plugins.
+The dashboard offers graph visualization, search, capsule creation, as well as the management of multiple projects and (optional) plugins.
 
 ---
 
-## 🗂️ Multi-Projekt-Registry (`projects.json`)
+## 🗂️ Multi-Project Registry (`projects.json`)
 
-Shonkor kann mehrere Codebasen parallel verwalten. Die Registry liegt im Workspace-Root als `projects.json`:
+Shonkor can manage multiple codebases in parallel. The registry is located in the workspace root as `projects.json`:
 ```json
 {
   "Projects": [
-    { "Name": "MeinProjekt", "Path": "C:\\Projects\\MeinProjekt", "DatabasePath": "C:\\Projects\\MeinProjekt\\shonkor.db", "ApiKey": "" }
+    { "Name": "MyProject", "Path": "C:\\Projects\\MyProject", "DatabasePath": "C:\\Projects\\MyProject\\shonkor.db", "ApiKey": "" }
   ],
-  "ActiveProjectName": "MeinProjekt"
+  "ActiveProjectName": "MyProject"
 }
 ```
 > [!IMPORTANT]
-> `projects.json` kann API-Keys enthalten und ist daher **gitignored**. Niemals committen.
+> `projects.json` can contain API keys and is therefore **gitignored**. Never commit it.
 
-* **Web-Dashboard**: nutzt `ActiveProjectName` als angezeigtes Projekt (umschaltbar in der UI).
-* **MCP-Server**: ignoriert `ActiveProjectName` und leitet das Projekt **aus dem Arbeitsverzeichnis** ab. Beide sind entkoppelt – das Dashboard beeinflusst nicht, welches Projekt der KI-Assistent sieht.
+* **Web Dashboard**: uses `ActiveProjectName` as the displayed project (switchable in the UI).
+* **MCP Server**: ignores `ActiveProjectName` and derives the project **from the working directory**. Both are decoupled – the dashboard does not affect which project the AI assistant sees.
 
 ---
 
-## 🔐 Sicherheit & Secrets
+## 🔐 Security & Secrets
 
-Shonkor ist primär ein **lokales** Werkzeug. Für Proxy-/SaaS-Betrieb beachten:
+Shonkor is primarily a **local** tool. For proxy/SaaS operation, please note:
 
-* **Secrets niemals in Dateien**: API-Keys und Webhook-Secrets gehören in User-Secrets oder Umgebungsvariablen, nicht in `appsettings.json`/`projects.json`:
+* **Never put secrets in files**: API keys and webhook secrets belong in user secrets or environment variables, not in `appsettings.json`/`projects.json`:
   ```text
-  ApiKeys__sk-dein-key=ProjektName
-  GitHub__WebhookSecret=<dein-secret>
+  ApiKeys__sk-your-key=ProjectName
+  GitHub__WebhookSecret=<your-secret>
   SaaS__TenantRoot=C:\Projects\SaaS   # optional
   ```
-* **Loopback-Bypass**: Das lokale Dashboard darf den API-Key nur in `Development` überspringen. In Produktion (hinter Proxy) wird immer ein gültiger Key verlangt. Override: `Security:AllowLocalBypass`.
-* **Dynamische Plugins (RCE-Risiko)**: Die Laufzeit-Kompilierung von C#-Plugins ist **standardmäßig deaktiviert**. Aktivierung nur bewusst über `Security:EnablePlugins=true`; der Plugin-Wizard-Endpoint ist zusätzlich auf lokale/Development-Zugriffe beschränkt.
-* **Dateisystem-Browser**: `/api/browse` ist nur lokal/in Development erreichbar (`Security:AllowFilesystemBrowse`).
-* **Webhooks**: `/api/webhooks/github/*` verifizieren `X-Hub-Signature-256` (HMAC-SHA256) gegen `GitHub:WebhookSecret` und schlagen ohne Secret fehl (fail-closed).
+* **Loopback Bypass**: The local dashboard is only allowed to bypass the API key in `Development`. In production (behind a proxy), a valid key is always required. Override: `Security:AllowLocalBypass`.
+* **Dynamic Plugins (RCE Risk)**: The runtime compilation of C# plugins is **disabled by default**. Only activate consciously via `Security:EnablePlugins=true`; the plugin wizard endpoint is additionally restricted to local/Development access.
+* **File System Browser**: `/api/browse` is only accessible locally/in Development (`Security:AllowFilesystemBrowse`).
+* **Webhooks**: `/api/webhooks/github/*` verify `X-Hub-Signature-256` (HMAC-SHA256) against `GitHub:WebhookSecret` and fail without a secret (fail-closed).
 
 ---
 
-## 🤖 MCP-Server registrieren
+## 🤖 Registering the MCP Server
 
-Damit KI-Assistenten (Claude, Antigravity) den Graphen live abfragen können:
+So that AI assistants (Claude, Antigravity) can query the graph live:
 ```powershell
 dotnet run --project src/Shonkor.CLI -- mcp install
 ```
-Anschließend den Client neu starten. Details: [LLM Integration Manual](llm_integration.md).
+Then restart the client. Details: [LLM Integration Manual](llm_integration.md).

@@ -24,8 +24,14 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-typescript.min.js"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-php.min.js"></script>
     
+    <!-- Marked.js for RAG Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <!-- DOMPurify to sanitize AI/markdown HTML before insertion (XSS protection) -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+
     <!-- Custom app.css?v=2.0.12 -->
-    <link rel="stylesheet" href="/app.css?v=2.0.15">
+    <link rel="stylesheet" href="/app.css?v=2.0.23">
 </head>
 <body>
     <div class="stars"></div>
@@ -37,7 +43,7 @@
         <header class="glass-header">
             <div class="logo-section">
                 <div class="logo-icon">
-                    <i data-lucide="brain-circuit" class="glow-icon"></i>
+                    <img src="/shonkor_logo.png" alt="Shonkor Falcon Logo" style="width: 32px; height: 32px; border-radius: 6px; box-shadow: 0 0 10px rgba(14, 165, 233, 0.5);">
                 </div>
                 <div class="logo-text">
                     <h1>Shon<span>kor</span></h1>
@@ -89,13 +95,27 @@
                 </div>
                 <input type="hidden" id="type-filter" value="">
                 <i data-lucide="search" class="search-icon"></i>
-                <input type="text" id="global-search" data-i18n-placeholder="quick_search" placeholder="Quick graph search... (FTS5 matched)" autocomplete="off">
+                <input type="text" id="global-search" data-i18n-placeholder="quick_search" placeholder="Search graph... (FTS5 / AI Semantic)" autocomplete="off">
+                <button id="semantic-toggle-btn" class="glass-btn" title="Keyword Search Active" aria-label="Toggle Semantic Search" style="margin-right: 5px;">
+                    <i data-lucide="network"></i>
+                </button>
                 <button id="search-btn" class="glow-btn" data-i18n="search">Search</button>
+                <button id="ask-ai-btn" class="glass-btn hover-glow-purple hidden" title="Ask AI based on results" style="margin-left: 5px;">
+                    <i data-lucide="sparkles"></i> Ask AI
+                </button>
             </div>
             
             <div class="header-actions">
+                <button id="theme-toggle-btn" class="glass-btn hover-glow-blue" title="Toggle Light/Dark Theme" aria-label="Toggle Theme">
+                    <i data-lucide="moon" id="theme-icon"></i>
+                </button>
+
                 <button id="open-settings-btn" class="glass-btn hover-glow-blue" title="Project Settings & Plugins" aria-label="Open project settings and plugins" aria-haspopup="dialog">
                     <i data-lucide="settings"></i>
+                </button>
+
+                <button id="open-admin-btn" class="glass-btn hover-glow-blue" title="B2B SaaS Administration" aria-label="Open user and organization administration" aria-haspopup="dialog">
+                    <i data-lucide="users"></i>
                 </button>
 
                 <div class="custom-lang-dropdown" id="lang-dropdown">
@@ -228,6 +248,36 @@
                 </div>
                 
                 <div id="network-graph" class="graph-canvas"></div>
+
+                <!-- AI CHAT PANEL — opens over the graph when "Ask AI" is pressed (graph hidden behind) -->
+                <div id="ai-chat-panel" class="ai-chat-panel hidden">
+                    <div class="ai-chat-header">
+                        <div class="ai-chat-title">
+                            <i data-lucide="sparkles"></i>
+                            <div>
+                                <h2 data-i18n="ai_chat_title">Shonkor AI</h2>
+                                <span class="ai-chat-context" id="ai-chat-context"></span>
+                            </div>
+                        </div>
+                        <button id="close-ai-chat-btn" class="glass-btn" title="Back to graph" aria-label="Close AI chat and return to graph"><i data-lucide="x"></i></button>
+                    </div>
+                    <div class="ai-chat-messages" id="ai-chat-messages">
+                        <!-- messages injected by JS -->
+                    </div>
+                    <form class="ai-chat-input-bar" id="ai-chat-form" autocomplete="off">
+                        <textarea id="ai-chat-input" rows="1" data-i18n-placeholder="ai_chat_placeholder" placeholder="Ask a question about the current context…"></textarea>
+                        <button type="submit" id="ai-chat-send" class="glow-btn" title="Send" aria-label="Send question"><i data-lucide="send"></i></button>
+                    </form>
+                </div>
+
+                <!-- RAG AI Answer Overlay -->
+                <div id="rag-answer-overlay" class="glass-panel hidden" style="position: absolute; top: 1.5rem; left: 1.5rem; width: 450px; max-height: 80vh; overflow-y: auto; z-index: 100; border: 1px solid var(--color-accent); padding: 1.2rem; box-shadow: 0 10px 30px rgba(0,0,0,0.5); backdrop-filter: blur(12px);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.5rem;">
+                        <h3 style="color: var(--color-accent); font-size: 1rem; margin: 0; display: flex; align-items: center; gap: 0.5rem;"><i data-lucide="sparkles"></i> Shonkor AI</h3>
+                        <button id="close-rag-btn" class="close-btn" aria-label="Close AI Answer"><i data-lucide="x"></i></button>
+                    </div>
+                    <div id="rag-answer-content" style="font-size: 0.85rem; line-height: 1.5; color: var(--color-text);"></div>
+                </div>
                 
                 <div class="canvas-controls">
                     <button id="drag-select-btn" class="control-btn" title="Drag Select Mode" aria-label="Toggle drag-select mode"><i data-lucide="scan"></i></button>
@@ -498,6 +548,78 @@
             </div>
         </div>
     </div>
+    <!-- MODAL FOR SAAS ADMIN -->
+    <div id="admin-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="B2B SaaS Administration">
+        <div class="modal-container project-modal-container glass-panel">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2><i data-lucide="users" class="purple-glow"></i> SaaS Administration</h2>
+                    <p>Manage Organizations, Projects, and Users.</p>
+                </div>
+                <div class="modal-tabs">
+                    <button class="modal-tab active" data-tab="admin-orgs-tab"><i data-lucide="building"></i> Organizations</button>
+                    <button class="modal-tab" data-tab="admin-users-tab"><i data-lucide="user"></i> Users & Tokens</button>
+                </div>
+                <button id="close-admin-modal-btn" class="close-btn" aria-label="Close admin dialog"><i data-lucide="x"></i></button>
+            </div>
+            
+            <div class="modal-body project-modal-body">
+                <!-- ORGANIZATIONS TAB -->
+                <div id="admin-orgs-tab" class="modal-tab-content active">
+                    <div class="setting-group">
+                        <h3><i data-lucide="plus-circle"></i> Create Organization</h3>
+                        <p class="setting-desc">Add a new agency or client organization.</p>
+                        <div style="display: flex; gap: 10px; margin-top: 10px;">
+                            <input type="text" id="new-org-name" placeholder="Organization Name" class="glass-input" style="flex:1;">
+                            <button id="create-org-btn" class="glow-btn blue-btn">Create</button>
+                        </div>
+                    </div>
+                    
+                    <div class="setting-group">
+                        <h3><i data-lucide="building"></i> Registered Organizations</h3>
+                        <div class="plugin-list" id="orgs-list">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- USERS TAB -->
+                <div id="admin-users-tab" class="modal-tab-content">
+                    <div class="setting-group">
+                        <h3><i data-lucide="user-plus"></i> Create User</h3>
+                        <p class="setting-desc">Create a new user and generate a Personal Access Token (PAT).</p>
+                        
+                        <div style="display: flex; gap: 10px; margin-top: 10px; flex-direction: column;">
+                            <select id="new-user-org" class="glass-select">
+                                <option value="">Select Organization...</option>
+                            </select>
+                            <input type="text" id="new-user-name" placeholder="Username (e.g. jdoe)" class="glass-input">
+                            <input type="text" id="new-user-github" placeholder="GitHub Username (Optional)" class="glass-input">
+                            <button id="create-user-btn" class="glow-btn blue-btn" style="align-self: flex-start;">Generate Token</button>
+                        </div>
+                        
+                        <div id="new-token-display" class="hidden" style="margin-top: 15px; padding: 15px; background: rgba(16,185,129,0.1); border: 1px solid var(--color-success); border-radius: 8px;">
+                            <p style="color: var(--color-success); margin-bottom: 5px;"><strong>Success! Token generated.</strong></p>
+                            <p style="font-size: 0.85rem; margin-bottom: 10px;">Please copy this Personal Access Token now. You won't be able to see it again!</p>
+                            <div style="display: flex; gap: 10px;">
+                                <input type="text" id="new-pat-input" readonly class="glass-input" style="flex:1; font-family: monospace; color: var(--color-success);">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3><i data-lucide="users"></i> Registered Users</h3>
+                        <select id="filter-users-org" class="glass-select" style="margin-bottom: 10px;">
+                            <option value="">Select Organization to view users...</option>
+                        </select>
+                        <div class="plugin-list" id="users-list">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- NOTIFICATION -->
     <div id="toast" class="toast hidden">
@@ -505,6 +627,6 @@
         <span id="toast-message">Message text</span>
     </div>
     <!-- Custom App JS -->
-    <script defer src="/app.js?v=2.0.15"></script>
+    <script defer src="/app.js?v=2.0.26"></script>
 </body>
 </html>

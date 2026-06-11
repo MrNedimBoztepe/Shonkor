@@ -1,128 +1,130 @@
 # Shonkor 🧠 - Precision GraphRAG & Structural Context Engine
 
-Shonkor ist ein hochpräzises, lokal ausgeführtes Indexierungs- und Abfragesystem für Code und Dokumentation, entwickelt in **.NET 10 (C#)**. Es verwendet einen **Knowledge Graph (GraphRAG)**-Ansatz auf Basis von SQLite (FTS5 + rekursive CTEs), um den logischen Kontext von Softwarearchitekturen vollständig offline und deterministisch zu erfassen und für Large Language Models (LLMs) aufzubereiten.
+Shonkor is a highly precise, locally executed indexing and query system for code and documentation, developed in **.NET 10 (C#)**. It uses a **Knowledge Graph (GraphRAG)** approach based on SQLite (FTS5 + recursive CTEs) to capture the logical context of software architectures completely offline and deterministically, and to prepare it for Large Language Models (LLMs).
 
-Im Gegensatz zu probabilistischen Vektordatenbanken garantiert Shonkor **100 % präzisen und strukturellen Kontext**. Es extrahiert Compiler-genaue Syntaxbäume (AST) mittels **Roslyn (C#)** sowie Abhängigkeiten für **JavaScript/TypeScript**, **PHP**, **Sitecore-Konfigurationen (YAML)**, **GraphQL** und **Markdown-Hierarchien**.
+Unlike probabilistic vector databases, Shonkor guarantees **100% precise and structural context**. It extracts compiler-accurate syntax trees (AST) using **Roslyn (C#)** as well as dependencies for **JavaScript/TypeScript**, **PHP**, **Sitecore configurations (YAML)**, **GraphQL**, and **Markdown hierarchies**.
 
-Neu: Shonkor verknüpft sich nativ mit **Ollama (lokal)**, um den rohen Source-Code im Hintergrund durch kleine, effiziente Modelle (z.B. `qwen2.5-coder`) in hochverdichtete KI-Summaries zu transformieren. Das senkt den Token-Bedarf für nachgelagerte RAG-Anfragen um bis zu **87 %**!
+New: Shonkor natively integrates with **Ollama (local)** to transform the raw source code in the background through small, efficient models (e.g., `qwen2.5-coder`) into highly condensed AI summaries. This reduces the token requirement for downstream RAG queries by up to **87%**!
 
 ---
 
 ## 🌟 Features
 
-* **Multi-Language AST-Parsing**:
-  * **C# (.cs)**: Volle Roslyn-Integration zur Extraktion von Namespaces, Klassen, Interfaces, Records, Structs, Enums, Properties, Konstruktoren und Methoden – inklusive Vererbung (`IMPLEMENTS`/`EXTENDS`) und **Typ-Referenzkanten** (`REFERENCES_TYPE`) für echte Impact-Analyse.
-  * **JavaScript/TypeScript (.js, .jsx, .ts, .tsx)**: Extraktion von ES-Imports, React-Komponenten und Backend-APIs.
-  * **PHP (.php, .tpl)**: Regex-basierter Modul-Parser für OXID eShop mit Modul-Extends und Smarty-Template-Blöcken.
-  * **Sitecore SCS (.yml, .yaml)**: Template- und Layout-Abhängigkeiten (Unicorn/SCS).
-  * **GraphQL (.graphql)**: Queries, Fragmente und referenzierte Templates.
-  * **Markdown (.md)**: Segmentiert Dokumente nach Überschriften und verknüpft relative Links.
-* **Cross-Technology-Linking**: Ein Post-Scan-Linker verbindet Next.js-Komponenten ↔ Sitecore-Renderings ↔ C#-Controller ↔ GraphQL-Templates und ordnet alles Helix-Modulen (`BELONGS_TO_MODULE`) zu.
-* **100 % Offline & Self-Contained**: Lokale SQLite-Datenbank (`shonkor.db`) mit FTS5-Volltextsuche und rekursiven CTE-Subgraph-Abfragen. Keine externen API-Abhängigkeiten.
-* **Token-Optimierter Context Capsule Synthesizer**: Generiert prompt-fertige Markdown-Dateien inklusive automatischer **Mermaid.js**-Architekturdiagramme.
-* **MCP-Server (Model Context Protocol)**: Stellt den Graphen direkt KI-Assistenten wie **Claude** und **Antigravity** bereit – mit token-effizienten Tools (`search_graph`, `locate`, `get_subgraph`, `generate_capsule`, `record_*`).
-* **Visual Web Dashboard**: Ein glassmorphes Web-Interface mit interaktiver 2D-Force-Directed-Graph-Visualisierung (`force-graph`, WebGL-Canvas), Live-Physics, Code-Vorschau (Prism.js), Kapsel-Creator, Projekt- und Plugin-Verwaltung.
-* **Multi-Projekt-Registry**: Mehrere Codebasen parallel verwalten (`projects.json`), jede mit eigener Datenbank.
-* **Leistungsstarke CLI**: Automatisierung über `init`, `index`, `search`, `capsule` und `mcp`.
+* **Multi-Language AST Parsing**:
+  * **C# (.cs)**: Full Roslyn integration for extracting namespaces, classes, interfaces, records, structs, enums, properties, constructors, and methods – including inheritance (`IMPLEMENTS`/`EXTENDS`) and **type reference edges** (`REFERENCES_TYPE`) for true impact analysis.
+  * **JavaScript/TypeScript (.js, .jsx, .ts, .tsx)**: Extraction of ES imports, React components, and backend APIs.
+  * **PHP (.php, .tpl)**: Regex-based module parser for OXID eShop with module extends and Smarty template blocks.
+  * **Sitecore SCS (.yml, .yaml)**: Template and layout dependencies (Unicorn/SCS).
+  * **GraphQL (.graphql)**: Queries, fragments, and referenced templates.
+  * **Markdown (.md)**: Segments documents by headings and links relative links.
+* **Cross-Technology Linking**: A post-scan linker connects Next.js components ↔ Sitecore renderings ↔ C# controllers ↔ GraphQL templates and assigns everything to Helix modules (`BELONGS_TO_MODULE`).
+* **100% Offline & Self-Contained**: Local SQLite database (`shonkor.db`) with FTS5 full-text search and recursive CTE subgraph queries. No external API dependencies.
+* **Token-Optimized Context Capsule Synthesizer**: Generates prompt-ready Markdown files including automatic **Mermaid.js** architecture diagrams.
+* **MCP Server (Model Context Protocol)**: Provides the graph directly to AI assistants like **Claude** and **Antigravity** – with token-efficient tools (`search_graph`, `locate`, `get_subgraph`, `generate_capsule`, `record_*`).
+* **Visual Web Dashboard**: A glassmorphic web interface with interactive 2D force-directed graph visualization (`force-graph`, WebGL Canvas), live physics, code preview (Prism.js), capsule creator, project and plugin management.
+  * **Dual Search Modes**: Toggle between FTS5 Keyword Search (Network icon) and Vector-based Semantic Search (Brain icon).
+  * **Ask AI (GraphRAG)**: Instantly generate AI answers based on the retrieved code context nodes using a local Ollama model directly in the dashboard UI.
+* **Multi-Project Registry**: Manage multiple codebases in parallel (`projects.json`), each with its own database.
+* **Powerful CLI**: Automation via `init`, `index`, `search`, `capsule`, and `mcp`.
 
 ---
 
-## ⚡️ Benchmark: KI-Graphen vs. Klassisches RAG
+## ⚡️ Benchmark: AI Graphs vs. Classic RAG
 
-In einer kommerziellen C#-Test-Codebasis (50 Klassen) vergleicht dieser Benchmark die Performance einer herkömmlichen Suchanfrage (Fulltext-RAG) mit Shonkors vorab generiertem semantischem Graphen:
+In a commercial C# test codebase (50 classes), this benchmark compares the performance of a conventional search query (Fulltext RAG) with Shonkor's pre-generated semantic graph:
 
-* **Token-Bedarf:** ~1.200 Tokens (Shonkor) vs. ~9.800 Tokens (Klassisches RAG) ➡️ **87,7 % eingespart**
-* **Kontext-Latenz:** ~6 Sekunden (Shonkor) vs. ~50 Sekunden (Klassisches RAG) ➡️ **7,6x schneller**
+* **Token Requirement:** ~1,200 tokens (Shonkor) vs. ~9,800 tokens (Classic RAG) ➡️ **87.7% saved**
+* **Context Latency:** ~6 seconds (Shonkor) vs. ~50 seconds (Classic RAG) ➡️ **7.6x faster**
 
-Shonkor erlaubt somit einen **hochprofitablen Betrieb** von LLM-Chatbots, da der teure Kontext auf ein absolutes Minimum reduziert wird, ohne dass das LLM den architektonischen Überblick verliert.
+Shonkor thus allows a **highly profitable operation** of LLM chatbots, since the expensive context is reduced to an absolute minimum without the LLM losing the architectural overview.
 
 ---
 
-## 📁 Systemstruktur
+## 📁 System Structure
 
-Das Projekt folgt einer sauberen **Clean Architecture**-Struktur:
+The project follows a clean **Clean Architecture** structure:
 
 ```
 src/
-  ├── Shonkor.Core/          # Domänenmodelle, Schnittstellen, AST-Parser & Capsule-Synthesizer
-  ├── Shonkor.Infrastructure/# SQLite Graph-Speicher, Crawler (SHA256), Plugin-Loader, Cross-Tech-Linker
-  ├── Shonkor.CLI/           # Konsolen-Schnittstelle (init, index, search, capsule, mcp) + MCP-Server
-  └── Shonkor.Web/           # Minimal APIs, API-Key-Middleware & Glassmorphic Web Dashboard (wwwroot)
+  ├── Shonkor.Core/          # Domain models, interfaces, AST parser & capsule synthesizer
+  ├── Shonkor.Infrastructure/# SQLite graph storage, crawler (SHA256), plugin loader, cross-tech linker
+  ├── Shonkor.CLI/           # Console interface (init, index, search, capsule, mcp) + MCP server
+  └── Shonkor.Web/           # Minimal APIs, API key middleware & glassmorphic web dashboard (wwwroot)
 tests/
-  └── Shonkor.Tests/         # Unit-Tests für Parser, SQLite-CTE, Concurrency & Type-Reference-Linking
+  └── Shonkor.Tests/         # Unit tests for parser, SQLite CTE, concurrency & type reference linking
 docs/
-  ├── developer/arc42/        # Entwicklerdokumentation nach arc42-Standard (Kapitel 1-8)
-  ├── user/                   # Benutzerhandbücher (Setup, CLI, LLM-Integration)
-  └── architecture/           # Architektur-Reviews
+  ├── developer/arc42/        # Developer documentation according to arc42 standard (Chapters 1-8)
+  ├── user/                   # User manuals (setup, CLI, LLM integration)
+  └── architecture/           # Architecture reviews
 ```
 
 ---
 
-## 🚀 Schnellstart
+## 🚀 Quickstart
 
-### Voraussetzungen
+### Prerequisites
 * [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 
-### 1. Klonen & Kompilieren
+### 1. Clone & Compile
 ```powershell
 dotnet build
 ```
 
-### 2. CLI initialisieren und indexieren
+### 2. Initialize and Index CLI
 ```powershell
 cd src/Shonkor.CLI
 
-# Standard-Konfiguration (shonkor.json) erstellen
+# Create default configuration (shonkor.json)
 dotnet run -- init
 
-# Eigenes Projekt indexieren
+# Index own project
 dotnet run -- index ../../
 
-# Nach einer Klasse oder Methode suchen
+# Search for a class or method
 dotnet run -- search "RoslynAstParser"
 
-# Token-optimierten Context Capsule erstellen
+# Create token-optimized context capsule
 dotnet run -- capsule "RoslynAstParser" --hops 2 --out capsule.md
 ```
 
-### 3. MCP-Server in Claude/Antigravity registrieren
+### 3. Register MCP Server in Claude/Antigravity
 ```powershell
-# Registriert Shonkor automatisch in den verfügbaren MCP-Clients
+# Registers Shonkor automatically in the available MCP clients
 dotnet run -- mcp install
 ```
-Details und manuelle Konfiguration: siehe [LLM Integration Manual](docs/user/llm_integration.md).
+Details and manual configuration: see [LLM Integration Manual](docs/user/llm_integration.md).
 
-### 4. Web Dashboard starten
+### 4. Start Web Dashboard
 ```powershell
 cd ../Shonkor.Web
 dotnet run
 
-# Browser öffnen auf: http://localhost:5290
+# Open browser at: http://localhost:5290
 ```
 
 ---
 
-## 🔐 Sicherheit (Kurzüberblick)
+## 🔐 Security (Brief Overview)
 
-Shonkor ist primär als **lokales** Werkzeug konzipiert. Für den Betrieb hinter einem Proxy / als SaaS gilt:
+Shonkor is primarily designed as a **local** tool. For operation behind a proxy / as SaaS, the following applies:
 
-* **API-Keys & Secrets** gehören **nicht** in `appsettings.json` oder `projects.json` (beide sind gitignored), sondern in User-Secrets / Umgebungsvariablen (`ApiKeys__<key>=<projektName>`, `GitHub__WebhookSecret=…`).
-* Der **Loopback-Auth-Bypass** ist nur in `Development` aktiv; in Produktion greift immer die API-Key-Prüfung.
-* **Dynamische Plugins** (Laufzeit-Kompilierung von C#) sind ein RCE-Vektor und daher **standardmäßig deaktiviert** – Opt-in über `Security:EnablePlugins=true`.
-* **Webhooks** verifizieren `X-Hub-Signature-256` (HMAC) und schlagen ohne konfiguriertes Secret fehl (fail-closed).
-* `/api/browse` (Dateisystem-Browser) ist nur lokal/in Development erreichbar.
-
----
-
-## 📚 Dokumentations-Architektur
-
-1. **Entwickler-Dokumentation (arc42)**: [docs/developer/arc42/README.md](docs/developer/arc42/README.md)
-2. **Benutzer-Handbücher**: [docs/user/README.md](docs/user/README.md)
-   * [Setup Guide](docs/user/setup_guide.md): Onboarding, Konfiguration, Sicherheit, Multi-Projekt.
-   * [CLI Reference](docs/user/cli_reference.md): Alle CLI-Kommandos mit Beispielen.
-   * [LLM Integration Manual](docs/user/llm_integration.md): Anbindung an Claude/Antigravity (MCP), Cursor und Web-LLMs.
+* **API Keys & Secrets** do **not** belong in `appsettings.json` or `projects.json` (both are gitignored), but in user secrets / environment variables (`ApiKeys__<key>=<projectName>`, `GitHub__WebhookSecret=…`).
+* The **Loopback Auth Bypass** is only active in `Development`; in production, the API key check always applies.
+* **Dynamic Plugins** (runtime compilation of C#) are an RCE vector and are therefore **disabled by default** – opt-in via `Security:EnablePlugins=true`.
+* **Webhooks** verify `X-Hub-Signature-256` (HMAC) and fail without a configured secret (fail-closed).
+* `/api/browse` (file system browser) is only accessible locally/in development.
 
 ---
 
-## ⚖️ Lizenz
-Dieses Projekt ist unter der MIT-Lizenz lizenziert. Weitere Details finden Sie in der `LICENSE`-Datei.
+## 📚 Documentation Architecture
+
+1. **Developer Documentation (arc42)**: [docs/developer/arc42/README.md](docs/developer/arc42/README.md)
+2. **User Manuals**: [docs/user/README.md](docs/user/README.md)
+   * [Setup Guide](docs/user/setup_guide.md): Onboarding, configuration, security, multi-project.
+   * [CLI Reference](docs/user/cli_reference.md): All CLI commands with examples.
+   * [LLM Integration Manual](docs/user/llm_integration.md): Connection to Claude/Antigravity (MCP), Cursor, and Web LLMs.
+
+---
+
+## ⚖️ License
+This project is licensed under the MIT License. See the `LICENSE` file for further details.

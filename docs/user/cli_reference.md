@@ -1,10 +1,10 @@
-# Shonkor CLI-Referenzhandbuch 💻
+# Shonkor CLI Reference Manual 💻
 
-Dieses Handbuch beschreibt die Syntax und Verwendung aller Kommandozeilenbefehle von Shonkor.
+This manual describes the syntax and usage of all Shonkor command-line commands.
 
 ---
 
-## ⌨️ Globale Syntax
+## ⌨️ Global Syntax
 
 ```powershell
 shonkor <command> [arguments] [options]
@@ -12,14 +12,14 @@ shonkor <command> [arguments] [options]
 
 ---
 
-## 🛠️ Befehlsreferenz
+## 🛠️ Command Reference
 
 ### 1. `init`
-Initialisiert eine Standard-Konfigurationsdatei im aktuellen Arbeitsverzeichnis.
+Initializes a default configuration file in the current working directory.
 
 * **Syntax:** `shonkor init`
-* **Beschreibung:** Prüft, ob bereits eine `shonkor.json` existiert. Falls nicht, wird eine neue Datei mit Standardwerten (Ignorierung von `bin`, `obj`, `.git`, `node_modules` und Ablage der Datenbank in `shonkor.db`) erstellt.
-* **Beispiel:**
+* **Description:** Checks if a `shonkor.json` already exists. If not, a new file with default values (ignoring `bin`, `obj`, `.git`, `node_modules` and storing the database in `shonkor.db`) is created.
+* **Example:**
   ```powershell
   shonkor init
   ```
@@ -27,89 +27,89 @@ Initialisiert eine Standard-Konfigurationsdatei im aktuellen Arbeitsverzeichnis.
 ---
 
 ### 2. `index`
-Durchsucht das angegebene Verzeichnis und baut den semantischen Wissensgraphen auf.
+Scans the specified directory and builds the semantic knowledge graph.
 
 * **Syntax:** `shonkor index [directory] [options]`
-* **Argumente:**
-  * `[directory]` *(Optional)*: Der Pfad zum zu scannenden Verzeichnis. Standardmäßig das aktuelle Verzeichnis (`.`).
-* **Optionen:**
-  * `-c, --config <file>`: Pfad zur Konfigurationsdatei (Standard: `shonkor.json`).
-* **Beispiel:**
+* **Arguments:**
+  * `[directory]` *(Optional)*: The path to the directory to scan. Defaults to the current directory (`.`).
+* **Options:**
+  * `-c, --config <file>`: Path to the configuration file (Default: `shonkor.json`).
+* **Example:**
   ```powershell
-  # Indexiert das aktuelle Verzeichnis mit Standard-Konfiguration
+  # Indexes the current directory with default configuration
   shonkor index
   
-  # Indexiert ein anderes Verzeichnis mit einer spezifischen Konfiguration
+  # Indexes a different directory with a specific configuration
   shonkor index C:\Projects\MyProject --config MyProjectConfig.json
   ```
 
 ---
 
 ### 3. `search`
-Führt eine blitzschnelle Volltextsuche (FTS5) auf den Inhalt und Namen aller indizierten Knoten aus.
+Executes lightning-fast full-text search (FTS5) on the content and names of all indexed nodes.
 
 * **Syntax:** `shonkor search <query> [options]`
-* **Argumente:**
-  * `<query>`: Der Suchbegriff. Unterstützt SQLite FTS5-Syntax (z. B. Wildcards mit `*`).
-* **Optionen:**
-  * `-l, --limit <number>`: Maximale Anzahl der zurückgegebenen Ergebnisse (Standard: `10`).
-  * `-c, --config <file>`: Pfad zur Konfigurationsdatei (Standard: `shonkor.json`).
-* **Beispiel:**
+* **Arguments:**
+  * `<query>`: The search term. Supports SQLite FTS5 syntax (e.g. wildcards with `*`).
+* **Options:**
+  * `-l, --limit <number>`: Maximum number of returned results (Default: `10`).
+  * `-c, --config <file>`: Path to the configuration file (Default: `shonkor.json`).
+* **Example:**
   ```powershell
-  # Sucht nach Definitionen, die 'Roslyn' enthalten
+  # Searches for definitions containing 'Roslyn'
   shonkor search "Roslyn"
   
-  # Sucht nach Klassen, die mit 'Parser' enden, und limitiert die Ausgabe auf 5
+  # Searches for classes ending with 'Parser' and limits the output to 5
   shonkor search "Parser*" --limit 5
   ```
 
 ---
 
 ### 4. `capsule`
-Generiert eine hochpräzise, token-optimierte Markdown-Kontextkapsel (Context Capsule) für LLMs.
+Generates a highly precise, token-optimized Markdown context capsule for LLMs.
 
 * **Syntax:** `shonkor capsule <query> [options]`
-* **Argumente:**
-  * `<query>`: Der Suchbegriff zur Identifikation der Startknoten (Seeds) für die Graph-Abfrage.
-* **Optionen:**
-  * `-h, --hops <number>`: Die Tiefe der Graph-Expansion (Standard: `2`). Höhere Werte ziehen indirekte Abhängigkeiten mit ein.
-  * `-o, --out <path>`: Pfad zur zu erzeugenden Markdown-Datei (Standard: `shonkor-capsule.md`).
-  * `-c, --config <file>`: Pfad zur Konfigurationsdatei (Standard: `shonkor.json`).
-* **Beispiel:**
+* **Arguments:**
+  * `<query>`: The search term to identify the starting nodes (seeds) for the graph query.
+* **Options:**
+  * `-h, --hops <number>`: The depth of the graph expansion (Default: `2`). Higher values include indirect dependencies.
+  * `-o, --out <path>`: Path to the Markdown file to be generated (Default: `shonkor-capsule.md`).
+  * `-c, --config <file>`: Path to the configuration file (Default: `shonkor.json`).
+* **Example:**
   ```powershell
-  # Erzeugt eine 2-Hop-Kapsel für 'SqliteGraphStorage'
+  # Generates a 2-hop capsule for 'SqliteGraphStorage'
   shonkor capsule "SqliteGraphStorage" --hops 2 --out SqliteCapsule.md
   ```
 
 ---
 
 ### 5. `mcp`
-Startet den **Model Context Protocol (MCP)**-Server über stdio (JSON-RPC). Hierüber binden KI-Assistenten wie **Claude** und **Antigravity** den Wissensgraphen direkt ein.
+Starts the **Model Context Protocol (MCP)** server via stdio (JSON-RPC). AI assistants like **Claude** and **Antigravity** use this to directly integrate the knowledge graph.
 
 * **Syntax:** `shonkor mcp [options]`
-* **Optionen:**
-  * `-c, --config <file>`: Pfad zur Konfigurationsdatei (Standard: `shonkor.json`).
-* **Verhalten:** Der Server läuft, bis der Eingabestrom geschlossen wird (EOF). Normalerweise wird er **nicht manuell** gestartet, sondern vom MCP-Client (Claude/Antigravity) automatisch als Subprozess.
-* **Projekt-Auflösung:** Das aktive Projekt wird **aus dem Arbeitsverzeichnis** abgeleitet (das Verzeichnis, in dem der Client den Server startet) – nicht aus einem globalen Flag. Override per Umgebungsvariable `SHONKOR_PROJECT`.
+* **Options:**
+  * `-c, --config <file>`: Path to the configuration file (Default: `shonkor.json`).
+* **Behavior:** The server runs until the input stream is closed (EOF). Normally, it is **not started manually**, but automatically as a subprocess by the MCP client (Claude/Antigravity).
+* **Project Resolution:** The active project is derived **from the working directory** (the directory where the client starts the server) – not from a global flag. Override via the `SHONKOR_PROJECT` environment variable.
 
 #### `mcp install`
-Registriert Shonkor automatisch in den MCP-Konfigurationsdateien der erkannten Clients (Claude Desktop, Antigravity).
+Automatically registers Shonkor in the MCP configuration files of detected clients (Claude Desktop, Antigravity).
 
 * **Syntax:** `shonkor mcp install`
-* **Beispiel:**
+* **Example:**
   ```powershell
   dotnet run -- mcp install
   ```
 
 > [!TIP]
-> Für einen reproduzierbaren Betrieb empfiehlt sich ein `dotnet publish` und ein Verweis auf die veröffentlichte `.exe` in der Client-Konfiguration, statt auf `bin/Debug` zu zeigen.
+> For reproducible operation, it is recommended to run `dotnet publish` and point to the published `.exe` in the client configuration, rather than pointing to `bin/Debug`.
 
 ---
 
-## 📊 Interpretation der Ausgaben
+## 📊 Interpreting the Output
 
-Bei der Indexierung (`index`) gibt Shonkor detaillierte Metriken aus:
-* **Files Scanned**: Anzahl der physischen Dateien, die von den registrierten Parsern analysiert wurden (Binärdateien werden anhand von NUL-Bytes erkannt und übersprungen).
-* **Nodes Created**: Anzahl der erzeugten Code- und Dokumentsignaturen (z. B. Klassen, Methoden).
-* **Edges Created**: Anzahl der logischen Beziehungen, z. B. `CONTAINS` (Datei→Typ→Member), `IMPLEMENTS`/`EXTENDS` (Vererbung), `REFERENCES_TYPE` (Typ-Verwendung), `IMPORTS`, `BINDS_TO`, `BELONGS_TO_MODULE`.
-* **Composition by Type**: Übersicht aller Knotentypen in Ihrer Datenbank (wichtig zur Validierung der Abdeckung).
+During indexing (`index`), Shonkor outputs detailed metrics:
+* **Files Scanned**: Number of physical files analyzed by the registered parsers (binary files are detected via NUL bytes and skipped).
+* **Nodes Created**: Number of generated code and document signatures (e.g. classes, methods).
+* **Edges Created**: Number of logical relationships, e.g. `CONTAINS` (file→type→member), `IMPLEMENTS`/`EXTENDS` (inheritance), `REFERENCES_TYPE` (type usage), `IMPORTS`, `BINDS_TO`, `BELONGS_TO_MODULE`.
+* **Composition by Type**: Overview of all node types in your database (important for validating coverage).

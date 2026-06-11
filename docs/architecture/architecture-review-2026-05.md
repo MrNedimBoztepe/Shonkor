@@ -1,253 +1,253 @@
-# Architektur-Review: Storage & API für Local + SaaS + KI-Tooling
+# Architecture Review: Storage & API for Local + SaaS + AI Tooling
 
-## Ausgangslage
+## Initial Situation
 
-Shonkor ist ein Knowledge-Graph-System für Codebasen, das aktuell lokal läuft und zukünftig **auch als SaaS** betrieben werden soll. Die Kernfrage: Sind **SQLite + REST** die richtige Kombination — insbesondere für die Integration mit KI-Entwicklungstools (MCP), wo **Token-Effizienz** kritisch ist?
+Shonkor is a knowledge graph system for codebases that currently runs locally and is intended to **also operate as SaaS** in the future. The core question: Are **SQLite + REST** the right combination — especially for integration with AI development tools (MCP), where **token efficiency** is critical?
 
 ---
 
-## Bestandsaufnahme: Was wir heute haben
+## Inventory: What We Have Today
 
 ### Storage Layer (SQLite + FTS5)
 
-| Aspekt | Status |
+| Aspect | Status |
 |---|---|
-| Tabellen | `Nodes` (9 Spalten), `Edges` (3 Spalten, Composite PK), `NodesFts` (FTS5 Virtual Table) |
-| Volltextsuche | FTS5 mit BM25-Scoring, Fallback auf `LIKE` bei Sonderzeichen |
-| Graph-Traversal | Recursive CTE (`WITH RECURSIVE`) für Subgraph-Expansion |
-| Connection-Modell | Ein einzelner, langlebiger `SqliteConnection` pro Projekt (kein Pooling) |
-| Schreiboperationen | Batched Upserts in Transaktionen mit Prepared Statements |
-| Datenvolumen | Shonkor: ~452 KB, MuM: ~22 MB |
+| Tables | `Nodes` (9 columns), `Edges` (3 columns, Composite PK), `NodesFts` (FTS5 Virtual Table) |
+| Full-Text Search | FTS5 with BM25 scoring, fallback to `LIKE` for special characters |
+| Graph Traversal | Recursive CTE (`WITH RECURSIVE`) for subgraph expansion |
+| Connection Model | A single, long-lived `SqliteConnection` per project (no pooling) |
+| Write Operations | Batched upserts in transactions with prepared statements |
+| Data Volume | Shonkor: ~452 KB, MuM: ~22 MB |
 
 ### API Layer (REST + MCP)
 
-| Aspekt | Status |
+| Aspect | Status |
 |---|---|
-| REST Endpoints | 20 Endpoints (ASP.NET Minimal APIs) |
-| MCP Tools | 8 Tools via JSON-RPC über stdio |
-| Multi-Tenancy | Rudimentär: `X-Project-Name` Header + API-Key für SaaS-Endpoints |
-| Antwortformat | JSON, teilweise verbose (ganzer `GraphNode` inkl. Content) |
+| REST Endpoints | 20 endpoints (ASP.NET Minimal APIs) |
+| MCP Tools | 8 tools via JSON-RPC over stdio |
+| Multi-Tenancy | Rudimentary: `X-Project-Name` header + API key for SaaS endpoints |
+| Response Format | JSON, partially verbose (entire `GraphNode` including content) |
 
 ---
 
-## Kritische Schwachstellen im Ist-Zustand
+## Critical Vulnerabilities in Current State
 
 ### 1. Storage
 
 > [!WARNING]
-> **FTS5-Rebuild bei jedem Start**: `INSERT INTO NodesFts(NodesFts) VALUES('rebuild')` läuft bei jeder `InitializeAsync()`. Bei 22 MB (MuM) dauert das bereits spürbar — bei SaaS-Skala (hunderte Projekte) nicht tragbar.
+> **FTS5 Rebuild at Every Startup**: `INSERT INTO NodesFts(NodesFts) VALUES('rebuild')` runs on every `InitializeAsync()`. At 22 MB (MuM) this takes noticeably long — at SaaS scale (hundreds of projects) not sustainable.
 
 > [!WARNING]
-> **N+1 Query in SearchAsync**: Für jedes Suchergebnis wird einzeln `GetRelatedEdgesAsync()` aufgerufen. Bei 20 Ergebnissen = 21 Queries statt 2.
+> **N+1 Query in SearchAsync**: `GetRelatedEdgesAsync()` is called individually for each search result. With 20 results = 21 queries instead of 2.
 
 > [!CAUTION]
-> **Sync-over-Async Anti-Pattern**: `InitializeAsync()` wird in `ProjectManager.GetStorageProvider()` via `.GetAwaiter().GetResult()` synchron aufgerufen — blockiert den Thread-Pool.
+> **Sync-over-Async Anti-Pattern**: `InitializeAsync()` is called synchronously in `ProjectManager.GetStorageProvider()` via `.GetAwaiter().GetResult()` — blocks the thread pool.
 
-- **Kein Connection-Pooling**: Ein langlebiger Connection pro Projekt. Bei SaaS mit vielen Tenants = viele offene Connections.
-- **`GetAllNodesAsync()` lädt alles in den RAM** — keine Pagination.
-- **Edge Properties existieren im Model, werden aber nie persistiert** — das `Properties`-Dict auf `GraphEdge` ist nutzlos.
+- **No Connection Pooling**: A long-lived connection per project. In SaaS with many tenants = many open connections.
+- **`GetAllNodesAsync()` loads everything into RAM** — no pagination.
+- **Edge properties exist in the model but are never persisted** — the `Properties` dict on `GraphEdge` is useless.
 
-### 2. API / Token-Effizienz
+### 2. API / Token Efficiency
 
 > [!IMPORTANT]
-> **REST-Antworten sind zu verbose für KI-Tools**. Ein typischer `search_graph`-Response enthält pro Node: `Id`, `Type`, `Name`, `FilePath`, `StartLine`, `EndLine`, `Score`, plus alle `RelatedEdges`. Bei 10 Ergebnissen mit je 3 Edges sind das schnell **2000+ Tokens** — obwohl die KI oft nur `Id` und `Name` braucht.
+> **REST responses are too verbose for AI tools**. A typical `search_graph` response contains per node: `Id`, `Type`, `Name`, `FilePath`, `StartLine`, `EndLine`, `Score`, plus all `RelatedEdges`. With 10 results each having 3 edges, that quickly becomes **2000+ tokens** — even though the AI often only needs `Id` and `Name`.
 
-- **MCP-Layer optimiert bereits teilweise**: `get_subgraph` gibt `ContentLength` statt `Content` zurück. Aber `search_graph` schickt trotzdem alles.
-- **Kein Field-Filtering**: Weder REST noch MCP erlauben dem Aufrufer, nur bestimmte Felder anzufordern.
-- **`generate_capsule` ist die einzige token-optimierte Operation** — sie aggregiert alles in ein kompaktes Markdown.
-
----
-
-## Alternativen-Bewertung
-
-### A. Storage-Schicht
-
-#### Option 1: SQLite beibehalten (optimiert) ✅ Empfohlen für Phase 1
-
-| Pro | Contra |
-|---|---|
-| Zero-Config, embedded, battle-tested | Kein nativer Graph-Traversal (Recursive CTEs sind langsam bei >3 Hops) |
-| Perfekt für Local-First | Single-Writer Lock (problematisch bei SaaS mit Concurrent Writes) |
-| Bestehender Code bleibt | Kein natives Cloud-Sync |
-| FTS5 ist gut genug für aktuelle Datenmengen | FTS5-Rebuild-Problem muss gelöst werden |
-
-**Aufwand für Optimierung**: Gering. FTS5-Rebuild nur bei Schema-Änderung, N+1 fixen, Connection-Handling verbessern.
+- **MCP layer already partially optimizes**: `get_subgraph` returns `ContentLength` instead of `Content`. But `search_graph` still sends everything.
+- **No Field Filtering**: Neither REST nor MCP allow the caller to request only specific fields.
+- **`generate_capsule` is the only token-optimized operation** — it aggregates everything into a compact Markdown.
 
 ---
 
-#### Option 2: Turso / libSQL ⭐ Empfohlen für SaaS-Phase
+## Alternatives Evaluation
 
-| Pro | Contra |
+### A. Storage Layer
+
+#### Option 1: Keep SQLite (optimized) ✅ Recommended for Phase 1
+
+| Pro | Con |
 |---|---|
-| SQLite-kompatibel (minimale Migration) | Vendor Lock-in auf Turso-Plattform |
-| Database-per-Tenant nativ | Kein FTS5-Support in der Cloud-Variante (Stand 2025) |
-| Embedded Replicas (Local-First + Cloud-Sync) | Neues SDK-Dependency (libSQL .NET Client) |
-| Automatisches Schema-Templating für neue Tenants | Emerging Technology — weniger Battle-Tested |
+| Zero-config, embedded, battle-tested | No native graph traversal (recursive CTEs are slow at >3 hops) |
+| Perfect for Local-First | Single-writer lock (problematic for SaaS with concurrent writes) |
+| Existing code remains | No native cloud sync |
+| FTS5 is good enough for current data volumes | FTS5 rebuild problem must be solved |
 
-**Killer-Feature**: Ein und derselbe Code läuft lokal (embedded SQLite) UND als SaaS (Turso Cloud mit Sync). Das ist genau der Anwendungsfall.
+**Effort for Optimization**: Low. FTS5 rebuild only on schema change, fix N+1, improve connection handling.
 
-**Migrationspfad**: `Microsoft.Data.Sqlite` → `Turso.Client` (.NET). Die SQL-Queries bleiben identisch.
+---
+
+#### Option 2: Turso / libSQL ⭐ Recommended for SaaS Phase
+
+| Pro | Con |
+|---|---|
+| SQLite compatible (minimal migration) | Vendor lock-in on Turso platform |
+| Database-per-tenant native | No FTS5 support in the cloud variant (as of 2025) |
+| Embedded Replicas (Local-First + Cloud-Sync) | New SDK dependency (libSQL .NET Client) |
+| Automatic schema templating for new tenants | Emerging technology — less battle-tested |
+
+**Killer Feature**: The exact same code runs locally (embedded SQLite) AND as SaaS (Turso Cloud with sync). That is exactly the use case.
+
+**Migration Path**: `Microsoft.Data.Sqlite` → `Turso.Client` (.NET). The SQL queries remain identical.
 
 ---
 
 #### Option 3: DuckDB + PGQ Extension
 
-| Pro | Contra |
+| Pro | Con |
 |---|---|
-| Native Graph-Queries via SQL/PGQ (`MATCH`-Syntax) | PGQ Extension ist noch Research/WIP |
-| Extrem schnelle analytische Queries | OLAP-optimiert, nicht OLTP (kein guter Fit für häufige Writes) |
-| .NET ADO.NET Provider vorhanden | Keine FTS5-äquivalente Volltextsuche |
-| Könnte SQLite als Analytical Sidecar ergänzen | Zwei Datenbanken = doppelte Komplexität |
+| Native Graph Queries via SQL/PGQ (`MATCH` syntax) | PGQ extension is still research/WIP |
+| Extremely fast analytical queries | OLAP-optimized, not OLTP (not a good fit for frequent writes) |
+| .NET ADO.NET Provider available | No FTS5-equivalent full-text search |
+| Could complement SQLite as analytical sidecar | Two databases = double the complexity |
 
-**Bewertung**: Interessant als **Ergänzung** für Analytics-Dashboard, aber kein Ersatz für SQLite als primären Store. Die PGQ-Extension ist zu unreif für Production.
+**Evaluation**: Interesting as a **complement** for analytics dashboards, but not a replacement for SQLite as the primary store. The PGQ extension is too immature for production.
 
 ---
 
 #### Option 4: PostgreSQL + pgvector
 
-| Pro | Contra |
+| Pro | Con |
 |---|---|
-| Enterprise-proven, skaliert vertikal und horizontal | Nicht embedded — erfordert Server |
-| Gute Graph-Extensions (Apache AGE) | Local-First Story ist komplex (braucht lokalen PG oder Sync-Layer) |
-| Vector Search für Semantic Search | Overengineered für aktuelle Datenmengen |
-| Hervorragendes .NET-Ökosystem (Npgsql, EF Core) | Deployment-Komplexität steigt erheblich |
+| Enterprise-proven, scales vertically and horizontally | Not embedded — requires server |
+| Good graph extensions (Apache AGE) | Local-First story is complex (needs local PG or sync layer) |
+| Vector search for semantic search | Overengineered for current data volumes |
+| Excellent .NET ecosystem (Npgsql, EF Core) | Deployment complexity increases significantly |
 
-**Bewertung**: Nur sinnvoll, wenn Turso/libSQL nicht ausreicht und du ohnehin eine Server-Infrastruktur aufbaust. Für den Local-First-Anwendungsfall zu schwer.
+**Evaluation**: Only makes sense if Turso/libSQL is insufficient and you are building server infrastructure anyway. Too heavy for the Local-First use case.
 
 ---
 
 #### Option 5: Neo4j / FalkorDB
 
-| Pro | Contra |
+| Pro | Con |
 |---|---|
-| Native Cypher-Queries, optimiert für Graph-Traversal | Server-basiert, nicht embedded |
-| Community Edition kostenlos | Neue Query-Sprache (Cypher statt SQL) |
-| FalkorDB ist Redis-basiert und schneller | Komplett andere API, kompletter Rewrite nötig |
+| Native Cypher queries, optimized for graph traversal | Server-based, not embedded |
+| Community Edition free | New query language (Cypher instead of SQL) |
+| FalkorDB is Redis-based and faster | Completely different API, complete rewrite necessary |
 
-**Bewertung**: Overkill. Shonkors Graphen haben <100k Nodes — Recursive CTEs in SQLite reichen völlig. Ein dediziertes Graph-DB wäre nur gerechtfertigt, wenn Multi-Hop-Traversals (>5 Hops) ein Bottleneck werden.
+**Evaluation**: Overkill. Shonkor's graphs have <100k nodes — recursive CTEs in SQLite are perfectly adequate. A dedicated graph DB would only be justified if multi-hop traversals (>5 hops) become a bottleneck.
 
 ---
 
-### B. API-Schicht / Token-Effizienz
+### B. API Layer / Token Efficiency
 
-#### Option 1: REST beibehalten (optimiert) ✅ Empfohlen
+#### Option 1: Keep REST (optimized) ✅ Recommended
 
-| Maßnahme | Token-Ersparnis | Aufwand |
+| Measure | Token Savings | Effort |
 |---|---|---|
-| **Field-Filtering** (`?fields=id,name,type`) | ~60-70% pro Response | Gering |
-| **Content-Stripping im MCP** (nur `ContentLength` statt `Content`) | ~40-50% | Bereits teilweise umgesetzt |
-| **Compact Summaries** statt Raw-Daten in MCP-Tools | ~70-80% | Mittel |
-| **Pagination** für große Result-Sets | Verhindert Token-Explosion | Gering |
+| **Field Filtering** (`?fields=id,name,type`) | ~60-70% per response | Low |
+| **Content Stripping in MCP** (only `ContentLength` instead of `Content`) | ~40-50% | Partially implemented already |
+| **Compact Summaries** instead of raw data in MCP tools | ~70-80% | Medium |
+| **Pagination** for large result sets | Prevents token explosion | Low |
 
-**Warum REST reicht**: MCP ist ohnehin JSON-RPC — das ist der KI-Kanal. REST ist nur für die Web-UI. Da REST gut genug funktioniert und die Web-UI kein Token-Problem hat, ist ein Wechsel hier unnötig.
+**Why REST is enough**: MCP is JSON-RPC anyway — that is the AI channel. REST is only for the Web UI. Since REST works well enough and the Web UI doesn't have a token problem, a change here is unnecessary.
 
 ---
 
 #### Option 2: GraphQL
 
-| Pro | Contra |
+| Pro | Con |
 |---|---|
-| Präzise Field-Selection (kein Over-Fetching) | Neuer Server-Stack (HotChocolate in .NET) |
-| Strongly-Typed Schema mit Introspection | Komplexer als REST für einfache CRUD-Ops |
-| Gut für verschachtelte Graph-Daten | Overhead für Setup und Maintenance |
+| Precise field selection (no over-fetching) | New server stack (HotChocolate in .NET) |
+| Strongly-typed schema with introspection | More complex than REST for simple CRUD ops |
+| Good for nested graph data | Overhead for setup and maintenance |
 
-**Bewertung**: Löst das Over-Fetching-Problem elegant, aber für die aktuelle Projektgröße ist ein `?fields=`-Parameter auf REST deutlich pragmatischer. GraphQL lohnt sich erst, wenn die API öffentlich wird und externe Konsumenten beliebige Queries stellen müssen.
+**Evaluation**: Elegantly solves the over-fetching problem, but for the current project size, a `?fields=` parameter on REST is much more pragmatic. GraphQL only pays off when the API becomes public and external consumers need to make arbitrary queries.
 
 ---
 
 #### Option 3: gRPC / Protobuf
 
-| Pro | Contra |
+| Pro | Con |
 |---|---|
-| Extrem kompakte Binary-Serialisierung | MCP ist JSON-RPC — gRPC ist inkompatibel |
-| Native Streaming-Unterstützung | Browser-Clients brauchen gRPC-Web Proxy |
-| Strict Typing | Overkill für aktuelle Datenmengen |
+| Extremely compact binary serialization | MCP is JSON-RPC — gRPC is incompatible |
+| Native streaming support | Browser clients need gRPC-Web proxy |
+| Strict typing | Overkill for current data volumes |
 
-**Bewertung**: Irrelevant. MCP erzwingt JSON-RPC, die Web-UI braucht JSON. gRPC löst hier kein reales Problem.
+**Evaluation**: Irrelevant. MCP forces JSON-RPC, the Web UI needs JSON. gRPC solves no real problem here.
 
 ---
 
-### C. MCP-Layer: Wo die echten Token gespart werden
+### C. MCP Layer: Where the Real Tokens are Saved
 
 > [!IMPORTANT]
-> **Die größte Token-Sparquelle ist nicht das Serialisierungsformat, sondern die Qualität der MCP-Antworten.** Ein gut aggregiertes Markdown-Capsule spart 10x mehr Tokens als ein Wechsel von JSON zu Protobuf.
+> **The biggest source of token savings is not the serialization format, but the quality of the MCP responses.** A well-aggregated Markdown capsule saves 10x more tokens than switching from JSON to Protobuf.
 
-| Strategie | Beschreibung | Ersparnis |
+| Strategy | Description | Savings |
 |---|---|---|
-| **Smarte Capsules** | `generate_capsule` gibt bereits kompaktes Markdown zurück — das ist der richtige Ansatz | Basis |
-| **Lazy Content Loading** | `search_graph` gibt nur Metadaten zurück, `Content` nur auf expliziten Abruf (neues Tool `get_node_content`) | ~50% |
-| **Kompakte Edge-Zusammenfassung** | Statt 20 einzelne Edges: `"3 CALLS, 2 INHERITS, 1 BELONGS_TO"` | ~70% |
-| **MCP Resource-Endpoints** | Nutze MCP Resources statt Tools für statische Daten (Stats, Schemas) — werden nicht bei jeder Anfrage geladen | ~20% |
+| **Smart Capsules** | `generate_capsule` already returns compact Markdown — that is the right approach | Baseline |
+| **Lazy Content Loading** | `search_graph` only returns metadata, `Content` only upon explicit request (new tool `get_node_content`) | ~50% |
+| **Compact Edge Summary** | Instead of 20 individual edges: `"3 CALLS, 2 INHERITS, 1 BELONGS_TO"` | ~70% |
+| **MCP Resource Endpoints** | Use MCP Resources instead of tools for static data (stats, schemas) — they are not loaded on every request | ~20% |
 
 ---
 
-## Empfehlung: Phasen-Roadmap
+## Recommendation: Phased Roadmap
 
-### Phase 1: SQLite optimieren + MCP Token-Effizienz (Jetzt)
+### Phase 1: Optimize SQLite + MCP Token Efficiency (Now)
 
-**Ziel**: Bestehende Architektur stabilisieren und Token-Verbrauch senken.
+**Goal**: Stabilize existing architecture and reduce token consumption.
 
-1. **FTS5-Rebuild nur bei Schema-Migration**, nicht bei jedem Start
-2. **N+1 Query in SearchAsync fixen** — eine einzige `WHERE SourceId IN (...) OR TargetId IN (...)` Query
-3. **Sync-over-Async eliminieren** — `InitializeAsync()` korrekt async aufrufen
-4. **MCP-Antworten komprimieren**: 
-   - `search_graph`: Nur `Id`, `Type`, `Name` + aggregierte Edge-Summary
-   - Neues Tool `get_node_detail` für vollständige Node-Daten on-demand
-5. **Field-Filtering** in REST: `?fields=id,name,type`
+1. **FTS5 Rebuild only on schema migration**, not at every startup
+2. **Fix N+1 query in SearchAsync** — a single `WHERE SourceId IN (...) OR TargetId IN (...)` query
+3. **Eliminate Sync-over-Async** — call `InitializeAsync()` correctly async
+4. **Compress MCP responses**: 
+   - `search_graph`: Only `Id`, `Type`, `Name` + aggregated edge summary
+   - New tool `get_node_detail` for full node data on-demand
+5. **Field Filtering** in REST: `?fields=id,name,type`
 
-**Aufwand**: ~2-3 Tage
-
----
-
-### Phase 2: SaaS-Readiness mit Turso/libSQL (Wenn SaaS startet)
-
-**Ziel**: Gleicher Code für Local und Cloud.
-
-1. **`IGraphStorageProvider`-Interface behalten** — es ist bereits sauber abstrahiert
-2. **Neue Implementierung**: `TursoGraphStorageProvider` neben `SqliteGraphStorageProvider`
-3. **Database-per-Tenant**: Jeder Kunde bekommt eine eigene libSQL-Datenbank
-4. **Embedded Replicas** für Local-First-Clients: Lokale Kopie mit Background-Sync
-5. **Schema-Templating**: Neue Tenants erhalten automatisch das aktuelle Schema
-
-**Aufwand**: ~1-2 Wochen
+**Effort**: ~2-3 days
 
 ---
 
-### Phase 3: Advanced Analytics (Optional, später)
+### Phase 2: SaaS Readiness with Turso/libSQL (When SaaS starts)
 
-**Ziel**: Tiefere Einblicke in den Knowledge-Graph.
+**Goal**: Same code for Local and Cloud.
 
-1. **DuckDB als Analytics-Sidecar**: Periodischer Export aus SQLite/Turso in DuckDB
-2. **SQL/PGQ Graph-Queries** für komplexe Pfadanalysen
-3. **Dashboard-Widgets** die DuckDB direkt abfragen
+1. **Keep `IGraphStorageProvider` interface** — it is already cleanly abstracted
+2. **New Implementation**: `TursoGraphStorageProvider` alongside `SqliteGraphStorageProvider`
+3. **Database-per-Tenant**: Every customer gets their own libSQL database
+4. **Embedded Replicas** for Local-First clients: Local copy with background sync
+5. **Schema Templating**: New tenants automatically receive the current schema
 
-**Aufwand**: ~1 Woche, erst relevant wenn Analytics ein Feature wird
+**Effort**: ~1-2 weeks
+
+---
+
+### Phase 3: Advanced Analytics (Optional, later)
+
+**Goal**: Deeper insights into the knowledge graph.
+
+1. **DuckDB as Analytics Sidecar**: Periodic export from SQLite/Turso into DuckDB
+2. **SQL/PGQ Graph Queries** for complex path analyses
+3. **Dashboard Widgets** that query DuckDB directly
+
+**Effort**: ~1 week, only relevant once analytics becomes a feature
 
 ---
 
 ## Open Questions
 
 > [!IMPORTANT]
-> **SaaS-Deployment-Ziel**: Planst du ein klassisches Server-Deployment (Azure/AWS) oder eher eine Edge-basierte Architektur (Cloudflare Workers, Fly.io)? Das beeinflusst die Turso-vs-PostgreSQL-Entscheidung maßgeblich.
+> **SaaS Deployment Target**: Are you planning a classic server deployment (Azure/AWS) or more of an edge-based architecture (Cloudflare Workers, Fly.io)? This heavily influences the Turso vs PostgreSQL decision.
 
 > [!IMPORTANT]
-> **Multi-User pro Projekt**: Sollen in der SaaS-Variante mehrere Benutzer gleichzeitig am selben Graphen arbeiten? Falls ja, brauchen wir einen Conflict-Resolution-Mechanismus (CRDTs oder Last-Write-Wins).
+> **Multi-User per Project**: Should multiple users be able to work simultaneously on the same graph in the SaaS variant? If so, we need a conflict resolution mechanism (CRDTs or Last-Write-Wins).
 
 > [!IMPORTANT]
-> **Offline-First Priorität**: Wie wichtig ist es, dass SaaS-Kunden auch offline arbeiten können? Falls ja, ist Turso mit Embedded Replicas zwingend. Falls nein, reicht auch PostgreSQL.
+> **Offline-First Priority**: How important is it that SaaS customers can also work offline? If yes, Turso with Embedded Replicas is mandatory. If no, PostgreSQL is sufficient.
 
 > [!IMPORTANT]  
-> **Token-Budget**: Gibt es ein konkretes Token-Budget pro MCP-Anfrage, das wir als Zielwert nehmen sollen? (z.B. "Eine search_graph-Antwort darf maximal 500 Tokens kosten")
+> **Token Budget**: Is there a specific token budget per MCP request that we should take as a target value? (e.g., "A search_graph response must cost a maximum of 500 tokens")
 
 ---
 
-## Zusammenfassung
+## Summary
 
 ```mermaid
 graph TD
-    subgraph "Phase 1: Jetzt"
-        A["SQLite optimieren"] --> B["MCP Token-Effizienz"]
-        B --> C["Field-Filtering REST"]
+    subgraph "Phase 1: Now"
+        A["Optimize SQLite"] --> B["MCP Token Efficiency"]
+        B --> C["Field Filtering REST"]
     end
 
     subgraph "Phase 2: SaaS"
@@ -267,9 +267,9 @@ graph TD
     style G fill:#1a1a2e,stroke:#16213e,color:#888
 ```
 
-| Entscheidung | Empfehlung | Begründung |
+| Decision | Recommendation | Rationale |
 |---|---|---|
-| **Storage** | SQLite jetzt, Turso/libSQL für SaaS | Gleiche SQL-Queries, minimale Migration, Local-First + Cloud |
-| **API** | REST beibehalten + Field-Filtering | GraphQL/gRPC lösen kein reales Problem für aktuelle Größe |
-| **Token-Effizienz** | MCP-Antworten komprimieren | Smarte Aggregation > Serialisierungsformat |
-| **Graph-DB** | Nein | Recursive CTEs in SQLite reichen bei <100k Nodes |
+| **Storage** | SQLite now, Turso/libSQL for SaaS | Same SQL queries, minimal migration, Local-First + Cloud |
+| **API** | Keep REST + Field Filtering | GraphQL/gRPC solve no real problem for current size |
+| **Token Efficiency** | Compress MCP responses | Smart aggregation > serialization format |
+| **Graph-DB** | No | Recursive CTEs in SQLite are sufficient for <100k nodes |

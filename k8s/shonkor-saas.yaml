@@ -1,0 +1,156 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shonkor-pvc
+  labels:
+    app: shonkor
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-pvc
+  labels:
+    app: ollama
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: shonkor-secrets
+type: Opaque
+stringData:
+  # Replace with a real secure webhook secret
+  github-webhook-secret: "CHANGE_ME_SECURE_SECRET"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-deployment
+  labels:
+    app: ollama
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # Important for PVC attachment
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          # Ensures the model is pulled on startup if not cached
+          command: ["bash", "-c"]
+          args:
+            - "ollama serve & sleep 5 && ollama pull qwen2.5-coder && wait"
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "2"
+            limits:
+              memory: "8Gi"
+              cpu: "4"
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-data
+          persistentVolumeClaim:
+            claimName: ollama-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service
+spec:
+  selector:
+    app: ollama
+  ports:
+    - protocol: TCP
+      port: 11434
+      targetPort: 11434
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shonkor-deployment
+  labels:
+    app: shonkor
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # Prevents SQLite lock issues across pods
+  selector:
+    matchLabels:
+      app: shonkor
+  template:
+    metadata:
+      labels:
+        app: shonkor
+    spec:
+      containers:
+        - name: shonkor-web
+          image: shonkor-web:latest # Built via CI/CD and pushed to your registry
+          imagePullPolicy: IfNotPresent
+          workingDir: /data # Ensure projects.json is written to the persistent volume
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+            - name: SaaS__TenantRoot
+              value: "/data/tenants"
+            - name: SemanticAnalyzer__OllamaUrl
+              value: "http://ollama-service:11434"
+            - name: EmbeddingService__OllamaUrl
+              value: "http://ollama-service:11434"
+            - name: GitHub__WebhookSecret
+              valueFrom:
+                secretKeyRef:
+                  name: shonkor-secrets
+                  key: github-webhook-secret
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "1"
+            limits:
+              memory: "2Gi"
+              cpu: "2"
+          volumeMounts:
+            - name: shonkor-data
+              mountPath: /data
+      volumes:
+        - name: shonkor-data
+          persistentVolumeClaim:
+            claimName: shonkor-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shonkor-service
+spec:
+  type: ClusterIP # Change to NodePort or LoadBalancer if needed
+  selector:
+    app: shonkor
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080

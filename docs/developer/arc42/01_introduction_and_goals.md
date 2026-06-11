@@ -1,55 +1,54 @@
-# arc42 Kapitel 1: Einführung & Ziele 🎯
+# arc42 Chapter 1: Introduction & Goals 🎯
 
-Dieses Kapitel beschreibt die wesentlichen Anforderungen und Qualitätsziele für Shonkor.
-
----
-
-## 1.1 Aufgabenstellung
-
-Heutige RAG-Systeme (Retrieval-Augmented Generation) verlassen sich meist auf probabilistische Vektordatenbanken und einfache Zeichen-Slices. Dies führt in der Praxis bei Codebasen zu gravierenden Problemen:
-1. **Halluzinationen**: Das LLM sieht Codeabschnitte ohne deren Kontext (Imports, Klassenstrukturen, vererbte Schnittstellen).
-2. **Ungenauigkeit**: Relevante Beziehungen (z. B. welche Methode eine andere aufruft) werden durch die Ähnlichkeitssuche oft übersehen.
-3. **Hoher Token-Verbrauch**: Es werden irrelevante Codeblöcke geladen, was die Kosten steigert und die Context-Fenster verstopft.
-
-**Shonkor** löst diese Probleme durch einen **deterministischen Knowledge Graph (GraphRAG)**:
-* Quellcode und Dokumentation werden präzise in Knoten (Klassen, Methoden, Dateien, Abschnitte) und Kanten (Abhängigkeiten, Aufrufe, Vererbung) zerlegt.
-* Suchanfragen nutzen ein hybrides Modell aus FTS5-Volltextsuche zur Keimzellen-Findung (Seeds) und rekursiven SQL-Graph-Traversierungen (CTEs) zur Kontext-Ermittlung.
-* Das Ergebnis wird in einer token-optimierten Kapsel (inklusive einer visuellen Darstellung als Mermaid.js) an das LLM übergeben.
+This chapter describes the essential requirements and quality goals for Shonkor.
 
 ---
 
-## 1.2 Qualitätsziele
+## 1.1 Task Description
 
-| Priorität | Qualitätsziel | Beschreibung | Messbare Zielgröße |
+Today's RAG systems (Retrieval-Augmented Generation) mostly rely on probabilistic vector databases and simple character slices. In practice, this leads to serious problems with codebases:
+1. **Hallucinations**: The LLM sees code segments without their context (imports, class structures, inherited interfaces).
+2. **Inaccuracy**: Relevant relationships (e.g., which method calls another) are often overlooked by the similarity search.
+3. **High Token Consumption**: Irrelevant code blocks are loaded, which increases costs and clutters context windows.
+
+**Shonkor** solves these problems with a **deterministic Knowledge Graph (GraphRAG)**:
+* Source code and documentation are precisely decomposed into nodes (classes, methods, files, sections) and edges (dependencies, calls, inheritance).
+* Search queries use a hybrid model of FTS5 full-text search for seed discovery and recursive SQL graph traversals (CTEs) for context determination.
+* The result is passed to the LLM in a token-optimized capsule (including a visual representation as Mermaid.js).
+
+---
+
+## 1.2 Quality Goals
+
+| Priority | Quality Goal | Description | Measurable Target Metric |
 | :---: | :--- | :--- | :--- |
-| **1** | **100% Präzision** | Keine Annahmen. Das LLM erhält exakt die physischen Deklarationen und Beziehungen, die im Graphen existieren. | 0% Falschmeldungen über nicht existierende Methoden/Klassen. |
-| **2** | **Portabilität & Autarkie** | Das System läuft zu 100% offline, ohne externe API-Abhängigkeiten und nutzt ein lokales SQLite-Backend. | 0 KB Netzwerktraffic; Datenbankgröße < 1 MB für Standard-Repsoitories. |
-| **3** | **Performanz** | Indexierung lokaler Repositories in Sekunden. Abfragen und CTE-Traversierung in Millisekunden. | Indexierung: > 15 Dateien/Sek. <br>Suche & Traversierung: < 10ms. |
-| **4** | **Token-Effizienz** | Durch das Pruning (Abschneiden des Graphen nach N Hops) wird das Rauschen minimiert und teure LLM-Tokens werden geschont. | > 85% Token-Einsparung im Vergleich zur Bereitstellung der gesamten Codebasis. |
+| **1** | **100% Precision** | No assumptions. The LLM receives exactly the physical declarations and relationships that exist in the graph. | 0% false reports about non-existent methods/classes. |
+| **2** | **Portability & Autonomy** | The system runs 100% offline, without external API dependencies, and uses a local SQLite backend. | 0 KB network traffic; database size < 1 MB for standard repositories. |
+| **3** | **Performance** | Indexing of local repositories in seconds. Queries and CTE traversal in milliseconds. | Indexing: > 15 files/sec. <br>Search & Traversal: < 10ms. |
+| **4** | **Token Efficiency** | Pruning (truncating the graph after N hops) minimizes noise and saves expensive LLM tokens. | > 85% token savings compared to providing the entire codebase. |
 
 ---
 
-## 1.3 Stakeholder
+## 1.3 Stakeholders
 
-* **Entwickler / Endanwender**: Möchten präzise Antworten von ihren KI-Assistenten bei komplexen Code-Refactorings.
-* **Unternehmen / Security Officers**: Möchten sicherstellen, dass sensible Code-Strukturen nicht an externe RAG-Server übertragen werden (vollständige Offline-Sicherheit).
-* **Systemarchitekten**: Möchten die strukturellen Abhängigkeiten ihrer Systeme visuell im Dashboard analysieren.
+* **Developers / End Users**: Want precise answers from their AI assistants for complex code refactoring.
+* **Enterprises / Security Officers**: Want to ensure that sensitive code structures are not transferred to external RAG servers (complete offline security).
+* **System Architects**: Want to visually analyze the structural dependencies of their systems in the dashboard.
 
 ---
 
-## 1.4 Reale Projektergebnisse & Benchmarks (Stand: Mai 2026)
+## 1.4 Real Project Results & Benchmarks (As of: May 2026)
 
-Die folgenden Messdaten wurden direkt in der Produktivumgebung bei der Analyse einer realen Code- und Dokumentationsbasis erhoben und belegen das Erreichen unserer ehrgeizigen Qualitätsziele:
+The following measurement data was collected directly in the production environment during the analysis of a real code and documentation base and proves the achievement of our ambitious quality goals:
 
-* **Indexierungs-Performance**:
-  * **Scangeschwindigkeit**: **34 Quellcodedateien** (.NET C#, JS, Markdown) wurden in **nur 1,80 Sekunden** vollständig eingelesen, lexikalisch geparst und in den Graphen überführt (~19 Dateien/Sekunde).
-  * **Graph-Dichte**: Aus den 34 Dateien wurden **241 semantische Knoten** (Klassen, Methoden, Interfaces, Markdown-Sektionen) und **229 präzise logische Kanten** (Abhängigkeiten, Parent-Child-Beziehungen) extrahiert.
-* **Abfrage-Geschwindigkeit (FTS5 & CTE-Traversierung)**:
-  * **Semantische Suche**: BM25-gewichtete Keyword-Suchen über den gesamten Quelltext der Datenbank beanspruchen **unter 5 Millisekunden**.
-  * **N-Hop Graph-Traversierung**: Das Extrahieren eines 2-Hop-Subgraphen inklusive der physikalischen Code-Inhalte benötigt **unter 10 Millisekunden**.
-* **Token-Einsparung (Pruning & Capsule-Synthese)**:
-  * Bei einer Abfrage nach der Kernklasse `SqliteGraphStorageProvider` generiert Shonkor eine vollständige, prompt-fertige Kontextkapsel (inklusive Mermaid-Diagramm und Code der relevanten Methoden) mit einer Größe von **nur 4.592 Zeichen (~1.148 Tokens)**.
-  * Im Vergleich zur Übertragung der gesamten Codebasis entspricht dies einer **Token-Reduktion von ca. 92%**. Die API-Kosten für LLMs sinken somit um denselben Faktor bei gleichzeitig signifikant höherer Antwortqualität.
-* **Ressourceneffizienz**:
-  * Die gesamte indexierte SQLite-Datenbank (`shonkor.db`) ist lediglich **352 KB** groß und lässt sich problemlos versionskontrolliert im Git-Repository ablegen.
-
+* **Indexing Performance**:
+  * **Scan Speed**: **34 source code files** (.NET C#, JS, Markdown) were completely read, lexically parsed, and transferred to the graph in **just 1.80 seconds** (~19 files/second).
+  * **Graph Density**: From the 34 files, **241 semantic nodes** (classes, methods, interfaces, Markdown sections) and **229 precise logical edges** (dependencies, parent-child relationships) were extracted.
+* **Query Speed (FTS5 & CTE Traversal)**:
+  * **Semantic Search**: BM25-weighted keyword searches across the entire source code of the database take **under 5 milliseconds**.
+  * **N-Hop Graph Traversal**: Extracting a 2-hop subgraph including the physical code contents takes **under 10 milliseconds**.
+* **Token Savings (Pruning & Capsule Synthesis)**:
+  * For a query regarding the core class `SqliteGraphStorageProvider`, Shonkor generates a complete, prompt-ready context capsule (including Mermaid diagram and code of the relevant methods) with a size of **only 4,592 characters (~1,148 tokens)**.
+  * Compared to transferring the entire codebase, this corresponds to a **token reduction of approx. 92%**. API costs for LLMs thus drop by the same factor, while response quality is significantly higher.
+* **Resource Efficiency**:
+  * The entire indexed SQLite database (`shonkor.db`) is only **352 KB** in size and can easily be placed under version control in the Git repository.
