@@ -2,6 +2,7 @@
 
 using System.Text.Json;
 
+using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Services;
@@ -29,8 +30,8 @@ public class McpToolsTests
             await storage.InitializeAsync();
             await storage.UpsertNodesAsync(new[]
             {
-                new GraphNode { Id = widgetId, Name = "Widget", Type = "Class", FilePath = Path.Combine(ws, "Widget.cs"), StartLine = 1, Content = "class Widget {}", Summary = "A reusable widget." },
-                new GraphNode { Id = gadgetId, Name = "Gadget", Type = "Class", FilePath = Path.Combine(ws, "Gadget.cs"), StartLine = 1, Content = "class Gadget { Widget w; }", Summary = "Depends on Widget." },
+                new GraphNode { Id = widgetId, Name = "Widget", Type = "Class", FilePath = Path.Combine(ws, "Widget.cs"), StartLine = 1, Content = "class Widget {}", Summary = "A reusable widget.", Embedding = new[] { 1f, 0f, 0f } },
+                new GraphNode { Id = gadgetId, Name = "Gadget", Type = "Class", FilePath = Path.Combine(ws, "Gadget.cs"), StartLine = 1, Content = "class Gadget { Widget w; }", Summary = "Depends on Widget.", Embedding = new[] { 0f, 1f, 0f } },
                 // Interaction nodes for get_open_threads (one open task, one done task, one open question).
                 new GraphNode { Id = "task::open", Name = "Implement caching", Type = "Task", Content = "todo", Properties = new() { ["status"] = "Todo" } },
                 new GraphNode { Id = "task::done", Name = "Old finished task", Type = "Task", Content = "done", Properties = new() { ["status"] = "Done" } },
@@ -140,6 +141,46 @@ public class McpToolsTests
 
         var no = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("verify_exists", new { symbol = "TotallyMadeUpType" })));
         Assert.StartsWith("NO", no);
+    }
+
+    /// <summary>Returns a fixed embedding regardless of input — lets the test pin which seeded node ranks first.</summary>
+    private sealed class StubEmbeddingService : IEmbeddingService
+    {
+        private readonly float[] _vector;
+        public StubEmbeddingService(float[] vector) => _vector = vector;
+        public Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken ct = default) => Task.FromResult(_vector);
+    }
+
+    [Fact]
+    public async Task SearchSemantic_RanksByVectorSimilarity_WithHandleAndSummary()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        // Query vector aligned with Widget's embedding [1,0,0] -> Widget must rank first.
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true,
+            embeddingService: new StubEmbeddingService(new[] { 1f, 0f, 0f }));
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("search_semantic", new { query = "a reusable component" })));
+
+        Assert.Contains("Widget", text);
+        Assert.Contains("A reusable widget.", text);          // AI summary included
+        Assert.Contains("@/Widget.cs::Widget", text);          // short handle, not the absolute id
+        Assert.True(text.IndexOf("Widget", StringComparison.Ordinal)
+                  < text.IndexOf("Gadget", StringComparison.Ordinal)); // ranked above the orthogonal node
+    }
+
+    [Fact]
+    public async Task SearchSemantic_WithoutEmbeddingBackend_DegradesGracefully()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        // No embedding service (the stdio/CLI case) -> must not throw, returns a clear message.
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("search_semantic", new { query = "anything" })));
+
+        Assert.Contains("unavailable", text);
+        Assert.Contains("search_graph", text); // points the caller at the keyword fallback
     }
 
     [Fact]

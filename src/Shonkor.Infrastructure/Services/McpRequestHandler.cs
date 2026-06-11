@@ -21,6 +21,12 @@ public sealed class McpRequestHandler
     private readonly ContextCapsuleSynthesizer _synthesizer;
 
     /// <summary>
+    /// Optional embedding backend for semantic (vector) search. Available in the web/HTTP relay (Ollama
+    /// wired via DI); null in the stdio CLI, where <c>search_semantic</c> degrades gracefully.
+    /// </summary>
+    private readonly IEmbeddingService? _embeddingService;
+
+    /// <summary>
     /// The project this server is bound to, derived from the working directory the MCP was launched in
     /// (the AI chat's directory) — NOT from the shared, web-mutable ActiveProjectName. May be null if the
     /// launch directory doesn't match any registered project, in which case the global active is used.
@@ -142,12 +148,13 @@ public sealed class McpRequestHandler
     /// as the default for all tool calls that don't pass an explicit projectName, decoupling the MCP from
     /// the web dashboard's mutable active-project flag.
     /// </param>
-    public McpRequestHandler(ProjectManager projectManager, ContextCapsuleSynthesizer synthesizer, string? contextProjectName = null, bool lockToContextProject = false)
+    public McpRequestHandler(ProjectManager projectManager, ContextCapsuleSynthesizer synthesizer, string? contextProjectName = null, bool lockToContextProject = false, IEmbeddingService? embeddingService = null)
     {
         _projectManager = projectManager ?? throw new ArgumentNullException(nameof(projectManager));
         _synthesizer = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
         _contextProjectName = contextProjectName;
         _lockToContextProject = lockToContextProject;
+        _embeddingService = embeddingService;
     }
 
     /// <summary>
@@ -334,6 +341,22 @@ public sealed class McpRequestHandler
                                 {
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 }
+                            }
+                        },
+                        new
+                        {
+                            name = "search_semantic",
+                            description = "Concept/meaning-based search via vector embeddings (e.g. 'where is authentication handled?'), complementing the keyword-based search_graph. Returns 'type  name  handle  — summary' per hit. Requires the embedding backend (web server + Ollama) and nodes that have been embedded by the enrichment worker; degrades to a clear message otherwise.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    query = new { type = "string", description = "Natural-language description of what you're looking for." },
+                                    limit = new { type = "integer", description = "Max number of results (default 10)." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "query" }
                             }
                         },
                         new
@@ -736,6 +759,41 @@ public sealed class McpRequestHandler
                             }
                         }
                         return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "search_semantic":
+                    {
+                        var query = args?["query"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(query))
+                        {
+                            return SendError(id, -32602, "Parameter 'query' is required");
+                        }
+                        if (_embeddingService == null)
+                        {
+                            return SendToolResponse(id, "Semantic search is unavailable here (no embedding backend wired). Use search_graph (FTS) instead, or run via the web server with Ollama.");
+                        }
+
+                        var limit = args?["limit"]?.GetValue<int>() ?? 10;
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var embedding = await _embeddingService.GenerateEmbeddingAsync(query).ConfigureAwait(false);
+                        if (embedding == null || embedding.Length == 0)
+                        {
+                            return SendToolResponse(id, "Could not embed the query (is the embedding backend / Ollama running?).");
+                        }
+
+                        var results = await storage.SearchSemanticAsync(embedding, limit).ConfigureAwait(false);
+                        if (results.Count == 0)
+                        {
+                            return SendToolResponse(id, $"No semantically similar nodes for '{query}'. (Have nodes been embedded by the enrichment worker yet?)");
+                        }
+
+                        var lines = results.Select(r =>
+                        {
+                            var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t— {r.Node.Summary}" : "";
+                            return $"{r.Node.Type}\t{r.Node.Name}\t{ToHandle(r.Node.Id, basePath)}{summary}";
+                        });
+                        return SendToolResponse(id, string.Join("\n", lines));
                     }
 
                 case "generate_capsule":

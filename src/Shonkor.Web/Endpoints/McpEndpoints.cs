@@ -17,7 +17,8 @@ public static class McpEndpoints
         group.MapPost("/relay", async (
             HttpContext context,
             [FromServices] ProjectManager projectManager,
-            [FromServices] ContextCapsuleSynthesizer synthesizer) =>
+            [FromServices] ContextCapsuleSynthesizer synthesizer,
+            [FromServices] Shonkor.Core.Interfaces.IEmbeddingService embeddingService) =>
         {
             // Authentication is enforced centrally by ApiKeyMiddleware (single source of truth).
             // When a request is authenticated via API key, the middleware records the authoritative
@@ -51,7 +52,8 @@ public static class McpEndpoints
 
             // lockToContextProject prevents the per-tool projectName argument from escaping the
             // authenticated tenant. Only enabled when the request was key-authenticated.
-            var handler = new McpRequestHandler(projectManager, synthesizer, projectName, lockToContextProject: isTenantLocked);
+            // The embedding backend (Ollama) is wired here so search_semantic works over the HTTP relay.
+            var handler = new McpRequestHandler(projectManager, synthesizer, projectName, lockToContextProject: isTenantLocked, embeddingService: embeddingService);
 
             using var reader = new StreamReader(context.Request.Body);
             var body = await reader.ReadToEndAsync();
