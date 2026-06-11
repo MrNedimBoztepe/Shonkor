@@ -310,6 +310,34 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
+                            name = "verify_exists",
+                            description = "Fact-check that a symbol actually exists in the graph BEFORE asserting it. Returns 'YES — name (type) at handle' on an exact name match, otherwise 'NO' plus the nearest matching names. Use this to avoid claiming a class/method exists when it doesn't.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The exact symbol name to verify (e.g. 'GraphNode')." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "get_open_threads",
+                            description = "Resume context cheaply: lists the still-open recorded interactions (Question/Task/Decision/Milestone, i.e. anything not done/resolved/accepted/superseded) as 'type [status] name id'. Call at the start of a session to recover what was in progress without re-deriving it.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                }
+                            }
+                        },
+                        new
+                        {
                             name = "generate_capsule",
                             description = "Generate a token-optimized, prompt-friendly Markdown context capsule with inline Mermaid diagrams and source code snippets for a query.",
                             inputSchema = new
@@ -649,6 +677,62 @@ public sealed class McpRequestHandler
                                 var name = dep?.Name ?? e.SourceId;
                                 var summary = dep != null && !string.IsNullOrEmpty(dep.Summary) ? $"  — {dep.Summary}" : "";
                                 sb.Append($"{g.Key}\t{name}\t{ToHandle(e.SourceId, basePath)}{summary}\n");
+                            }
+                        }
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "verify_exists":
+                    {
+                        var symbol = args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+                        var hits = (await storage.SearchAsync(symbol, 8).ConfigureAwait(false)).Select(h => h.Node).ToList();
+
+                        var exact = hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase));
+                        if (exact != null)
+                        {
+                            return SendToolResponse(id, $"YES — '{exact.Name}' ({exact.Type}) exists at {ToHandle(exact.Id, basePath)}.");
+                        }
+
+                        // Honest negative: don't let the caller assume — offer the nearest names instead.
+                        if (hits.Count == 0)
+                        {
+                            return SendToolResponse(id, $"NO — nothing named '{symbol}' is in the graph.");
+                        }
+                        var nearest = string.Join(", ", hits.Take(5).Select(n => $"{n.Name} ({n.Type})").Distinct());
+                        return SendToolResponse(id, $"NO exact match for '{symbol}'. Nearest: {nearest}.");
+                    }
+
+                case "get_open_threads":
+                    {
+                        var interactionTypes = new[] { "Question", "Task", "Decision", "Milestone" };
+                        var closedStatuses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            "done", "resolved", "completed", "accepted", "superseded", "closed"
+                        };
+
+                        var items = await storage.GetNodesByTypesAsync(interactionTypes).ConfigureAwait(false);
+                        var open = items
+                            .Where(n => !closedStatuses.Contains(n.Properties.GetValueOrDefault("status", "")))
+                            .ToList();
+
+                        if (open.Count == 0)
+                        {
+                            return SendToolResponse(id, "No open threads (tasks/questions/decisions/milestones).");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append("Open threads (").Append(open.Count).Append("):\n");
+                        foreach (var g in open.GroupBy(n => n.Type))
+                        {
+                            foreach (var n in g)
+                            {
+                                var status = n.Properties.GetValueOrDefault("status", "Open");
+                                sb.Append($"{n.Type}\t[{status}]\t{n.Name}\t{n.Id}\n");
                             }
                         }
                         return SendToolResponse(id, sb.ToString().TrimEnd());

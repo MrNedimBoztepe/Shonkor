@@ -30,7 +30,11 @@ public class McpToolsTests
             await storage.UpsertNodesAsync(new[]
             {
                 new GraphNode { Id = widgetId, Name = "Widget", Type = "Class", FilePath = Path.Combine(ws, "Widget.cs"), StartLine = 1, Content = "class Widget {}", Summary = "A reusable widget." },
-                new GraphNode { Id = gadgetId, Name = "Gadget", Type = "Class", FilePath = Path.Combine(ws, "Gadget.cs"), StartLine = 1, Content = "class Gadget { Widget w; }", Summary = "Depends on Widget." }
+                new GraphNode { Id = gadgetId, Name = "Gadget", Type = "Class", FilePath = Path.Combine(ws, "Gadget.cs"), StartLine = 1, Content = "class Gadget { Widget w; }", Summary = "Depends on Widget." },
+                // Interaction nodes for get_open_threads (one open task, one done task, one open question).
+                new GraphNode { Id = "task::open", Name = "Implement caching", Type = "Task", Content = "todo", Properties = new() { ["status"] = "Todo" } },
+                new GraphNode { Id = "task::done", Name = "Old finished task", Type = "Task", Content = "done", Properties = new() { ["status"] = "Done" } },
+                new GraphNode { Id = "question::open", Name = "Why is X slow", Type = "Question", Content = "q", Properties = new() { ["status"] = "Open" } }
             });
             await storage.UpsertEdgesAsync(new[]
             {
@@ -122,5 +126,32 @@ public class McpToolsTests
             JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, method = "tools/list" }));
 
         Assert.Contains("impact_of", res);
+    }
+
+    [Fact]
+    public async Task VerifyExists_ConfirmsAndDenies()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var yes = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("verify_exists", new { symbol = "Widget" })));
+        Assert.StartsWith("YES", yes);
+        Assert.Contains("Widget", yes);
+
+        var no = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("verify_exists", new { symbol = "TotallyMadeUpType" })));
+        Assert.StartsWith("NO", no);
+    }
+
+    [Fact]
+    public async Task GetOpenThreads_ListsOpen_ExcludesClosed()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("get_open_threads", new { })));
+
+        Assert.Contains("Implement caching", text);   // open task
+        Assert.Contains("Why is X slow", text);        // open question
+        Assert.DoesNotContain("Old finished task", text); // Done -> excluded
     }
 }
