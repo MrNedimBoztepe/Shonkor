@@ -83,6 +83,34 @@ public sealed class McpRequestHandler
     }
 
     /// <summary>
+    /// Shortens a node id to a reusable, token-cheap "handle". File-path ids under the project root are
+    /// emitted as <c>@/&lt;relative&gt;</c>; other ids (<c>decision::</c>, <c>concept_</c>, …) are left
+    /// unchanged. The <c>@/</c> marker makes the transform reversible via <see cref="FromHandle"/> and
+    /// unambiguous — real ids never start with <c>@/</c> — so a handle can be passed straight back as a seed.
+    /// </summary>
+    private static string ToHandle(string? id, string basePath)
+    {
+        if (string.IsNullOrEmpty(id)) return string.Empty;
+        if (!string.IsNullOrEmpty(basePath) && id.StartsWith(basePath, StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = id[basePath.Length..].TrimStart('\\', '/');
+            if (rel.Length > 0) return "@/" + rel;
+        }
+        return id;
+    }
+
+    /// <summary>Expands a <c>@/&lt;relative&gt;</c> handle back to a real node id; other values pass through unchanged.</summary>
+    private static string FromHandle(string? handle, string basePath)
+    {
+        if (string.IsNullOrEmpty(handle)) return string.Empty;
+        if (handle.StartsWith("@/", StringComparison.Ordinal) && !string.IsNullOrEmpty(basePath))
+        {
+            return basePath.TrimEnd('\\', '/') + System.IO.Path.DirectorySeparatorChar + handle[2..];
+        }
+        return handle;
+    }
+
+    /// <summary>
     /// Truncates markdown to at most <paramref name="maxChars"/> characters, preferring to cut at the
     /// last Markdown heading (## ) boundary before the limit so sections stay intact. Appends a notice.
     /// </summary>
@@ -250,18 +278,34 @@ public sealed class McpRequestHandler
                         new
                         {
                             name = "get_subgraph",
-                            description = "Retrieve nodes and edges connected to a set of seed nodes within N traversal hops. Token-efficient text output by default (nodes as 'type name file', edges as 'A --REL--> B'); set verbose=true for full JSON.",
+                            description = "Retrieve nodes and edges connected to seed nodes within N hops. Token-efficient text by default: each node is 'handle  type  name  — summary' and edges are 'handle --REL--> handle'. The handle (e.g. '@/src/...File.cs::Class::Method') is a short, reusable id you can pass straight back as a seed. Set verbose=true for full JSON; maxChars to cap the size.",
                             inputSchema = new
                             {
                                 type = "object",
                                 properties = new
                                 {
-                                    seeds = new { type = "array", items = new { type = "string" }, description = "List of node IDs to expand from" },
-                                    hops = new { type = "integer", description = "Number of hops to traverse (default 1)" },
+                                    seeds = new { type = "array", items = new { type = "string" }, description = "Node ids or short '@/…' handles to expand from." },
+                                    hops = new { type = "integer", description = "Number of hops to traverse (default 2)" },
                                     verbose = new { type = "boolean", description = "Return full node/edge JSON instead of the compact text form (default false)." },
+                                    maxChars = new { type = "integer", description = "Optional cap on the compact output size in characters (~4 chars/token). Truncates beyond it." },
                                     projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
                                 },
                                 required = new[] { "seeds" }
+                            }
+                        },
+                        new
+                        {
+                            name = "impact_of",
+                            description = "Impact analysis: list the nodes that reference a given symbol (incoming REFERENCES_TYPE/IMPLEMENTS/CALLS edges) — i.e. what would be affected if you change it. Returns 'relation  name  handle  — summary' per dependent, or states that nothing references it. The most token-efficient way to answer 'what breaks if I change X?'.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode')." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
                             }
                         },
                         new
@@ -499,32 +543,43 @@ public sealed class McpRequestHandler
                             return SendError(id, -32602, "Parameter 'seeds' is required and must be a non-empty array");
                             
                         }
-                        var seeds = seedsNode.Select(s => s?.ToString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
                         var hops = args?["hops"]?.GetValue<int>() ?? 2;
                         var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
+                        var maxChars = args?["maxChars"]?.GetValue<int>();
+                        var basePath = GetProjectBasePath(projectName);
+
+                        // Accept either raw node ids or short "@/…" handles as seeds.
+                        var seeds = seedsNode.Select(s => FromHandle(s?.ToString(), basePath))
+                            .Where(s => !string.IsNullOrEmpty(s)).ToList();
 
                         var (nodes, edges) = await storage.GetSubgraphAsync(seeds, hops).ConfigureAwait(false);
 
                         if (!verbose)
                         {
-                            // Token-efficient default: compact text. Nodes as 'type<TAB>name<TAB>file',
-                            // edges as 'source --REL--> target', all paths relative to the project root.
-                            var basePath = GetProjectBasePath(projectName);
-
+                            // Token-efficient default: each node is 'handle<TAB>type<TAB>name[<TAB>— summary]'
+                            // (the handle is a reusable seed); edges as 'handle --REL--> handle'.
                             var nodeLines = nodes.Select(n =>
                             {
-                                var rawLoc = string.IsNullOrEmpty(n.FilePath) ? n.Id : n.FilePath;
-                                return $"{n.Type}\t{n.Name}\t{Shorten(rawLoc, basePath)}";
+                                var handle = ToHandle(string.IsNullOrEmpty(n.FilePath) ? n.Id : n.Id, basePath);
+                                var summary = !string.IsNullOrEmpty(n.Summary) ? $"\t— {n.Summary}" : "";
+                                return $"{handle}\t{n.Type}\t{n.Name}{summary}";
                             });
                             var edgeLines = edges.Select(e =>
-                                $"{Shorten(e.SourceId, basePath)} --{e.Relationship}--> {Shorten(e.TargetId, basePath)}");
+                                $"{ToHandle(e.SourceId, basePath)} --{e.Relationship}--> {ToHandle(e.TargetId, basePath)}");
 
                             var sb = new System.Text.StringBuilder();
                             sb.Append("NODES (").Append(nodes.Count).Append("):\n");
                             sb.Append(string.Join("\n", nodeLines));
                             sb.Append("\n\nEDGES (").Append(edges.Count).Append("):\n");
                             sb.Append(string.Join("\n", edgeLines));
-                            return SendToolResponse(id, sb.ToString());
+
+                            var output = sb.ToString();
+                            if (maxChars is > 0 && output.Length > maxChars.Value)
+                            {
+                                output = output[..maxChars.Value].TrimEnd()
+                                    + $"\n… (truncated to {maxChars.Value} chars; raise maxChars or reduce hops)";
+                            }
+                            return SendToolResponse(id, output);
                         }
 
                         var formatted = new
@@ -548,6 +603,55 @@ public sealed class McpRequestHandler
                         };
 
                         return SendToolResponse(id, JsonSerializer.Serialize(formatted));
+                    }
+
+                case "impact_of":
+                    {
+                        var symbol = args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        // 1. Resolve the symbol to a definition node (prefer declarations, exact name).
+                        var hits = (await storage.SearchAsync(symbol, 8).ConfigureAwait(false)).Select(h => h.Node).ToList();
+                        var defTypes = new[] { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Property", "Constructor" };
+                        var def =
+                            hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase) && defTypes.Contains(n.Type))
+                            ?? hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase))
+                            ?? hits.FirstOrDefault(n => defTypes.Contains(n.Type))
+                            ?? hits.FirstOrDefault();
+
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        // 2. Expand one hop; edges that POINT AT the definition are its direct dependents.
+                        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { def.Id }, 1).ConfigureAwait(false);
+                        var nodeById = nodes.ToDictionary(n => n.Id);
+                        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id).ToList();
+
+                        if (incoming.Count == 0)
+                        {
+                            return SendToolResponse(id,
+                                $"Nothing references '{def.Name}' ({def.Type}) — safe to change in isolation, or it is an entry point.");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"'{def.Name}' ({def.Type}) is referenced by {incoming.Count} node(s):\n");
+                        foreach (var g in incoming.GroupBy(e => e.Relationship).OrderByDescending(g => g.Count()))
+                        {
+                            foreach (var e in g)
+                            {
+                                var dep = nodeById.GetValueOrDefault(e.SourceId);
+                                var name = dep?.Name ?? e.SourceId;
+                                var summary = dep != null && !string.IsNullOrEmpty(dep.Summary) ? $"  — {dep.Summary}" : "";
+                                sb.Append($"{g.Key}\t{name}\t{ToHandle(e.SourceId, basePath)}{summary}\n");
+                            }
+                        }
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
                     }
 
                 case "generate_capsule":
