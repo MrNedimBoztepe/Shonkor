@@ -145,6 +145,62 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task GetSource_ReturnsExactBody_WithLocation()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("get_source", new { symbol = "Widget" })));
+
+        Assert.Contains("Widget (Class)", text);     // header with name + type
+        Assert.Contains("Widget.cs:1", text);         // file:line location
+        Assert.Contains("class Widget {}", text);     // the exact stored body
+    }
+
+    [Fact]
+    public async Task FindUsages_ListsCallSites_WithSnippet()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // Gadget --REFERENCES_TYPE--> Widget, and Gadget's body mentions Widget.
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("find_usages", new { symbol = "Widget" })));
+
+        Assert.Contains("usage(s) of 'Widget'", text);
+        Assert.Contains("REFERENCES_TYPE", text);
+        Assert.Contains("Gadget", text);
+        Assert.Contains("class Gadget { Widget w; }", text); // the grep-like usage snippet
+
+        // Widget references nothing, so it has no usages reported for Gadget.
+        var none = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("find_usages", new { symbol = "Gadget" })));
+        Assert.Contains("No usages", none);
+    }
+
+    [Fact]
+    public async Task ReindexFile_RefreshesGraph_AndDegradesWithoutParsers()
+    {
+        var (pm, synth, ws) = await SetupAsync();
+
+        // Without parsers (e.g. SaaS relay) the tool degrades gracefully.
+        var noParsers = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+        var unavailable = TextOf(await noParsers.ProcessJsonRpcMessageAsync(
+            ToolCall("reindex_file", new { path = "Foo.cs" })));
+        Assert.Contains("unavailable", unavailable);
+
+        // With parsers + a real file, the file is indexed and immediately queryable via get_source.
+        await File.WriteAllTextAsync(Path.Combine(ws, "Foo.cs"), "namespace D; public class Foo { }");
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true,
+            fileParsers: new IFileParser[] { new RoslynAstParser() });
+
+        var reindexed = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("reindex_file", new { path = "@/Foo.cs" })));
+        Assert.Contains("Reindexed", reindexed);
+
+        var src = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("get_source", new { symbol = "Foo" })));
+        Assert.Contains("Foo", src);
+    }
+
+    [Fact]
     public async Task DependsOn_ListsOutgoingReferences()
     {
         var (pm, synth, _) = await SetupAsync();

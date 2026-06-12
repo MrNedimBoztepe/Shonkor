@@ -473,7 +473,18 @@ public static class Program
                 : $"[MCP] No project matched the working directory ({Directory.GetCurrentDirectory()}); falling back to the registry's active project.");
 
             var synthesizer = new ContextCapsuleSynthesizer();
-            var server = new McpRequestHandler(pm, synthesizer, contextProjectName);
+
+            // Parsers enable reindex_file: the stdio CLI runs in the project directory, so it can re-index
+            // a file the AI just edited and refresh the graph before the next query.
+            var mcpParsers = new List<IFileParser>
+            {
+                new RoslynAstParser(),
+                new JavaScriptParser(),
+                new PhpModuleParser(),
+                new MarkdownHierarchyParser(),
+                new GraphQLParser()
+            };
+            var server = new McpRequestHandler(pm, synthesizer, contextProjectName, fileParsers: mcpParsers);
 
             await server.StartAsync().ConfigureAwait(false);
             return 0;
