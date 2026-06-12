@@ -325,6 +325,16 @@
                         </ul>
                     </div>
 
+                    <div class="info-group" id="drawer-pathfinder-section">
+                        <div class="info-label"><i data-lucide="route"></i> <span data-i18n="find_path">Find Path</span></div>
+                        <div class="pathfinder-row">
+                            <input type="text" id="path-target-input" class="pathfinder-input"
+                                   placeholder="Path to… (type a symbol)" aria-label="Path target symbol" autocomplete="off" />
+                            <button id="path-find-btn" class="glass-btn" title="Find path" aria-label="Find path"><i data-lucide="route"></i></button>
+                        </div>
+                        <div id="path-result" class="pathfinder-result"></div>
+                    </div>
+
                     <div class="info-group flex-fill">
                         <div class="info-label"><i data-lucide="code"></i> Source Code / Content</div>
                         <div class="code-wrapper">
