@@ -185,6 +185,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const drawerNodeRelations = document.getElementById('drawer-node-relations');
     const drawerNodeCode = document.getElementById('drawer-node-code');
     const closeDrawerBtn = document.getElementById('close-drawer-btn');
+
+    // Path finder (in the drawer): connects the selected node to a typed target.
+    const pathTargetInput = document.getElementById('path-target-input');
+    const pathFindBtn = document.getElementById('path-find-btn');
+    const pathResult = document.getElementById('path-result');
+    if (pathFindBtn) pathFindBtn.addEventListener('click', findPathFromSelected);
+    if (pathTargetInput) pathTargetInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); findPathFromSelected(); }
+    });
     
     // Modal DOM
     const capsuleModal = document.getElementById('capsule-modal');
@@ -2142,8 +2151,106 @@ document.addEventListener('DOMContentLoaded', () => {
         selectNode(id);
     }
 
+    // ===== Path finder: shortest connection from the selected node to a typed target symbol =====
+    async function findPathFromSelected() {
+        if (!currentSelectedNodeId || !pathResult) return;
+        const query = (pathTargetInput.value || '').trim();
+        if (!query) { pathResult.innerHTML = ''; return; }
+
+        pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("Resolving target…"))}</div>`;
+        try {
+            const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=5`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const hits = (await res.json()).map(r => r.node).filter(Boolean);
+            if (hits.length === 0) {
+                pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("No matching target node."))}</div>`;
+                return;
+            }
+            // Prefer an exact (case-insensitive) name match; else take the single hit; else let the user pick.
+            const exact = hits.find(h => (h.name || '').toLowerCase() === query.toLowerCase());
+            if (exact) { runPath(exact.id); return; }
+            if (hits.length === 1) { runPath(hits[0].id); return; }
+
+            pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("Pick a target:"))}</div>`;
+            hits.forEach(h => {
+                const b = document.createElement('button');
+                b.className = 'path-pick';
+                b.textContent = `${h.name} · ${h.type}`;
+                b.title = h.id;
+                b.addEventListener('click', () => runPath(h.id));
+                pathResult.appendChild(b);
+            });
+        } catch (err) {
+            console.error("Path target resolution failed:", err);
+            pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("Could not resolve target."))}</div>`;
+        }
+    }
+
+    // Fetches and renders the shortest path from the currently selected node to targetId.
+    async function runPath(targetId) {
+        const fromId = currentSelectedNodeId;
+        if (!fromId) return;
+        pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("Finding path…"))}</div>`;
+        try {
+            const res = await fetch(`/api/path?from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(targetId)}`);
+            if (currentSelectedNodeId !== fromId) return; // user navigated away
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            renderPath(await res.json());
+        } catch (err) {
+            console.error("Path finding failed:", err);
+            pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("Path finding failed."))}</div>`;
+        }
+    }
+
+    // Renders the path as clickable node chips separated by directional relation arrows.
+    function renderPath(data) {
+        pathResult.innerHTML = '';
+        if (!data || !data.found) {
+            pathResult.innerHTML = `<div class="path-status">${escapeHtml((data && data.message) || window.t("No path found."))}</div>`;
+            return;
+        }
+
+        const header = document.createElement('div');
+        header.className = 'path-status';
+        header.textContent = `${data.hops} ${data.hops === 1 ? window.t("hop") : window.t("hops")}`;
+        pathResult.appendChild(header);
+
+        const chain = document.createElement('div');
+        chain.className = 'path-chain';
+        (data.steps || []).forEach((step, i) => {
+            if (i > 0) {
+                const arrow = document.createElement('span');
+                arrow.className = 'path-arrow';
+                arrow.textContent = step.direction === 'backward' ? `← ${step.relation}` : `${step.relation} →`;
+                chain.appendChild(arrow);
+            }
+            const chip = document.createElement('button');
+            chip.className = 'path-chip';
+            chip.textContent = step.name;
+            chip.title = step.summary ? `${step.type} — ${step.summary}` : step.type;
+            chip.addEventListener('click', () => navigateToNode(step));
+            chain.appendChild(chip);
+        });
+        pathResult.appendChild(chain);
+
+        // Frame the path in the graph when its nodes are rendered.
+        if (network && data.steps && data.steps.length) {
+            const present = data.steps
+                .map(s => graphData.nodes.find(n => n.id === s.id))
+                .filter(n => n && n.x !== undefined);
+            if (present.length) {
+                const avgX = present.reduce((a, n) => a + n.x, 0) / present.length;
+                const avgY = present.reduce((a, n) => a + n.y, 0) / present.length;
+                network.centerAt(avgX, avgY, 800);
+            }
+        }
+    }
+
     async function selectNode(nodeId) {
         currentSelectedNodeId = nodeId;
+        // Reset the path finder for the newly selected start node.
+        if (pathResult) pathResult.innerHTML = '';
+        if (pathTargetInput) pathTargetInput.value = '';
         const node = allDiscoveredNodes.get(nodeId);
         if (!node) return;
 

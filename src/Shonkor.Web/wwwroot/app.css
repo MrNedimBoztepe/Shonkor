@@ -1075,6 +1075,85 @@ body {
     padding: 0.25rem 0.5rem 0.4rem;
 }
 
+/* Path finder in the node drawer */
+.pathfinder-row {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.pathfinder-input {
+    flex: 1;
+    background: rgba(5, 7, 12, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: var(--color-text);
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+    font-family: inherit;
+}
+
+.pathfinder-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+.pathfinder-result {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.path-status {
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+}
+
+.path-chain {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.path-chip {
+    background: rgba(6, 182, 212, 0.12);
+    border: 1px solid rgba(6, 182, 212, 0.35);
+    color: var(--color-text);
+    border-radius: 5px;
+    padding: 0.2rem 0.45rem;
+    font-size: 0.74rem;
+    cursor: pointer;
+    transition: var(--transition-quick);
+}
+
+.path-chip:hover {
+    background: rgba(6, 182, 212, 0.25);
+}
+
+.path-arrow {
+    font-size: 0.6rem;
+    font-weight: 700;
+    color: var(--color-accent);
+    white-space: nowrap;
+}
+
+.path-pick {
+    text-align: left;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--color-text);
+    border-radius: 5px;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.74rem;
+    cursor: pointer;
+}
+
+.path-pick:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
 .code-wrapper {
     flex: 1;
     position: relative;

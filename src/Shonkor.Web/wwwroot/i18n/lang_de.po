@@ -99,3 +99,33 @@ msgstr "Nichts referenziert diesen Knoten — gefahrlos isoliert änderbar."
 
 msgid "Self-contained — depends on nothing."
 msgstr "In sich geschlossen — hängt von nichts ab."
+
+msgid "find_path"
+msgstr "Pfad finden"
+
+msgid "Resolving target…"
+msgstr "Ziel wird aufgelöst…"
+
+msgid "No matching target node."
+msgstr "Kein passender Zielknoten."
+
+msgid "Pick a target:"
+msgstr "Ziel auswählen:"
+
+msgid "Could not resolve target."
+msgstr "Ziel konnte nicht aufgelöst werden."
+
+msgid "Finding path…"
+msgstr "Pfad wird gesucht…"
+
+msgid "Path finding failed."
+msgstr "Pfadsuche fehlgeschlagen."
+
+msgid "No path found."
+msgstr "Kein Pfad gefunden."
+
+msgid "hop"
+msgstr "Hop"
+
+msgid "hops"
+msgstr "Hops"

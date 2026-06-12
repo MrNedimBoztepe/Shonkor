@@ -185,6 +185,50 @@ public static class SearchEndpoints
             }
         });
 
+        // GET /api/path - shortest connection between two nodes (by id), as an ordered chain with each
+        // hop's real relation + direction. Backs the dashboard's "Find Path" tool.
+        app.MapGet("/api/path", async (string from, string to, int? maxHops, HttpContext context, ProjectManager pm, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
+            {
+                return Results.BadRequest("Query parameters 'from' and 'to' (node ids) are required.");
+            }
+
+            try
+            {
+                var storage = await pm.GetStorageForRequestAsync(context, ct);
+
+                var fromNode = await storage.GetNodeByIdAsync(from, ct);
+                if (fromNode == null) return Results.NotFound(new { error = $"Start node '{from}' not found." });
+                var toNode = await storage.GetNodeByIdAsync(to, ct);
+                if (toNode == null) return Results.NotFound(new { error = $"Target node '{to}' not found." });
+
+                var hops = Math.Clamp(maxHops ?? 6, 1, 20);
+                var path = await GraphPathFinder.FindPathAsync(storage, from, to, hops, ct);
+                if (path == null)
+                {
+                    return Results.Ok(new { found = false, message = $"No path between these nodes within {hops} hops." });
+                }
+
+                var steps = path.Select((s, i) => new
+                {
+                    id = s.Node.Id,
+                    name = s.Node.Name,
+                    type = s.Node.Type,
+                    summary = s.Node.Summary,
+                    relation = s.Relation,
+                    // null for the source; "forward" = prev --rel--> this, "backward" = prev <--rel-- this.
+                    direction = i == 0 ? null : (s.Forward ? "forward" : "backward")
+                });
+
+                return Results.Ok(new { found = true, hops = path.Count - 1, steps });
+            }
+            catch (Exception ex)
+            {
+                return Fail("Path finding failed.", ex);
+            }
+        });
+
         // POST /api/capsule - synthesize a token-optimized capsule for nodes matching the query.
         app.MapPost("/api/capsule", async (CapsuleRequest request, HttpContext context, ProjectManager pm, ContextCapsuleSynthesizer synthesizer, CancellationToken ct) =>
         {
