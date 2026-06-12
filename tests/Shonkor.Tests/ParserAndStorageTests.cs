@@ -1,5 +1,6 @@
 // Licensed to Shonkor under the MIT License.
 
+using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Storage;
@@ -288,6 +289,46 @@ public class ParserAndStorageTests
 
         Assert.Single(edges);
         Assert.Equal("DEFINED_IN", edges[0].Relationship);
+    }
+
+    [Fact]
+    public async Task ScanFile_IndexesEditsAndDeletions()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_scanfile_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var file = Path.Combine(dir, "Sample.cs");
+        var fullPath = Path.GetFullPath(file);
+
+        try
+        {
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+
+            // 1. Initial index.
+            await File.WriteAllTextAsync(file, "namespace D; public class Foo { public void Bar() {} }");
+            var r1 = await scanner.ScanFileAsync(file);
+            Assert.True(r1.NodesCreated > 0);
+            var (nodes1, _) = await storage.GetSubgraphAsync(new[] { fullPath }, 1);
+            Assert.Contains(nodes1, n => n.Type == "Class" && n.Name == "Foo");
+
+            // 2. Edit: rename the class -> old node gone, new node present.
+            await File.WriteAllTextAsync(file, "namespace D; public class Renamed { public void Bar() {} }");
+            await scanner.ScanFileAsync(file);
+            var (nodes2, _) = await storage.GetSubgraphAsync(new[] { fullPath }, 1);
+            Assert.Contains(nodes2, n => n.Name == "Renamed");
+            Assert.DoesNotContain(nodes2, n => n.Name == "Foo");
+
+            // 3. Delete the file -> its graph is cleared.
+            File.Delete(file);
+            var r3 = await scanner.ScanFileAsync(file);
+            Assert.Equal(0, r3.NodesCreated);
+            Assert.Null(await storage.GetNodeByIdAsync(fullPath));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
     }
 
     [Fact]

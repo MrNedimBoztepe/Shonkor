@@ -27,6 +27,13 @@ public sealed class McpRequestHandler
     private readonly IEmbeddingService? _embeddingService;
 
     /// <summary>
+    /// Optional file parsers for single-file re-indexing (<c>reindex_file</c>). Available where the MCP
+    /// server has filesystem access to the project (local stdio CLI / dev relay); null otherwise, where
+    /// the tool degrades gracefully.
+    /// </summary>
+    private readonly IEnumerable<IFileParser>? _fileParsers;
+
+    /// <summary>
     /// The project this server is bound to, derived from the working directory the MCP was launched in
     /// (the AI chat's directory) — NOT from the shared, web-mutable ActiveProjectName. May be null if the
     /// launch directory doesn't match any registered project, in which case the global active is used.
@@ -90,6 +97,50 @@ public sealed class McpRequestHandler
     /// <summary>Reads the target symbol for symbol-oriented tools, accepting <c>query</c> as a lenient alias of <c>symbol</c>.</summary>
     private static string? ReadSymbol(JsonNode? args) =>
         args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+
+    /// <summary>
+    /// Fallback for <c>get_source</c> on nodes that store no body (e.g. type declarations): reads the
+    /// exact line range from the file when this server has filesystem access (local; proxied by
+    /// <see cref="_fileParsers"/> being wired). Returns <c>null</c> if unavailable. Lines are 0-based, as
+    /// stored by the parser; without an EndLine a bounded window is read.
+    /// </summary>
+    private string? TryReadSourceSlice(GraphNode node)
+    {
+        if (_fileParsers == null || string.IsNullOrEmpty(node.FilePath) || !node.StartLine.HasValue) return null;
+        if (!System.IO.File.Exists(node.FilePath)) return null;
+        try
+        {
+            var lines = System.IO.File.ReadAllLines(node.FilePath);
+            if (lines.Length == 0) return null;
+            var start = Math.Clamp(node.StartLine.Value, 0, lines.Length - 1);
+            var end = node.EndLine.HasValue
+                ? Math.Clamp(node.EndLine.Value, start, lines.Length - 1)
+                : Math.Min(start + 40, lines.Length - 1);
+            return string.Join("\n", lines[start..(end + 1)]);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Returns the first non-empty line of <paramref name="content"/> that mentions <paramref name="name"/>
+    /// (trimmed, capped at 160 chars), or <c>null</c> — a grep-like usage snippet for find_usages.
+    /// </summary>
+    private static string? FirstLineMentioning(string? content, string name)
+    {
+        if (string.IsNullOrEmpty(content) || string.IsNullOrEmpty(name)) return null;
+        foreach (var rawLine in content.Split('\n'))
+        {
+            if (rawLine.Contains(name, StringComparison.Ordinal))
+            {
+                var trimmed = rawLine.Trim();
+                return trimmed.Length > 160 ? trimmed[..160] + "…" : trimmed;
+            }
+        }
+        return null;
+    }
 
     /// <summary>
     /// Resolves a free-text symbol to its best-matching definition node: prefers an exact-name declaration
@@ -241,13 +292,14 @@ public sealed class McpRequestHandler
     /// as the default for all tool calls that don't pass an explicit projectName, decoupling the MCP from
     /// the web dashboard's mutable active-project flag.
     /// </param>
-    public McpRequestHandler(ProjectManager projectManager, ContextCapsuleSynthesizer synthesizer, string? contextProjectName = null, bool lockToContextProject = false, IEmbeddingService? embeddingService = null)
+    public McpRequestHandler(ProjectManager projectManager, ContextCapsuleSynthesizer synthesizer, string? contextProjectName = null, bool lockToContextProject = false, IEmbeddingService? embeddingService = null, IEnumerable<IFileParser>? fileParsers = null)
     {
         _projectManager = projectManager ?? throw new ArgumentNullException(nameof(projectManager));
         _synthesizer = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
         _contextProjectName = contextProjectName;
         _lockToContextProject = lockToContextProject;
         _embeddingService = embeddingService;
+        _fileParsers = fileParsers;
     }
 
     /// <summary>
@@ -421,6 +473,52 @@ public sealed class McpRequestHandler
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "get_source",
+                            description = "Return the EXACT source code of a symbol (its stored body) plus its 'file:startLine-endLine' location — so you can read precisely what to edit without loading whole files. Resolves the symbol like impact_of. Supports maxChars to cap large bodies. The most token-efficient way to read a specific class/method before changing it.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The type/method/symbol name to read (e.g. 'GraphNode'). 'query' is accepted as an alias." },
+                                    maxChars = new { type = "integer", description = "Optional cap on the returned source length." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "find_usages",
+                            description = "List the call/reference SITES of a symbol with a code snippet at each — a graph-aware grep. For every node that references the symbol, returns 'relation  name  file:line  ⟶ <the line that uses it>'. Use to see HOW something is used (and what would break) before changing its signature; richer than impact_of, which lists dependents without the usage line.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The type/method/symbol name whose usages to find (e.g. 'GraphNode'). 'query' is accepted as an alias." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "reindex_file",
+                            description = "Re-index a SINGLE file after you edit it, so the graph matches the working tree before you query again — closes the edit loop. Clears the file's old nodes/edges and re-parses it (a missing file is removed). Accepts an absolute path, a project-relative path, or an '@/' handle. Available only where the MCP server can see the files (local stdio/dev); degrades with a clear message otherwise. Cross-tech links refresh on a full scan, not here.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new { type = "string", description = "File to re-index: absolute, project-relative, or an '@/<relative>' handle." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "path" }
                             }
                         },
                         new
@@ -835,6 +933,114 @@ public sealed class McpRequestHandler
                         // Distinct BEFORE Take so duplicate names don't shrink the suggestion list below 5.
                         var nearest = string.Join(", ", hits.Select(n => $"{n.Name} ({n.Type})").Distinct().Take(5));
                         return SendToolResponse(id, $"NO exact match for '{symbol}'. Nearest: {nearest}.");
+                    }
+
+                case "get_source":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+                        // Prefer the stored body (e.g. method source); for nodes that store none (type
+                        // declarations) fall back to reading the exact line range from the file locally.
+                        var body = def.Content;
+                        if (string.IsNullOrEmpty(body))
+                        {
+                            body = TryReadSourceSlice(def);
+                            if (string.IsNullOrEmpty(body))
+                            {
+                                return SendToolResponse(id,
+                                    $"'{def.Name}' ({def.Type}) at {ToHandle(def.Id, basePath)} stores no source, and no local file access is available to read it.");
+                            }
+                        }
+
+                        var loc = Shorten(string.IsNullOrEmpty(def.FilePath) ? def.Id : def.FilePath, basePath);
+                        var range = def.StartLine.HasValue
+                            ? (def.EndLine.HasValue ? $":{def.StartLine}-{def.EndLine}" : $":{def.StartLine}")
+                            : "";
+                        var maxChars = ReadInt(args?["maxChars"], 0); // 0 = no limit
+                        if (maxChars > 0 && body.Length > maxChars)
+                        {
+                            body = body[..maxChars].TrimEnd() + $"\n… (truncated to {maxChars} chars; raise maxChars)";
+                        }
+                        return SendToolResponse(id, $"{def.Name} ({def.Type}) — {loc}{range}\n\n{body}");
+                    }
+
+                case "find_usages":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
+                        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id).ToList();
+                        if (incoming.Count == 0)
+                        {
+                            return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found in the graph.");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"{incoming.Count} usage(s) of '{def.Name}':\n");
+                        foreach (var e in incoming.OrderBy(e => e.Relationship))
+                        {
+                            var user = neighbours.GetValueOrDefault(e.SourceId);
+                            var name = user?.Name ?? e.SourceId;
+                            var loc = Shorten(user != null && !string.IsNullOrEmpty(user.FilePath) ? user.FilePath : e.SourceId, basePath);
+                            if (user?.StartLine is int line) loc += $":{line}";
+                            var snippet = FirstLineMentioning(user?.Content, def.Name);
+                            var snippetText = snippet != null ? $"  ⟶ {snippet}" : "";
+                            sb.Append($"{e.Relationship}\t{name}\t{loc}{snippetText}\n");
+                        }
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "reindex_file":
+                    {
+                        var rawPath = args?["path"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(rawPath))
+                        {
+                            return SendError(id, -32602, "Parameter 'path' is required");
+                        }
+                        if (_fileParsers == null)
+                        {
+                            return SendToolResponse(id,
+                                "reindex_file is unavailable here (no parsers / filesystem access). Run via the local MCP server in the project directory.");
+                        }
+
+                        var basePath = GetProjectBasePath(projectName);
+                        var resolved = FromHandle(rawPath, basePath);
+                        if (!System.IO.Path.IsPathRooted(resolved))
+                        {
+                            resolved = System.IO.Path.Combine(basePath, resolved);
+                        }
+
+                        var scanner = new GraphIndexScanner(storage, _fileParsers);
+                        var result = await scanner.ScanFileAsync(resolved).ConfigureAwait(false);
+
+                        var handle = ToHandle(System.IO.Path.GetFullPath(resolved), basePath);
+                        if (result.NodesCreated == 0)
+                        {
+                            return SendToolResponse(id, $"Cleared '{handle}' from the graph (file missing, unparsable, or empty).");
+                        }
+                        return SendToolResponse(id,
+                            $"Reindexed {handle}: {result.NodesCreated} node(s), {result.EdgesCreated} edge(s) in {result.Duration.TotalMilliseconds:F0} ms. (Cross-tech links refresh on a full scan.)");
                     }
 
                 case "get_open_threads":
