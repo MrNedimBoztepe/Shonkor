@@ -21,6 +21,12 @@ public sealed class McpRequestHandler
     private readonly ContextCapsuleSynthesizer _synthesizer;
 
     /// <summary>
+    /// Optional embedding backend for semantic (vector) search. Available in the web/HTTP relay (Ollama
+    /// wired via DI); null in the stdio CLI, where <c>search_semantic</c> degrades gracefully.
+    /// </summary>
+    private readonly IEmbeddingService? _embeddingService;
+
+    /// <summary>
     /// The project this server is bound to, derived from the working directory the MCP was launched in
     /// (the AI chat's directory) — NOT from the shared, web-mutable ActiveProjectName. May be null if the
     /// launch directory doesn't match any registered project, in which case the global active is used.
@@ -70,6 +76,21 @@ public sealed class McpRequestHandler
         }
     }
 
+    /// <summary>
+    /// Resolves a free-text symbol to its best-matching definition node: prefers an exact-name declaration
+    /// (Class/Method/…), then any exact-name node, then the first declaration, then the first hit. Returns
+    /// <c>null</c> when nothing matches.
+    /// </summary>
+    private static async Task<GraphNode?> ResolveDefinitionAsync(IGraphStorageProvider storage, string symbol)
+    {
+        var hits = (await storage.SearchAsync(symbol, 8).ConfigureAwait(false)).Select(h => h.Node).ToList();
+        var defTypes = new[] { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Property", "Constructor" };
+        return hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase) && defTypes.Contains(n.Type))
+            ?? hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase))
+            ?? hits.FirstOrDefault(n => defTypes.Contains(n.Type))
+            ?? hits.FirstOrDefault();
+    }
+
     /// <summary>Returns <paramref name="path"/> relative to <paramref name="basePath"/> when contained, else the original.</summary>
     private static string Shorten(string? path, string basePath)
     {
@@ -80,6 +101,34 @@ public sealed class McpRequestHandler
             return rel.Length > 0 ? rel : path;
         }
         return path;
+    }
+
+    /// <summary>
+    /// Shortens a node id to a reusable, token-cheap "handle". File-path ids under the project root are
+    /// emitted as <c>@/&lt;relative&gt;</c>; other ids (<c>decision::</c>, <c>concept_</c>, …) are left
+    /// unchanged. The <c>@/</c> marker makes the transform reversible via <see cref="FromHandle"/> and
+    /// unambiguous — real ids never start with <c>@/</c> — so a handle can be passed straight back as a seed.
+    /// </summary>
+    private static string ToHandle(string? id, string basePath)
+    {
+        if (string.IsNullOrEmpty(id)) return string.Empty;
+        if (!string.IsNullOrEmpty(basePath) && id.StartsWith(basePath, StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = id[basePath.Length..].TrimStart('\\', '/');
+            if (rel.Length > 0) return "@/" + rel;
+        }
+        return id;
+    }
+
+    /// <summary>Expands a <c>@/&lt;relative&gt;</c> handle back to a real node id; other values pass through unchanged.</summary>
+    private static string FromHandle(string? handle, string basePath)
+    {
+        if (string.IsNullOrEmpty(handle)) return string.Empty;
+        if (handle.StartsWith("@/", StringComparison.Ordinal) && !string.IsNullOrEmpty(basePath))
+        {
+            return basePath.TrimEnd('\\', '/') + System.IO.Path.DirectorySeparatorChar + handle[2..];
+        }
+        return handle;
     }
 
     /// <summary>
@@ -114,12 +163,13 @@ public sealed class McpRequestHandler
     /// as the default for all tool calls that don't pass an explicit projectName, decoupling the MCP from
     /// the web dashboard's mutable active-project flag.
     /// </param>
-    public McpRequestHandler(ProjectManager projectManager, ContextCapsuleSynthesizer synthesizer, string? contextProjectName = null, bool lockToContextProject = false)
+    public McpRequestHandler(ProjectManager projectManager, ContextCapsuleSynthesizer synthesizer, string? contextProjectName = null, bool lockToContextProject = false, IEmbeddingService? embeddingService = null)
     {
         _projectManager = projectManager ?? throw new ArgumentNullException(nameof(projectManager));
         _synthesizer = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
         _contextProjectName = contextProjectName;
         _lockToContextProject = lockToContextProject;
+        _embeddingService = embeddingService;
     }
 
     /// <summary>
@@ -250,18 +300,110 @@ public sealed class McpRequestHandler
                         new
                         {
                             name = "get_subgraph",
-                            description = "Retrieve nodes and edges connected to a set of seed nodes within N traversal hops. Token-efficient text output by default (nodes as 'type name file', edges as 'A --REL--> B'); set verbose=true for full JSON.",
+                            description = "Retrieve nodes and edges connected to seed nodes within N hops. Token-efficient text by default: each node is 'handle  type  name  — summary' and edges are 'handle --REL--> handle'. The handle (e.g. '@/src/...File.cs::Class::Method') is a short, reusable id you can pass straight back as a seed. Set verbose=true for full JSON; maxChars to cap the size.",
                             inputSchema = new
                             {
                                 type = "object",
                                 properties = new
                                 {
-                                    seeds = new { type = "array", items = new { type = "string" }, description = "List of node IDs to expand from" },
-                                    hops = new { type = "integer", description = "Number of hops to traverse (default 1)" },
+                                    seeds = new { type = "array", items = new { type = "string" }, description = "Node ids or short '@/…' handles to expand from." },
+                                    hops = new { type = "integer", description = "Number of hops to traverse (default 2)" },
                                     verbose = new { type = "boolean", description = "Return full node/edge JSON instead of the compact text form (default false)." },
+                                    maxChars = new { type = "integer", description = "Optional cap on the compact output size in characters (~4 chars/token). Truncates beyond it." },
                                     projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
                                 },
                                 required = new[] { "seeds" }
+                            }
+                        },
+                        new
+                        {
+                            name = "impact_of",
+                            description = "Impact analysis: list the nodes that reference a given symbol (incoming REFERENCES_TYPE/IMPLEMENTS/CALLS edges) — i.e. what would be affected if you change it. Returns 'relation  name  handle  — summary' per dependent, or states that nothing references it. The most token-efficient way to answer 'what breaks if I change X?'.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode')." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "depends_on",
+                            description = "Inverse of impact_of: list what a symbol itself uses (outgoing REFERENCES_TYPE/IMPLEMENTS/CALLS edges) — its direct dependencies. Returns 'relation  name  handle  — summary' per dependency, or states it's self-contained. Use to understand a symbol's footprint before reading or changing it.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode')." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "verify_exists",
+                            description = "Fact-check that a symbol actually exists in the graph BEFORE asserting it. Returns 'YES — name (type) at handle' on an exact name match, otherwise 'NO' plus the nearest matching names. Use this to avoid claiming a class/method exists when it doesn't.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The exact symbol name to verify (e.g. 'GraphNode')." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "get_open_threads",
+                            description = "Resume context cheaply: lists the still-open recorded interactions (Question/Task/Decision/Milestone, i.e. anything not done/resolved/accepted/superseded) as 'type [status] name id'. Call at the start of a session to recover what was in progress without re-deriving it.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                }
+                            }
+                        },
+                        new
+                        {
+                            name = "search_semantic",
+                            description = "Concept/meaning-based search via vector embeddings (e.g. 'where is authentication handled?'), complementing the keyword-based search_graph. Returns 'type  name  handle  — summary' per hit. Requires the embedding backend (web server + Ollama) and nodes that have been embedded by the enrichment worker; degrades to a clear message otherwise.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    query = new { type = "string", description = "Natural-language description of what you're looking for." },
+                                    limit = new { type = "integer", description = "Max number of results (default 10)." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "query" }
+                            }
+                        },
+                        new
+                        {
+                            name = "find_path",
+                            description = "Explain HOW two symbols are connected: returns the shortest chain between them as 'A --REL--> B <--REL-- C …', with each arrow showing the real edge direction. Far cheaper than dumping a subgraph when you only need the connection. Returns a clear 'no path' message if they're unconnected within maxHops.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    from = new { type = "string", description = "Start symbol (name of a class/method/etc.)." },
+                                    to = new { type = "string", description = "Target symbol to reach." },
+                                    maxHops = new { type = "integer", description = "Max path length to search (default 5)." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "from", "to" }
                             }
                         },
                         new
@@ -499,32 +641,43 @@ public sealed class McpRequestHandler
                             return SendError(id, -32602, "Parameter 'seeds' is required and must be a non-empty array");
                             
                         }
-                        var seeds = seedsNode.Select(s => s?.ToString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
                         var hops = args?["hops"]?.GetValue<int>() ?? 2;
                         var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
+                        var maxChars = args?["maxChars"]?.GetValue<int>();
+                        var basePath = GetProjectBasePath(projectName);
+
+                        // Accept either raw node ids or short "@/…" handles as seeds.
+                        var seeds = seedsNode.Select(s => FromHandle(s?.ToString(), basePath))
+                            .Where(s => !string.IsNullOrEmpty(s)).ToList();
 
                         var (nodes, edges) = await storage.GetSubgraphAsync(seeds, hops).ConfigureAwait(false);
 
                         if (!verbose)
                         {
-                            // Token-efficient default: compact text. Nodes as 'type<TAB>name<TAB>file',
-                            // edges as 'source --REL--> target', all paths relative to the project root.
-                            var basePath = GetProjectBasePath(projectName);
-
+                            // Token-efficient default: each node is 'handle<TAB>type<TAB>name[<TAB>— summary]'
+                            // (the handle is a reusable seed); edges as 'handle --REL--> handle'.
                             var nodeLines = nodes.Select(n =>
                             {
-                                var rawLoc = string.IsNullOrEmpty(n.FilePath) ? n.Id : n.FilePath;
-                                return $"{n.Type}\t{n.Name}\t{Shorten(rawLoc, basePath)}";
+                                var handle = ToHandle(string.IsNullOrEmpty(n.FilePath) ? n.Id : n.Id, basePath);
+                                var summary = !string.IsNullOrEmpty(n.Summary) ? $"\t— {n.Summary}" : "";
+                                return $"{handle}\t{n.Type}\t{n.Name}{summary}";
                             });
                             var edgeLines = edges.Select(e =>
-                                $"{Shorten(e.SourceId, basePath)} --{e.Relationship}--> {Shorten(e.TargetId, basePath)}");
+                                $"{ToHandle(e.SourceId, basePath)} --{e.Relationship}--> {ToHandle(e.TargetId, basePath)}");
 
                             var sb = new System.Text.StringBuilder();
                             sb.Append("NODES (").Append(nodes.Count).Append("):\n");
                             sb.Append(string.Join("\n", nodeLines));
                             sb.Append("\n\nEDGES (").Append(edges.Count).Append("):\n");
                             sb.Append(string.Join("\n", edgeLines));
-                            return SendToolResponse(id, sb.ToString());
+
+                            var output = sb.ToString();
+                            if (maxChars is > 0 && output.Length > maxChars.Value)
+                            {
+                                output = output[..maxChars.Value].TrimEnd()
+                                    + $"\n… (truncated to {maxChars.Value} chars; raise maxChars or reduce hops)";
+                            }
+                            return SendToolResponse(id, output);
                         }
 
                         var formatted = new
@@ -548,6 +701,262 @@ public sealed class McpRequestHandler
                         };
 
                         return SendToolResponse(id, JsonSerializer.Serialize(formatted));
+                    }
+
+                case "impact_of":
+                    {
+                        var symbol = args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        // 1. Resolve the symbol to a definition node (prefer declarations, exact name).
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        // 2. Expand one hop; edges that POINT AT the definition are its direct dependents.
+                        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { def.Id }, 1).ConfigureAwait(false);
+                        var nodeById = nodes.ToDictionary(n => n.Id);
+                        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id).ToList();
+
+                        if (incoming.Count == 0)
+                        {
+                            return SendToolResponse(id,
+                                $"Nothing references '{def.Name}' ({def.Type}) — safe to change in isolation, or it is an entry point.");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"'{def.Name}' ({def.Type}) is referenced by {incoming.Count} node(s):\n");
+                        foreach (var g in incoming.GroupBy(e => e.Relationship).OrderByDescending(g => g.Count()))
+                        {
+                            foreach (var e in g)
+                            {
+                                var dep = nodeById.GetValueOrDefault(e.SourceId);
+                                var name = dep?.Name ?? e.SourceId;
+                                var summary = dep != null && !string.IsNullOrEmpty(dep.Summary) ? $"  — {dep.Summary}" : "";
+                                sb.Append($"{g.Key}\t{name}\t{ToHandle(e.SourceId, basePath)}{summary}\n");
+                            }
+                        }
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "depends_on":
+                    {
+                        var symbol = args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        // Mirror of impact_of: edges that ORIGINATE at the definition are what it depends on.
+                        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { def.Id }, 1).ConfigureAwait(false);
+                        var nodeById = nodes.ToDictionary(n => n.Id);
+                        var outgoing = edges.Where(e => e.SourceId == def.Id && e.TargetId != def.Id).ToList();
+
+                        if (outgoing.Count == 0)
+                        {
+                            return SendToolResponse(id,
+                                $"'{def.Name}' ({def.Type}) depends on nothing in the graph — it is self-contained or a leaf.");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"'{def.Name}' ({def.Type}) depends on {outgoing.Count} node(s):\n");
+                        foreach (var g in outgoing.GroupBy(e => e.Relationship).OrderByDescending(g => g.Count()))
+                        {
+                            foreach (var e in g)
+                            {
+                                var dep = nodeById.GetValueOrDefault(e.TargetId);
+                                var name = dep?.Name ?? e.TargetId;
+                                var summary = dep != null && !string.IsNullOrEmpty(dep.Summary) ? $"  — {dep.Summary}" : "";
+                                sb.Append($"{g.Key}\t{name}\t{ToHandle(e.TargetId, basePath)}{summary}\n");
+                            }
+                        }
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "verify_exists":
+                    {
+                        var symbol = args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+                        var hits = (await storage.SearchAsync(symbol, 8).ConfigureAwait(false)).Select(h => h.Node).ToList();
+
+                        var exact = hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase));
+                        if (exact != null)
+                        {
+                            return SendToolResponse(id, $"YES — '{exact.Name}' ({exact.Type}) exists at {ToHandle(exact.Id, basePath)}.");
+                        }
+
+                        // Honest negative: don't let the caller assume — offer the nearest names instead.
+                        if (hits.Count == 0)
+                        {
+                            return SendToolResponse(id, $"NO — nothing named '{symbol}' is in the graph.");
+                        }
+                        var nearest = string.Join(", ", hits.Take(5).Select(n => $"{n.Name} ({n.Type})").Distinct());
+                        return SendToolResponse(id, $"NO exact match for '{symbol}'. Nearest: {nearest}.");
+                    }
+
+                case "get_open_threads":
+                    {
+                        var interactionTypes = new[] { "Question", "Task", "Decision", "Milestone" };
+                        var closedStatuses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            "done", "resolved", "completed", "accepted", "superseded", "closed"
+                        };
+
+                        var items = await storage.GetNodesByTypesAsync(interactionTypes).ConfigureAwait(false);
+                        var open = items
+                            .Where(n => !closedStatuses.Contains(n.Properties.GetValueOrDefault("status", "")))
+                            .ToList();
+
+                        if (open.Count == 0)
+                        {
+                            return SendToolResponse(id, "No open threads (tasks/questions/decisions/milestones).");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append("Open threads (").Append(open.Count).Append("):\n");
+                        foreach (var g in open.GroupBy(n => n.Type))
+                        {
+                            foreach (var n in g)
+                            {
+                                var status = n.Properties.GetValueOrDefault("status", "Open");
+                                sb.Append($"{n.Type}\t[{status}]\t{n.Name}\t{n.Id}\n");
+                            }
+                        }
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "search_semantic":
+                    {
+                        var query = args?["query"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(query))
+                        {
+                            return SendError(id, -32602, "Parameter 'query' is required");
+                        }
+                        if (_embeddingService == null)
+                        {
+                            return SendToolResponse(id, "Semantic search is unavailable here (no embedding backend wired). Use search_graph (FTS) instead, or run via the web server with Ollama.");
+                        }
+
+                        var limit = args?["limit"]?.GetValue<int>() ?? 10;
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var embedding = await _embeddingService.GenerateEmbeddingAsync(query).ConfigureAwait(false);
+                        if (embedding == null || embedding.Length == 0)
+                        {
+                            return SendToolResponse(id, "Could not embed the query (is the embedding backend / Ollama running?).");
+                        }
+
+                        var results = await storage.SearchSemanticAsync(embedding, limit).ConfigureAwait(false);
+                        if (results.Count == 0)
+                        {
+                            return SendToolResponse(id, $"No semantically similar nodes for '{query}'. (Have nodes been embedded by the enrichment worker yet?)");
+                        }
+
+                        var lines = results.Select(r =>
+                        {
+                            var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t— {r.Node.Summary}" : "";
+                            return $"{r.Node.Type}\t{r.Node.Name}\t{ToHandle(r.Node.Id, basePath)}{summary}";
+                        });
+                        return SendToolResponse(id, string.Join("\n", lines));
+                    }
+
+                case "find_path":
+                    {
+                        var fromArg = args?["from"]?.ToString();
+                        var toArg = args?["to"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(fromArg) || string.IsNullOrWhiteSpace(toArg))
+                        {
+                            return SendError(id, -32602, "Parameters 'from' and 'to' are required");
+                        }
+                        var maxHops = args?["maxHops"]?.GetValue<int>() ?? 5;
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var fromDef = await ResolveDefinitionAsync(storage, fromArg).ConfigureAwait(false);
+                        if (fromDef == null) return SendToolResponse(id, $"No definition found for 'from' = '{fromArg}'.");
+                        var toDef = await ResolveDefinitionAsync(storage, toArg).ConfigureAwait(false);
+                        if (toDef == null) return SendToolResponse(id, $"No definition found for 'to' = '{toArg}'.");
+                        if (fromDef.Id == toDef.Id)
+                        {
+                            return SendToolResponse(id, $"'{fromArg}' and '{toArg}' resolve to the same node ({fromDef.Name}).");
+                        }
+
+                        // Fetch the neighbourhood once, then BFS in-memory. Edges are treated as undirected
+                        // for connectivity, but each step remembers its real direction + relation for display.
+                        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { fromDef.Id }, maxHops).ConfigureAwait(false);
+                        var nodeById = nodes.ToDictionary(n => n.Id);
+
+                        var adj = new Dictionary<string, List<(string Next, string Rel, bool Forward)>>();
+                        void AddEdge(string a, string b, string rel, bool forward)
+                        {
+                            if (!adj.TryGetValue(a, out var list)) adj[a] = list = new();
+                            list.Add((b, rel, forward));
+                        }
+                        foreach (var e in edges)
+                        {
+                            AddEdge(e.SourceId, e.TargetId, e.Relationship, true);
+                            AddEdge(e.TargetId, e.SourceId, e.Relationship, false);
+                        }
+
+                        var prev = new Dictionary<string, (string From, string Rel, bool Forward)>();
+                        var visited = new HashSet<string> { fromDef.Id };
+                        var queue = new Queue<string>();
+                        queue.Enqueue(fromDef.Id);
+                        var found = false;
+                        while (queue.Count > 0)
+                        {
+                            var cur = queue.Dequeue();
+                            if (cur == toDef.Id) { found = true; break; }
+                            if (!adj.TryGetValue(cur, out var neighbors)) continue;
+                            foreach (var (next, rel, forward) in neighbors)
+                            {
+                                if (visited.Add(next))
+                                {
+                                    prev[next] = (cur, rel, forward);
+                                    queue.Enqueue(next);
+                                }
+                            }
+                        }
+
+                        if (!found)
+                        {
+                            return SendToolResponse(id,
+                                $"No path from '{fromDef.Name}' to '{toDef.Name}' within {maxHops} hops — they may be in different components. Try raising maxHops.");
+                        }
+
+                        // Reconstruct target<-…<-source, then reverse to read source→target.
+                        var chain = new List<string>();
+                        for (var n = toDef.Id; n != fromDef.Id; n = prev[n].From) chain.Add(n);
+                        chain.Add(fromDef.Id);
+                        chain.Reverse();
+
+                        string NameOf(string nid) => nodeById.GetValueOrDefault(nid)?.Name ?? ToHandle(nid, basePath);
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"Path ({chain.Count - 1} hop(s)) from '{fromDef.Name}' to '{toDef.Name}':\n");
+                        sb.Append(NameOf(chain[0]));
+                        for (var i = 1; i < chain.Count; i++)
+                        {
+                            var step = prev[chain[i]];
+                            sb.Append(step.Forward ? $" --{step.Rel}--> " : $" <--{step.Rel}-- ").Append(NameOf(chain[i]));
+                        }
+                        return SendToolResponse(id, sb.ToString());
                     }
 
                 case "generate_capsule":
