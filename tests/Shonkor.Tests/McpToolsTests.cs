@@ -145,6 +145,38 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task GetSource_ReturnsExactBody_WithLocation()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("get_source", new { symbol = "Widget" })));
+
+        Assert.Contains("Widget (Class)", text);     // header with name + type
+        Assert.Contains("Widget.cs:1", text);         // file:line location
+        Assert.Contains("class Widget {}", text);     // the exact stored body
+    }
+
+    [Fact]
+    public async Task FindUsages_ListsCallSites_WithSnippet()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // Gadget --REFERENCES_TYPE--> Widget, and Gadget's body mentions Widget.
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("find_usages", new { symbol = "Widget" })));
+
+        Assert.Contains("usage(s) of 'Widget'", text);
+        Assert.Contains("REFERENCES_TYPE", text);
+        Assert.Contains("Gadget", text);
+        Assert.Contains("class Gadget { Widget w; }", text); // the grep-like usage snippet
+
+        // Widget references nothing, so it has no usages reported for Gadget.
+        var none = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("find_usages", new { symbol = "Gadget" })));
+        Assert.Contains("No usages", none);
+    }
+
+    [Fact]
     public async Task DependsOn_ListsOutgoingReferences()
     {
         var (pm, synth, _) = await SetupAsync();

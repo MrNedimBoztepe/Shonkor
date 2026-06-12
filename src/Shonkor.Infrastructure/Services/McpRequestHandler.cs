@@ -92,6 +92,24 @@ public sealed class McpRequestHandler
         args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
 
     /// <summary>
+    /// Returns the first non-empty line of <paramref name="content"/> that mentions <paramref name="name"/>
+    /// (trimmed, capped at 160 chars), or <c>null</c> — a grep-like usage snippet for find_usages.
+    /// </summary>
+    private static string? FirstLineMentioning(string? content, string name)
+    {
+        if (string.IsNullOrEmpty(content) || string.IsNullOrEmpty(name)) return null;
+        foreach (var rawLine in content.Split('\n'))
+        {
+            if (rawLine.Contains(name, StringComparison.Ordinal))
+            {
+                var trimmed = rawLine.Trim();
+                return trimmed.Length > 160 ? trimmed[..160] + "…" : trimmed;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Resolves a free-text symbol to its best-matching definition node: prefers an exact-name declaration
     /// (Class/Method/…), then any exact-name node, then the first declaration, then the first hit. Returns
     /// <c>null</c> when nothing matches.
@@ -418,6 +436,37 @@ public sealed class McpRequestHandler
                                 properties = new
                                 {
                                     symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode'). 'query' is accepted as an alias." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "get_source",
+                            description = "Return the EXACT source code of a symbol (its stored body) plus its 'file:startLine-endLine' location — so you can read precisely what to edit without loading whole files. Resolves the symbol like impact_of. Supports maxChars to cap large bodies. The most token-efficient way to read a specific class/method before changing it.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The type/method/symbol name to read (e.g. 'GraphNode'). 'query' is accepted as an alias." },
+                                    maxChars = new { type = "integer", description = "Optional cap on the returned source length." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "find_usages",
+                            description = "List the call/reference SITES of a symbol with a code snippet at each — a graph-aware grep. For every node that references the symbol, returns 'relation  name  file:line  ⟶ <the line that uses it>'. Use to see HOW something is used (and what would break) before changing its signature; richer than impact_of, which lists dependents without the usage line.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The type/method/symbol name whose usages to find (e.g. 'GraphNode'). 'query' is accepted as an alias." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "symbol" }
@@ -835,6 +884,76 @@ public sealed class McpRequestHandler
                         // Distinct BEFORE Take so duplicate names don't shrink the suggestion list below 5.
                         var nearest = string.Join(", ", hits.Select(n => $"{n.Name} ({n.Type})").Distinct().Take(5));
                         return SendToolResponse(id, $"NO exact match for '{symbol}'. Nearest: {nearest}.");
+                    }
+
+                case "get_source":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+                        if (string.IsNullOrEmpty(def.Content))
+                        {
+                            return SendToolResponse(id,
+                                $"'{def.Name}' ({def.Type}) at {ToHandle(def.Id, basePath)} has no stored source (structural/virtual node).");
+                        }
+
+                        var loc = Shorten(string.IsNullOrEmpty(def.FilePath) ? def.Id : def.FilePath, basePath);
+                        var range = def.StartLine.HasValue
+                            ? (def.EndLine.HasValue ? $":{def.StartLine}-{def.EndLine}" : $":{def.StartLine}")
+                            : "";
+                        var body = def.Content;
+                        var maxChars = ReadInt(args?["maxChars"], 0); // 0 = no limit
+                        if (maxChars > 0 && body.Length > maxChars)
+                        {
+                            body = body[..maxChars].TrimEnd() + $"\n… (truncated to {maxChars} chars; raise maxChars)";
+                        }
+                        return SendToolResponse(id, $"{def.Name} ({def.Type}) — {loc}{range}\n\n{body}");
+                    }
+
+                case "find_usages":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
+                        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id).ToList();
+                        if (incoming.Count == 0)
+                        {
+                            return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found in the graph.");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"{incoming.Count} usage(s) of '{def.Name}':\n");
+                        foreach (var e in incoming.OrderBy(e => e.Relationship))
+                        {
+                            var user = neighbours.GetValueOrDefault(e.SourceId);
+                            var name = user?.Name ?? e.SourceId;
+                            var loc = Shorten(user != null && !string.IsNullOrEmpty(user.FilePath) ? user.FilePath : e.SourceId, basePath);
+                            if (user?.StartLine is int line) loc += $":{line}";
+                            var snippet = FirstLineMentioning(user?.Content, def.Name);
+                            var snippetText = snippet != null ? $"  ⟶ {snippet}" : "";
+                            sb.Append($"{e.Relationship}\t{name}\t{loc}{snippetText}\n");
+                        }
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
                     }
 
                 case "get_open_threads":
