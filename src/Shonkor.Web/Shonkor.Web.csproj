@@ -11,4 +11,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Expose internal helpers (e.g. SemanticEnrichmentService.ProcessBatchAsync) to the test project. -->
+    <InternalsVisibleTo Include="Shonkor.Tests" />
+  </ItemGroup>
+
 </Project>

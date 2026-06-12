@@ -291,6 +291,41 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task DeleteByFilePaths_RemovesNodesAndOrphanEdges_InOneTransaction()
+    {
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+
+        const string fileA = "/repo/A.cs";
+        const string fileC = "/repo/C.cs";
+        await storage.UpsertNodesAsync(new[]
+        {
+            new GraphNode { Id = "a1", Type = "Class",  Name = "A1", FilePath = fileA, Content = "a1" },
+            new GraphNode { Id = "a2", Type = "Method", Name = "A2", FilePath = fileA, Content = "a2" },
+            new GraphNode { Id = "c1", Type = "Class",  Name = "C1", FilePath = fileC, Content = "c1" },
+            new GraphNode { Id = "c2", Type = "Method", Name = "C2", FilePath = fileC, Content = "c2" }
+        });
+        await storage.UpsertEdgesAsync(new[]
+        {
+            new GraphEdge { SourceId = "a1", TargetId = "a2", Relationship = "CONTAINS" }, // within A
+            new GraphEdge { SourceId = "a2", TargetId = "c1", Relationship = "CALLS" },    // A -> C (orphaned by delete)
+            new GraphEdge { SourceId = "c1", TargetId = "c2", Relationship = "CONTAINS" }  // within C (must survive)
+        });
+
+        await storage.DeleteByFilePathsAsync(new[] { fileA });
+
+        // A's nodes are gone; C's survive.
+        Assert.Null(await storage.GetNodeByIdAsync("a1"));
+        Assert.Null(await storage.GetNodeByIdAsync("a2"));
+        Assert.NotNull(await storage.GetNodeByIdAsync("c1"));
+
+        // Only the intra-C edge survives; edges touching a deleted node are cleaned up.
+        var stats = await storage.GetStatisticsAsync();
+        Assert.Equal(2, stats.TotalNodes);
+        Assert.Equal(1, stats.TotalEdges);
+    }
+
+    [Fact]
     public async Task GraphPathFinder_FindsShortestChain_WithRealDirections()
     {
         using var storage = new SqliteGraphStorageProvider(":memory:");
