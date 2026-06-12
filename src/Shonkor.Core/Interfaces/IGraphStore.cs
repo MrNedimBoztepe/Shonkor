@@ -36,6 +36,13 @@ public interface IGraphStore
     Task DeleteByFilePathAsync(string filePath, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Deletes all nodes and associated edges for many file paths in a single transaction. Preferred
+    /// over looping <see cref="DeleteByFilePathAsync"/> when clearing a large changeset (first index,
+    /// branch switch, bulk re-scan), where per-file transactions dominate the cost.
+    /// </summary>
+    Task DeleteByFilePathsAsync(IEnumerable<string> filePaths, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieves all File node paths currently stored in the graph.
     /// </summary>
     Task<IReadOnlyList<string>> GetAllIndexedFilePathsAsync(CancellationToken cancellationToken = default);
