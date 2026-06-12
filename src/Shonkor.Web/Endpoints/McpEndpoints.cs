@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Shonkor.Core.Interfaces;
 using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Services;
 
@@ -17,9 +19,11 @@ public static class McpEndpoints
         group.MapPost("/relay", async (
             HttpContext context,
             [FromServices] ProjectManager projectManager,
-            [FromServices] ContextCapsuleSynthesizer synthesizer,
-            [FromServices] Shonkor.Core.Interfaces.IEmbeddingService embeddingService) =>
+            [FromServices] ContextCapsuleSynthesizer synthesizer) =>
         {
+            // Resolve the embedding backend optionally: a missing registration must NOT 500 the whole
+            // relay (every MCP tool routes through here). search_semantic degrades gracefully when null.
+            var embeddingService = context.RequestServices.GetService<IEmbeddingService>();
             // Authentication is enforced centrally by ApiKeyMiddleware (single source of truth).
             // When a request is authenticated via API key, the middleware records the authoritative
             // tenant in HttpContext.Items["AuthenticatedProjectName"] — server-side and unforgeable,

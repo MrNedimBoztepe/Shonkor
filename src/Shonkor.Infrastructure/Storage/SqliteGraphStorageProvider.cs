@@ -470,6 +470,68 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     }
 
     /// <inheritdoc />
+    public async Task<(IReadOnlyList<GraphEdge> Edges, IReadOnlyDictionary<string, GraphNode> Neighbours)> GetIncidentEdgesAsync(
+        string nodeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(nodeId);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        // 1. Just the node's own edges, in either direction — no neighbourhood materialization.
+        var edges = new List<GraphEdge>();
+        await using (var edgeCommand = connection.CreateCommand())
+        {
+            edgeCommand.CommandText =
+                """
+                SELECT SourceId, TargetId, RelationType
+                FROM Edges
+                WHERE SourceId = @id OR TargetId = @id;
+                """;
+            edgeCommand.Parameters.AddWithValue("@id", nodeId);
+
+            await using var reader = await edgeCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                edges.Add(SqliteRowMapper.ReadEdge(reader));
+            }
+        }
+
+        // 2. Fetch the endpoint nodes (both ends, incl. the node itself) in one IN query so the caller
+        //    can render names/summaries without N round-trips.
+        var endpointIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var e in edges)
+        {
+            endpointIds.Add(e.SourceId);
+            endpointIds.Add(e.TargetId);
+        }
+
+        var neighbours = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
+        if (endpointIds.Count > 0)
+        {
+            await using var nodeCommand = connection.CreateCommand();
+            var paramNames = new List<string>(endpointIds.Count);
+            var i = 0;
+            foreach (var id in endpointIds)
+            {
+                var paramName = $"@n{i++}";
+                paramNames.Add(paramName);
+                nodeCommand.Parameters.AddWithValue(paramName, id);
+            }
+
+            nodeCommand.CommandText = $"SELECT * FROM Nodes WHERE Id IN ({string.Join(", ", paramNames)});";
+
+            await using var reader = await nodeCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var node = SqliteRowMapper.ReadNode(reader);
+                neighbours[node.Id] = node;
+            }
+        }
+
+        return (edges, neighbours);
+    }
+
+    /// <inheritdoc />
     public async Task DeleteByFilePathAsync(string filePath, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);

@@ -291,6 +291,76 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task GetIncidentEdges_ReturnsBothDirections_WithEndpointNodes()
+    {
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+
+        await storage.UpsertNodesAsync(new[]
+        {
+            new GraphNode { Id = "A", Type = "Class", Name = "Alpha", Content = "a" },
+            new GraphNode { Id = "B", Type = "Class", Name = "Beta", Content = "b" },
+            new GraphNode { Id = "C", Type = "Class", Name = "Gamma", Content = "c" },
+            new GraphNode { Id = "X", Type = "Class", Name = "Xenon", Content = "x" } // unrelated, must not appear
+        });
+        await storage.UpsertEdgesAsync(new[]
+        {
+            new GraphEdge { SourceId = "A", TargetId = "B", Relationship = "CALLS" },        // A is source
+            new GraphEdge { SourceId = "C", TargetId = "A", Relationship = "REFERENCES" },   // A is target
+            new GraphEdge { SourceId = "B", TargetId = "C", Relationship = "CALLS" }          // touches neither A end
+        });
+
+        var (edges, neighbours) = await storage.GetIncidentEdgesAsync("A");
+
+        // Both edges incident to A, in either direction; the B->C edge is excluded.
+        Assert.Equal(2, edges.Count);
+        Assert.Contains(edges, e => e.SourceId == "A" && e.TargetId == "B" && e.Relationship == "CALLS");
+        Assert.Contains(edges, e => e.SourceId == "C" && e.TargetId == "A" && e.Relationship == "REFERENCES");
+
+        // Endpoint nodes are returned for rendering; the unrelated node X is not.
+        Assert.Equal("Beta", neighbours["B"].Name);
+        Assert.Equal("Gamma", neighbours["C"].Name);
+        Assert.True(neighbours.ContainsKey("A"));
+        Assert.False(neighbours.ContainsKey("X"));
+    }
+
+    [Fact]
+    public async Task MarkdownHierarchyParser_ShouldExtractSectionsAndRelativeLinks()
+    {
+        // Arrange
+        var parser = new MarkdownHierarchyParser();
+        var md = """
+            # Guide
+
+            See [setup](./setup.md) and the [API docs](https://example.com/api).
+
+            ## Installation
+
+            Repeat the [setup](./setup.md) link — must be de-duplicated.
+            """;
+
+        // Act
+        var (nodes, edges) = await parser.ParseAsync("docs/guide.md", md);
+
+        // Assert: one section node per header, carrying level + index.
+        var h1 = nodes.FirstOrDefault(n => n.Type == "MarkdownSection" && n.Name == "Guide");
+        var h2 = nodes.FirstOrDefault(n => n.Type == "MarkdownSection" && n.Name == "Installation");
+        Assert.NotNull(h1);
+        Assert.NotNull(h2);
+        Assert.Equal("1", h1!.Properties["level"]);
+        Assert.Equal("2", h2!.Properties["level"]);
+
+        // Each section is CONTAINED by the file.
+        Assert.Contains(edges, e => e.Relationship == "CONTAINS" && e.SourceId == "docs/guide.md" && e.TargetId == h1.Id);
+
+        // Relative links become REFERENCES edges; the http link is excluded; the duplicate is collapsed.
+        var refs = edges.Where(e => e.Relationship == "REFERENCES").ToList();
+        Assert.Single(refs);
+        Assert.Equal("./setup.md", refs[0].Properties["rawTarget"]);
+        Assert.DoesNotContain(edges, e => e.Relationship == "REFERENCES" && e.Properties.GetValueOrDefault("rawTarget", "").Contains("example.com"));
+    }
+
+    [Fact]
     public async Task CrossTechLinker_ShouldEstablishDynamicMappings()
     {
         // Arrange
