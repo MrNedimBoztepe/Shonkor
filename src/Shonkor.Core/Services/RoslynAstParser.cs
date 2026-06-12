@@ -285,6 +285,7 @@ public sealed class RoslynAstParser : IFileParser
                 Type = defaultType,
                 FilePath = filePath,
                 StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
+                EndLine = node.GetLocation().GetLineSpan().EndLinePosition.Line,
                 Properties = properties
             });
 

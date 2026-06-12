@@ -72,19 +72,7 @@ public sealed class GraphIndexScanner
         var matchingResult = matcher.Execute(dirInfo);
 
         // Pre-compute parser mappings for fast lookup
-        var parserMap = new Dictionary<string, List<IFileParser>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var parser in _parsers)
-        {
-            foreach (var ext in parser.SupportedExtensions)
-            {
-                if (!parserMap.TryGetValue(ext, out var list))
-                {
-                    list = new List<IFileParser>();
-                    parserMap[ext] = list;
-                }
-                list.Add(parser);
-            }
-        }
+        var parserMap = BuildParserMap();
 
         // 1. Gather all files supported by our parsers
         var candidateFiles = new List<string>();
@@ -216,6 +204,99 @@ public sealed class GraphIndexScanner
 
         stopwatch.Stop();
         return new IndexResult(filesScanned, nodesCreated, edgesCreated, stopwatch.Elapsed);
+    }
+
+    /// <summary>Maps each supported file extension to the parsers that handle it.</summary>
+    private Dictionary<string, List<IFileParser>> BuildParserMap()
+    {
+        var parserMap = new Dictionary<string, List<IFileParser>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var parser in _parsers)
+        {
+            foreach (var ext in parser.SupportedExtensions)
+            {
+                if (!parserMap.TryGetValue(ext, out var list))
+                {
+                    list = new List<IFileParser>();
+                    parserMap[ext] = list;
+                }
+                list.Add(parser);
+            }
+        }
+        return parserMap;
+    }
+
+    /// <summary>
+    /// Re-indexes a SINGLE file: clears its existing graph nodes/edges and re-parses it. Intended for
+    /// the agentic edit loop (the AI changes a file, then refreshes just that file so the graph matches
+    /// the working tree before re-querying). A missing or unparsable file is removed from the graph.
+    /// </summary>
+    /// <remarks>
+    /// Cross-technology links are a whole-graph post-pass and are NOT recomputed here; run a full
+    /// <see cref="ScanDirectoryAsync"/> to refresh those.
+    /// </remarks>
+    public async Task<IndexResult> ScanFileAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        var stopwatch = Stopwatch.StartNew();
+        var fullPath = Path.GetFullPath(filePath);
+        var extension = Path.GetExtension(fullPath);
+
+        IndexResult Cleared()
+        {
+            stopwatch.Stop();
+            return new IndexResult(0, 0, 0, stopwatch.Elapsed);
+        }
+
+        var parserMap = BuildParserMap();
+
+        // No parser for this extension, file gone, too large, or binary -> ensure no stale data lingers.
+        if (!parserMap.TryGetValue(extension, out var fileParsers) || fileParsers.Count == 0 || !File.Exists(fullPath))
+        {
+            await _storage.DeleteByFilePathAsync(fullPath, cancellationToken).ConfigureAwait(false);
+            return Cleared();
+        }
+
+        var info = new FileInfo(fullPath);
+        if (info.Length > 5 * 1024 * 1024 || await IsLikelyBinaryAsync(fullPath, cancellationToken).ConfigureAwait(false))
+        {
+            await _storage.DeleteByFilePathAsync(fullPath, cancellationToken).ConfigureAwait(false);
+            return Cleared();
+        }
+
+        var content = await File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        var contentHash = ComputeSha256Hash(content);
+
+        var nodes = new List<GraphNode>();
+        var edges = new List<GraphEdge>();
+        foreach (var parser in fileParsers)
+        {
+            var (parsedNodes, parsedEdges) = await parser.ParseAsync(fullPath, content).ConfigureAwait(false);
+            nodes.AddRange(parsedNodes);
+            edges.AddRange(parsedEdges);
+        }
+
+        var storedContent = content.Length > MaxFileNodeContentLength ? content[..MaxFileNodeContentLength] : content;
+        nodes.Add(new GraphNode
+        {
+            Id = fullPath,
+            Name = Path.GetFileName(fullPath),
+            Type = "File",
+            Content = storedContent,
+            FilePath = fullPath,
+            ContentHash = contentHash
+        });
+
+        // Replace the file's graph: clear the old nodes/edges, then upsert the fresh parse.
+        await _storage.DeleteByFilePathAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        await _storage.UpsertNodesAsync(nodes, cancellationToken).ConfigureAwait(false);
+        if (edges.Count > 0)
+        {
+            await _storage.UpsertEdgesAsync(edges, cancellationToken).ConfigureAwait(false);
+        }
+
+        stopwatch.Stop();
+        return new IndexResult(1, nodes.Count, edges.Count, stopwatch.Elapsed);
     }
 
     private static string ComputeSha256Hash(string input)

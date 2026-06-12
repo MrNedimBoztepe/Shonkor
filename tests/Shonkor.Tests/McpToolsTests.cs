@@ -177,6 +177,30 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task ReindexFile_RefreshesGraph_AndDegradesWithoutParsers()
+    {
+        var (pm, synth, ws) = await SetupAsync();
+
+        // Without parsers (e.g. SaaS relay) the tool degrades gracefully.
+        var noParsers = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+        var unavailable = TextOf(await noParsers.ProcessJsonRpcMessageAsync(
+            ToolCall("reindex_file", new { path = "Foo.cs" })));
+        Assert.Contains("unavailable", unavailable);
+
+        // With parsers + a real file, the file is indexed and immediately queryable via get_source.
+        await File.WriteAllTextAsync(Path.Combine(ws, "Foo.cs"), "namespace D; public class Foo { }");
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true,
+            fileParsers: new IFileParser[] { new RoslynAstParser() });
+
+        var reindexed = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("reindex_file", new { path = "@/Foo.cs" })));
+        Assert.Contains("Reindexed", reindexed);
+
+        var src = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("get_source", new { symbol = "Foo" })));
+        Assert.Contains("Foo", src);
+    }
+
+    [Fact]
     public async Task DependsOn_ListsOutgoingReferences()
     {
         var (pm, synth, _) = await SetupAsync();
