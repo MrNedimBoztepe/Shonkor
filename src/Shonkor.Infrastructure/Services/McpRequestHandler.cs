@@ -76,6 +76,21 @@ public sealed class McpRequestHandler
         }
     }
 
+    /// <summary>How many candidate hits the symbol-oriented tools pull before applying their selection heuristic.</summary>
+    private const int SymbolSearchLimit = 8;
+
+    /// <summary>Node types that count as a "declaration" when resolving a symbol to its definition.</summary>
+    private static readonly string[] DeclarationTypes =
+        { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Property", "Constructor" };
+
+    /// <summary>The single source of truth for "this node IS the symbol" (case-insensitive name equality).</summary>
+    private static bool IsExactNameMatch(GraphNode node, string symbol) =>
+        string.Equals(node.Name, symbol, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Reads the target symbol for symbol-oriented tools, accepting <c>query</c> as a lenient alias of <c>symbol</c>.</summary>
+    private static string? ReadSymbol(JsonNode? args) =>
+        args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+
     /// <summary>
     /// Resolves a free-text symbol to its best-matching definition node: prefers an exact-name declaration
     /// (Class/Method/…), then any exact-name node, then the first declaration, then the first hit. Returns
@@ -83,11 +98,10 @@ public sealed class McpRequestHandler
     /// </summary>
     private static async Task<GraphNode?> ResolveDefinitionAsync(IGraphStorageProvider storage, string symbol)
     {
-        var hits = (await storage.SearchAsync(symbol, 8).ConfigureAwait(false)).Select(h => h.Node).ToList();
-        var defTypes = new[] { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Property", "Constructor" };
-        return hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase) && defTypes.Contains(n.Type))
-            ?? hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase))
-            ?? hits.FirstOrDefault(n => defTypes.Contains(n.Type))
+        var hits = (await storage.SearchAsync(symbol, SymbolSearchLimit).ConfigureAwait(false)).Select(h => h.Node).ToList();
+        return hits.FirstOrDefault(n => IsExactNameMatch(n, symbol) && DeclarationTypes.Contains(n.Type))
+            ?? hits.FirstOrDefault(n => IsExactNameMatch(n, symbol))
+            ?? hits.FirstOrDefault(n => DeclarationTypes.Contains(n.Type))
             ?? hits.FirstOrDefault();
     }
 
@@ -129,8 +143,8 @@ public sealed class McpRequestHandler
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (def == null) return $"No definition found for '{symbol}'.";
 
-        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { def.Id }, 1).ConfigureAwait(false);
-        var nodeById = nodes.ToDictionary(n => n.Id);
+        // Fetch only the symbol's own edges (+ their endpoint nodes), not its whole 1-hop neighbourhood.
+        var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
         // incoming: edges POINTING AT def (its dependents); outgoing: edges ORIGINATING at def (its dependencies).
         var incident = edges
             .Where(e => incoming ? e.TargetId == def.Id && e.SourceId != def.Id
@@ -146,7 +160,7 @@ public sealed class McpRequestHandler
             foreach (var e in g)
             {
                 var otherId = incoming ? e.SourceId : e.TargetId;
-                var other = nodeById.GetValueOrDefault(otherId);
+                var other = neighbours.GetValueOrDefault(otherId);
                 var name = other?.Name ?? otherId;
                 var summary = other != null && !string.IsNullOrEmpty(other.Summary) ? $"  — {other.Summary}" : "";
                 sb.Append($"{g.Key}\t{name}\t{ToHandle(otherId, basePath)}{summary}\n");
@@ -388,7 +402,7 @@ public sealed class McpRequestHandler
                                 type = "object",
                                 properties = new
                                 {
-                                    symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode')." },
+                                    symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode'). 'query' is accepted as an alias." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "symbol" }
@@ -403,7 +417,7 @@ public sealed class McpRequestHandler
                                 type = "object",
                                 properties = new
                                 {
-                                    symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode')." },
+                                    symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode'). 'query' is accepted as an alias." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "symbol" }
@@ -418,7 +432,7 @@ public sealed class McpRequestHandler
                                 type = "object",
                                 properties = new
                                 {
-                                    symbol = new { type = "string", description = "The exact symbol name to verify (e.g. 'GraphNode')." },
+                                    symbol = new { type = "string", description = "The exact symbol name to verify (e.g. 'GraphNode'). 'query' is accepted as an alias." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "symbol" }
@@ -769,7 +783,7 @@ public sealed class McpRequestHandler
 
                 case "impact_of":
                     {
-                        var symbol = args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+                        var symbol = ReadSymbol(args);
                         if (string.IsNullOrWhiteSpace(symbol))
                         {
                             return SendError(id, -32602, "Parameter 'symbol' is required");
@@ -784,7 +798,7 @@ public sealed class McpRequestHandler
 
                 case "depends_on":
                     {
-                        var symbol = args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+                        var symbol = ReadSymbol(args);
                         if (string.IsNullOrWhiteSpace(symbol))
                         {
                             return SendError(id, -32602, "Parameter 'symbol' is required");
@@ -799,15 +813,15 @@ public sealed class McpRequestHandler
 
                 case "verify_exists":
                     {
-                        var symbol = args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+                        var symbol = ReadSymbol(args);
                         if (string.IsNullOrWhiteSpace(symbol))
                         {
                             return SendError(id, -32602, "Parameter 'symbol' is required");
                         }
                         var basePath = GetProjectBasePath(projectName);
-                        var hits = (await storage.SearchAsync(symbol, 8).ConfigureAwait(false)).Select(h => h.Node).ToList();
+                        var hits = (await storage.SearchAsync(symbol, SymbolSearchLimit).ConfigureAwait(false)).Select(h => h.Node).ToList();
 
-                        var exact = hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase));
+                        var exact = hits.FirstOrDefault(n => IsExactNameMatch(n, symbol));
                         if (exact != null)
                         {
                             return SendToolResponse(id, $"YES — '{exact.Name}' ({exact.Type}) exists at {ToHandle(exact.Id, basePath)}.");
