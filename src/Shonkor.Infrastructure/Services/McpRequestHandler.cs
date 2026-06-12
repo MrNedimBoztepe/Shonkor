@@ -658,7 +658,7 @@ public sealed class McpRequestHandler
                             // (the handle is a reusable seed); edges as 'handle --REL--> handle'.
                             var nodeLines = nodes.Select(n =>
                             {
-                                var handle = ToHandle(string.IsNullOrEmpty(n.FilePath) ? n.Id : n.Id, basePath);
+                                var handle = ToHandle(n.Id, basePath);
                                 var summary = !string.IsNullOrEmpty(n.Summary) ? $"\t— {n.Summary}" : "";
                                 return $"{handle}\t{n.Type}\t{n.Name}{summary}";
                             });

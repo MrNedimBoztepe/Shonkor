@@ -291,6 +291,42 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task MarkdownHierarchyParser_ShouldExtractSectionsAndRelativeLinks()
+    {
+        // Arrange
+        var parser = new MarkdownHierarchyParser();
+        var md = """
+            # Guide
+
+            See [setup](./setup.md) and the [API docs](https://example.com/api).
+
+            ## Installation
+
+            Repeat the [setup](./setup.md) link — must be de-duplicated.
+            """;
+
+        // Act
+        var (nodes, edges) = await parser.ParseAsync("docs/guide.md", md);
+
+        // Assert: one section node per header, carrying level + index.
+        var h1 = nodes.FirstOrDefault(n => n.Type == "MarkdownSection" && n.Name == "Guide");
+        var h2 = nodes.FirstOrDefault(n => n.Type == "MarkdownSection" && n.Name == "Installation");
+        Assert.NotNull(h1);
+        Assert.NotNull(h2);
+        Assert.Equal("1", h1!.Properties["level"]);
+        Assert.Equal("2", h2!.Properties["level"]);
+
+        // Each section is CONTAINED by the file.
+        Assert.Contains(edges, e => e.Relationship == "CONTAINS" && e.SourceId == "docs/guide.md" && e.TargetId == h1.Id);
+
+        // Relative links become REFERENCES edges; the http link is excluded; the duplicate is collapsed.
+        var refs = edges.Where(e => e.Relationship == "REFERENCES").ToList();
+        Assert.Single(refs);
+        Assert.Equal("./setup.md", refs[0].Properties["rawTarget"]);
+        Assert.DoesNotContain(edges, e => e.Relationship == "REFERENCES" && e.Properties.GetValueOrDefault("rawTarget", "").Contains("example.com"));
+    }
+
+    [Fact]
     public async Task CrossTechLinker_ShouldEstablishDynamicMappings()
     {
         // Arrange
