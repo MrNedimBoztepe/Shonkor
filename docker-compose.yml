@@ -1,4 +1,9 @@
-version: '3.8'
+# Full local stack: the Shonkor web app + a local Ollama for semantic enrichment
+# (summaries via qwen2.5-coder) and embeddings (search_semantic via nomic-embed-text).
+#
+# Usage:
+#   TARGET_PROJECTS_DIR=/path/to/your/code docker compose up --build
+# (or put TARGET_PROJECTS_DIR in a .env file next to this one).
 
 services:
   shonkor-web:
@@ -7,19 +12,28 @@ services:
       dockerfile: Dockerfile
     container_name: shonkor-web
     ports:
-      - "5290:8080" # Maps local 5290 to container 8080
+      - "5290:8080" # host 5290 -> container 8080
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - SemanticAnalyzer__OllamaUrl=http://ollama:11434
       - EmbeddingService__OllamaUrl=http://ollama:11434
+      - EmbeddingService__OllamaModel=nomic-embed-text
     volumes:
-      # We map the host directory specified in the .env file to /projects in the container.
-      # If .env is missing, it falls back to the current directory (./).
+      # Maps the host directory (from TARGET_PROJECTS_DIR, default current dir) to /projects.
+      # Shonkor uses /projects as its working dir and creates projects.json + the SQLite DBs there.
       - ${TARGET_PROJECTS_DIR:-./}:/projects
-    # Shonkor will run with /projects as its working directory, meaning it will create projects.json there.
     working_dir: /projects
+    restart: unless-stopped
     depends_on:
-      - ollama
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      # Readiness: workspace writable + graph store reachable (see StorageHealthCheck).
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/ready"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
 
   ollama:
     image: ollama/ollama:latest
@@ -28,12 +42,21 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    # A small entrypoint to ensure the qwen2.5-coder model is automatically pulled when starting up
+    restart: unless-stopped
+    # Pull BOTH models on first start: the coder model for summaries and the embed
+    # model for vector search. Without nomic-embed-text, search_semantic would fail.
     command: >
-      bash -c "ollama serve & 
-      sleep 5 && 
-      ollama pull qwen2.5-coder && 
+      bash -c "ollama serve &
+      sleep 5 &&
+      ollama pull qwen2.5-coder &&
+      ollama pull nomic-embed-text &&
       wait"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
     # ---------------------------------------------------------
     # UNCOMMENT BELOW TO ENABLE NVIDIA GPU ACCELERATION
     # ---------------------------------------------------------
