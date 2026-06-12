@@ -2080,6 +2080,68 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // DETAILED SELECTION DRAWER
+    // Renders the impact-analysis lists in the details drawer: who references this node (incoming) and
+    // what it depends on (outgoing), each grouped, summarized, and clickable to navigate.
+    function renderNodeReferences(incoming, outgoing) {
+        drawerNodeRelations.innerHTML = "";
+
+        const addGroup = (label, items, direction, emptyText) => {
+            const header = document.createElement('li');
+            header.className = 'rel-group-header';
+            header.textContent = `${label} (${items.length})`;
+            drawerNodeRelations.appendChild(header);
+
+            if (items.length === 0) {
+                const empty = document.createElement('li');
+                empty.className = 'rel-empty';
+                empty.textContent = emptyText;
+                drawerNodeRelations.appendChild(empty);
+                return;
+            }
+
+            items.forEach(item => {
+                const li = document.createElement('li');
+                li.className = 'relation-link';
+                const summary = item.summary
+                    ? `<span class="rel-summary">${escapeHtml(item.summary)}</span>` : '';
+                li.innerHTML = `
+                    <div class="rel-row">
+                        <span class="rel-target" title="${escapeHtml(item.id)}">${escapeHtml(item.name)}</span>
+                        <span class="rel-type">${direction} ${escapeHtml(item.relation)}</span>
+                    </div>
+                    ${summary}
+                `;
+                li.addEventListener('click', () => navigateToNode(item));
+                drawerNodeRelations.appendChild(li);
+            });
+        };
+
+        addGroup(window.t("Referenced by"), incoming, "←",
+            window.t("Nothing references this — safe to change in isolation."));
+        addGroup(window.t("Depends on"), outgoing, "→",
+            window.t("Self-contained — depends on nothing."));
+    }
+
+    // Opens a reference's details. Off-screen references aren't in the rendered graph, so we stash a
+    // lightweight stub first (so selectNode can show name/type/summary), then center the graph if present.
+    function navigateToNode(item) {
+        const id = item.id;
+        if (!allDiscoveredNodes.has(id)) {
+            allDiscoveredNodes.set(id, {
+                Id: id, Type: item.type, Name: item.name,
+                Summary: item.summary, FilePath: item.filePath, Properties: {}
+            });
+        }
+        if (network) {
+            const partner = graphData.nodes.find(n => n.id === id);
+            if (partner && partner.x !== undefined) {
+                network.centerAt(partner.x, partner.y, 1000);
+                network.zoom(2, 1000);
+            }
+        }
+        selectNode(id);
+    }
+
     async function selectNode(nodeId) {
         currentSelectedNodeId = nodeId;
         const node = allDiscoveredNodes.get(nodeId);
@@ -2130,47 +2192,23 @@ document.addEventListener('DOMContentLoaded', () => {
             propsSec.style.display = 'none';
         }
 
-        // Connections & Relations
-        drawerNodeRelations.innerHTML = "";
-        const connectedEdges = graphData.links.filter(e => {
-            const s = e.source.id || e.source;
-            const t = e.target.id || e.target;
-            return s === nodeId || t === nodeId;
-        });
-        
-        if (connectedEdges.length === 0) {
-            drawerNodeRelations.innerHTML = `<li style="font-size:0.75rem; color:var(--color-text-muted); font-style:italic; padding: 0.2rem 0.5rem;">No local relations displayed...</li>`;
-        } else {
-            connectedEdges.forEach(e => {
-                const s = e.source.id || e.source;
-                const t = e.target.id || e.target;
-                
-                const isSource = s === nodeId;
-                const partnerId = isSource ? t : s;
-                const relationship = e.name || "Connected";
-                const direction = isSource ? "→" : "←";
-                
-                const partnerNode = allDiscoveredNodes.get(partnerId);
-                const partnerName = partnerNode ? partnerNode.Name : partnerId.split('/').pop().split('\\').pop();
-
-                const li = document.createElement('li');
-                li.className = 'relation-link';
-                li.innerHTML = `
-                    <span class="rel-target" title="${partnerId}">${partnerName}</span>
-                    <span class="rel-type">${direction} ${relationship}</span>
-                `;
-                li.addEventListener('click', () => {
-                    if (network) {
-                        const partner = graphData.nodes.find(n => n.id === partnerId);
-                        if (partner) {
-                            network.centerAt(partner.x, partner.y, 1000);
-                            network.zoom(2, 1000);
-                        }
-                    }
-                    selectNode(partnerId);
-                });
-                drawerNodeRelations.appendChild(li);
-            });
+        // Impact analysis from the FULL graph DB (not just on-screen edges): incoming = "referenced
+        // by", outgoing = "depends on". Fetched via /api/node/references (one incident-edge query).
+        drawerNodeRelations.innerHTML =
+            `<li class="rel-empty">${escapeHtml(window.t("Loading references…"))}</li>`;
+        try {
+            const refRes = await fetch(`/api/node/references?id=${encodeURIComponent(nodeId)}`);
+            // Drop a stale response if the user has since selected a different node.
+            if (currentSelectedNodeId !== nodeId) return;
+            if (!refRes.ok) throw new Error(`HTTP ${refRes.status}`);
+            const refs = await refRes.json();
+            renderNodeReferences(refs.incoming || [], refs.outgoing || []);
+        } catch (err) {
+            console.error("Failed to load node references:", err);
+            if (currentSelectedNodeId === nodeId) {
+                drawerNodeRelations.innerHTML =
+                    `<li class="rel-empty">${escapeHtml(window.t("Could not load references."))}</li>`;
+            }
         }
 
         // Code/Content syntax highlight preview

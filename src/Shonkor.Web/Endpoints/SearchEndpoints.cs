@@ -126,6 +126,65 @@ public static class SearchEndpoints
             }
         });
 
+        // GET /api/node/references - impact analysis for ONE node: its direct dependents (incoming edges)
+        // and its direct dependencies (outgoing edges), grouped per side with relation + AI summary.
+        // Both directions come from a single incident-edge fetch, so the panel needs only one round-trip.
+        app.MapGet("/api/node/references", async (string id, HttpContext context, ProjectManager pm, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return Results.BadRequest("Query parameter 'id' is required.");
+            }
+
+            try
+            {
+                var storage = await pm.GetStorageForRequestAsync(context, ct);
+
+                var node = await storage.GetNodeByIdAsync(id, ct);
+                if (node == null)
+                {
+                    return Results.NotFound(new { error = $"Node '{id}' not found." });
+                }
+
+                var (edges, neighbours) = await storage.GetIncidentEdgesAsync(id, ct);
+
+                object Reference(string otherId, string relation)
+                {
+                    var n = neighbours.GetValueOrDefault(otherId);
+                    return new
+                    {
+                        id = otherId,
+                        name = n?.Name ?? otherId,
+                        type = n?.Type ?? "Unknown",
+                        relation,
+                        summary = n?.Summary,
+                        filePath = n?.FilePath,
+                        startLine = n?.StartLine
+                    };
+                }
+
+                var incoming = edges
+                    .Where(e => e.TargetId == id && e.SourceId != id)
+                    .Select(e => Reference(e.SourceId, e.Relationship))
+                    .ToList();
+                var outgoing = edges
+                    .Where(e => e.SourceId == id && e.TargetId != id)
+                    .Select(e => Reference(e.TargetId, e.Relationship))
+                    .ToList();
+
+                return Results.Ok(new
+                {
+                    node = new { node.Id, node.Name, node.Type, node.Summary, node.FilePath, node.StartLine },
+                    incoming,
+                    outgoing
+                });
+            }
+            catch (Exception ex)
+            {
+                return Fail("Failed to load node references.", ex);
+            }
+        });
+
         // POST /api/capsule - synthesize a token-optimized capsule for nodes matching the query.
         app.MapPost("/api/capsule", async (CapsuleRequest request, HttpContext context, ProjectManager pm, ContextCapsuleSynthesizer synthesizer, CancellationToken ct) =>
         {

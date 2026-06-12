@@ -1027,6 +1027,54 @@ body {
     white-space: nowrap;
 }
 
+/* Impact & Dependencies drawer list: grouped (Referenced by / Depends on), with AI summaries. */
+.relation-link {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.15rem;
+}
+
+.rel-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.rel-summary {
+    font-size: 0.68rem;
+    color: var(--color-text-muted);
+    line-height: 1.3;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.rel-group-header {
+    list-style: none;
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-text-muted);
+    padding: 0.5rem 0.5rem 0.2rem;
+    margin-top: 0.25rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.rel-group-header:first-child {
+    margin-top: 0;
+}
+
+.rel-empty {
+    list-style: none;
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+    font-style: italic;
+    padding: 0.25rem 0.5rem 0.4rem;
+}
+
 .code-wrapper {
     flex: 1;
     position: relative;

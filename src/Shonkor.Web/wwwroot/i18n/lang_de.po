@@ -81,3 +81,21 @@ msgstr "Graph wird berechnet..."
 
 msgid "graph"
 msgstr "Graph"
+
+msgid "Referenced by"
+msgstr "Referenziert von"
+
+msgid "Depends on"
+msgstr "Hängt ab von"
+
+msgid "Loading references…"
+msgstr "Referenzen werden geladen…"
+
+msgid "Could not load references."
+msgstr "Referenzen konnten nicht geladen werden."
+
+msgid "Nothing references this — safe to change in isolation."
+msgstr "Nichts referenziert diesen Knoten — gefahrlos isoliert änderbar."
+
+msgid "Self-contained — depends on nothing."
+msgstr "In sich geschlossen — hängt von nichts ab."
