@@ -81,3 +81,51 @@ msgstr "Graph wird berechnet..."
 
 msgid "graph"
 msgstr "Graph"
+
+msgid "Referenced by"
+msgstr "Referenziert von"
+
+msgid "Depends on"
+msgstr "Hängt ab von"
+
+msgid "Loading references…"
+msgstr "Referenzen werden geladen…"
+
+msgid "Could not load references."
+msgstr "Referenzen konnten nicht geladen werden."
+
+msgid "Nothing references this — safe to change in isolation."
+msgstr "Nichts referenziert diesen Knoten — gefahrlos isoliert änderbar."
+
+msgid "Self-contained — depends on nothing."
+msgstr "In sich geschlossen — hängt von nichts ab."
+
+msgid "find_path"
+msgstr "Pfad finden"
+
+msgid "Resolving target…"
+msgstr "Ziel wird aufgelöst…"
+
+msgid "No matching target node."
+msgstr "Kein passender Zielknoten."
+
+msgid "Pick a target:"
+msgstr "Ziel auswählen:"
+
+msgid "Could not resolve target."
+msgstr "Ziel konnte nicht aufgelöst werden."
+
+msgid "Finding path…"
+msgstr "Pfad wird gesucht…"
+
+msgid "Path finding failed."
+msgstr "Pfadsuche fehlgeschlagen."
+
+msgid "No path found."
+msgstr "Kein Pfad gefunden."
+
+msgid "hop"
+msgstr "Hop"
+
+msgid "hops"
+msgstr "Hops"

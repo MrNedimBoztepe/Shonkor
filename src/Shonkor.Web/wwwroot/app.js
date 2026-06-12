@@ -185,6 +185,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const drawerNodeRelations = document.getElementById('drawer-node-relations');
     const drawerNodeCode = document.getElementById('drawer-node-code');
     const closeDrawerBtn = document.getElementById('close-drawer-btn');
+
+    // Path finder (in the drawer): connects the selected node to a typed target.
+    const pathTargetInput = document.getElementById('path-target-input');
+    const pathFindBtn = document.getElementById('path-find-btn');
+    const pathResult = document.getElementById('path-result');
+    if (pathFindBtn) pathFindBtn.addEventListener('click', findPathFromSelected);
+    if (pathTargetInput) pathTargetInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); findPathFromSelected(); }
+    });
     
     // Modal DOM
     const capsuleModal = document.getElementById('capsule-modal');
@@ -2080,8 +2089,168 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // DETAILED SELECTION DRAWER
+    // Renders the impact-analysis lists in the details drawer: who references this node (incoming) and
+    // what it depends on (outgoing), each grouped, summarized, and clickable to navigate.
+    function renderNodeReferences(incoming, outgoing) {
+        drawerNodeRelations.innerHTML = "";
+
+        const addGroup = (label, items, direction, emptyText) => {
+            const header = document.createElement('li');
+            header.className = 'rel-group-header';
+            header.textContent = `${label} (${items.length})`;
+            drawerNodeRelations.appendChild(header);
+
+            if (items.length === 0) {
+                const empty = document.createElement('li');
+                empty.className = 'rel-empty';
+                empty.textContent = emptyText;
+                drawerNodeRelations.appendChild(empty);
+                return;
+            }
+
+            items.forEach(item => {
+                const li = document.createElement('li');
+                li.className = 'relation-link';
+                const summary = item.summary
+                    ? `<span class="rel-summary">${escapeHtml(item.summary)}</span>` : '';
+                li.innerHTML = `
+                    <div class="rel-row">
+                        <span class="rel-target" title="${escapeHtml(item.id)}">${escapeHtml(item.name)}</span>
+                        <span class="rel-type">${direction} ${escapeHtml(item.relation)}</span>
+                    </div>
+                    ${summary}
+                `;
+                li.addEventListener('click', () => navigateToNode(item));
+                drawerNodeRelations.appendChild(li);
+            });
+        };
+
+        addGroup(window.t("Referenced by"), incoming, "←",
+            window.t("Nothing references this — safe to change in isolation."));
+        addGroup(window.t("Depends on"), outgoing, "→",
+            window.t("Self-contained — depends on nothing."));
+    }
+
+    // Opens a reference's details. Off-screen references aren't in the rendered graph, so we stash a
+    // lightweight stub first (so selectNode can show name/type/summary), then center the graph if present.
+    function navigateToNode(item) {
+        const id = item.id;
+        if (!allDiscoveredNodes.has(id)) {
+            allDiscoveredNodes.set(id, {
+                Id: id, Type: item.type, Name: item.name,
+                Summary: item.summary, FilePath: item.filePath, Properties: {}
+            });
+        }
+        if (network) {
+            const partner = graphData.nodes.find(n => n.id === id);
+            if (partner && partner.x !== undefined) {
+                network.centerAt(partner.x, partner.y, 1000);
+                network.zoom(2, 1000);
+            }
+        }
+        selectNode(id);
+    }
+
+    // ===== Path finder: shortest connection from the selected node to a typed target symbol =====
+    async function findPathFromSelected() {
+        if (!currentSelectedNodeId || !pathResult) return;
+        const query = (pathTargetInput.value || '').trim();
+        if (!query) { pathResult.innerHTML = ''; return; }
+
+        pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("Resolving target…"))}</div>`;
+        try {
+            const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=5`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const hits = (await res.json()).map(r => r.node).filter(Boolean);
+            if (hits.length === 0) {
+                pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("No matching target node."))}</div>`;
+                return;
+            }
+            // Prefer an exact (case-insensitive) name match; else take the single hit; else let the user pick.
+            const exact = hits.find(h => (h.name || '').toLowerCase() === query.toLowerCase());
+            if (exact) { runPath(exact.id); return; }
+            if (hits.length === 1) { runPath(hits[0].id); return; }
+
+            pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("Pick a target:"))}</div>`;
+            hits.forEach(h => {
+                const b = document.createElement('button');
+                b.className = 'path-pick';
+                b.textContent = `${h.name} · ${h.type}`;
+                b.title = h.id;
+                b.addEventListener('click', () => runPath(h.id));
+                pathResult.appendChild(b);
+            });
+        } catch (err) {
+            console.error("Path target resolution failed:", err);
+            pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("Could not resolve target."))}</div>`;
+        }
+    }
+
+    // Fetches and renders the shortest path from the currently selected node to targetId.
+    async function runPath(targetId) {
+        const fromId = currentSelectedNodeId;
+        if (!fromId) return;
+        pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("Finding path…"))}</div>`;
+        try {
+            const res = await fetch(`/api/path?from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(targetId)}`);
+            if (currentSelectedNodeId !== fromId) return; // user navigated away
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            renderPath(await res.json());
+        } catch (err) {
+            console.error("Path finding failed:", err);
+            pathResult.innerHTML = `<div class="path-status">${escapeHtml(window.t("Path finding failed."))}</div>`;
+        }
+    }
+
+    // Renders the path as clickable node chips separated by directional relation arrows.
+    function renderPath(data) {
+        pathResult.innerHTML = '';
+        if (!data || !data.found) {
+            pathResult.innerHTML = `<div class="path-status">${escapeHtml((data && data.message) || window.t("No path found."))}</div>`;
+            return;
+        }
+
+        const header = document.createElement('div');
+        header.className = 'path-status';
+        header.textContent = `${data.hops} ${data.hops === 1 ? window.t("hop") : window.t("hops")}`;
+        pathResult.appendChild(header);
+
+        const chain = document.createElement('div');
+        chain.className = 'path-chain';
+        (data.steps || []).forEach((step, i) => {
+            if (i > 0) {
+                const arrow = document.createElement('span');
+                arrow.className = 'path-arrow';
+                arrow.textContent = step.direction === 'backward' ? `← ${step.relation}` : `${step.relation} →`;
+                chain.appendChild(arrow);
+            }
+            const chip = document.createElement('button');
+            chip.className = 'path-chip';
+            chip.textContent = step.name;
+            chip.title = step.summary ? `${step.type} — ${step.summary}` : step.type;
+            chip.addEventListener('click', () => navigateToNode(step));
+            chain.appendChild(chip);
+        });
+        pathResult.appendChild(chain);
+
+        // Frame the path in the graph when its nodes are rendered.
+        if (network && data.steps && data.steps.length) {
+            const present = data.steps
+                .map(s => graphData.nodes.find(n => n.id === s.id))
+                .filter(n => n && n.x !== undefined);
+            if (present.length) {
+                const avgX = present.reduce((a, n) => a + n.x, 0) / present.length;
+                const avgY = present.reduce((a, n) => a + n.y, 0) / present.length;
+                network.centerAt(avgX, avgY, 800);
+            }
+        }
+    }
+
     async function selectNode(nodeId) {
         currentSelectedNodeId = nodeId;
+        // Reset the path finder for the newly selected start node.
+        if (pathResult) pathResult.innerHTML = '';
+        if (pathTargetInput) pathTargetInput.value = '';
         const node = allDiscoveredNodes.get(nodeId);
         if (!node) return;
 
@@ -2130,47 +2299,23 @@ document.addEventListener('DOMContentLoaded', () => {
             propsSec.style.display = 'none';
         }
 
-        // Connections & Relations
-        drawerNodeRelations.innerHTML = "";
-        const connectedEdges = graphData.links.filter(e => {
-            const s = e.source.id || e.source;
-            const t = e.target.id || e.target;
-            return s === nodeId || t === nodeId;
-        });
-        
-        if (connectedEdges.length === 0) {
-            drawerNodeRelations.innerHTML = `<li style="font-size:0.75rem; color:var(--color-text-muted); font-style:italic; padding: 0.2rem 0.5rem;">No local relations displayed...</li>`;
-        } else {
-            connectedEdges.forEach(e => {
-                const s = e.source.id || e.source;
-                const t = e.target.id || e.target;
-                
-                const isSource = s === nodeId;
-                const partnerId = isSource ? t : s;
-                const relationship = e.name || "Connected";
-                const direction = isSource ? "→" : "←";
-                
-                const partnerNode = allDiscoveredNodes.get(partnerId);
-                const partnerName = partnerNode ? partnerNode.Name : partnerId.split('/').pop().split('\\').pop();
-
-                const li = document.createElement('li');
-                li.className = 'relation-link';
-                li.innerHTML = `
-                    <span class="rel-target" title="${partnerId}">${partnerName}</span>
-                    <span class="rel-type">${direction} ${relationship}</span>
-                `;
-                li.addEventListener('click', () => {
-                    if (network) {
-                        const partner = graphData.nodes.find(n => n.id === partnerId);
-                        if (partner) {
-                            network.centerAt(partner.x, partner.y, 1000);
-                            network.zoom(2, 1000);
-                        }
-                    }
-                    selectNode(partnerId);
-                });
-                drawerNodeRelations.appendChild(li);
-            });
+        // Impact analysis from the FULL graph DB (not just on-screen edges): incoming = "referenced
+        // by", outgoing = "depends on". Fetched via /api/node/references (one incident-edge query).
+        drawerNodeRelations.innerHTML =
+            `<li class="rel-empty">${escapeHtml(window.t("Loading references…"))}</li>`;
+        try {
+            const refRes = await fetch(`/api/node/references?id=${encodeURIComponent(nodeId)}`);
+            // Drop a stale response if the user has since selected a different node.
+            if (currentSelectedNodeId !== nodeId) return;
+            if (!refRes.ok) throw new Error(`HTTP ${refRes.status}`);
+            const refs = await refRes.json();
+            renderNodeReferences(refs.incoming || [], refs.outgoing || []);
+        } catch (err) {
+            console.error("Failed to load node references:", err);
+            if (currentSelectedNodeId === nodeId) {
+                drawerNodeRelations.innerHTML =
+                    `<li class="rel-empty">${escapeHtml(window.t("Could not load references."))}</li>`;
+            }
         }
 
         // Code/Content syntax highlight preview

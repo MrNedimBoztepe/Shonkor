@@ -923,63 +923,20 @@ public sealed class McpRequestHandler
                             return SendToolResponse(id, $"'{fromArg}' and '{toArg}' resolve to the same node ({fromDef.Name}).");
                         }
 
-                        // Fetch the neighbourhood once, then BFS in-memory. Edges are treated as undirected
-                        // for connectivity, but each step remembers its real direction + relation for display.
-                        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { fromDef.Id }, maxHops).ConfigureAwait(false);
-                        var nodeById = nodes.ToDictionary(n => n.Id);
-
-                        var adj = new Dictionary<string, List<(string Next, string Rel, bool Forward)>>();
-                        void AddEdge(string a, string b, string rel, bool forward)
-                        {
-                            if (!adj.TryGetValue(a, out var list)) adj[a] = list = new();
-                            list.Add((b, rel, forward));
-                        }
-                        foreach (var e in edges)
-                        {
-                            AddEdge(e.SourceId, e.TargetId, e.Relationship, true);
-                            AddEdge(e.TargetId, e.SourceId, e.Relationship, false);
-                        }
-
-                        var prev = new Dictionary<string, (string From, string Rel, bool Forward)>();
-                        var visited = new HashSet<string> { fromDef.Id };
-                        var queue = new Queue<string>();
-                        queue.Enqueue(fromDef.Id);
-                        var found = false;
-                        while (queue.Count > 0)
-                        {
-                            var cur = queue.Dequeue();
-                            if (cur == toDef.Id) { found = true; break; }
-                            if (!adj.TryGetValue(cur, out var neighbors)) continue;
-                            foreach (var (next, rel, forward) in neighbors)
-                            {
-                                if (visited.Add(next))
-                                {
-                                    prev[next] = (cur, rel, forward);
-                                    queue.Enqueue(next);
-                                }
-                            }
-                        }
-
-                        if (!found)
+                        var path = await GraphPathFinder.FindPathAsync(storage, fromDef.Id, toDef.Id, maxHops).ConfigureAwait(false);
+                        if (path == null)
                         {
                             return SendToolResponse(id,
                                 $"No path from '{fromDef.Name}' to '{toDef.Name}' within {maxHops} hops — they may be in different components. Try raising maxHops.");
                         }
 
-                        // Reconstruct target<-…<-source, then reverse to read source→target.
-                        var chain = new List<string>();
-                        for (var n = toDef.Id; n != fromDef.Id; n = prev[n].From) chain.Add(n);
-                        chain.Add(fromDef.Id);
-                        chain.Reverse();
-
-                        string NameOf(string nid) => nodeById.GetValueOrDefault(nid)?.Name ?? ToHandle(nid, basePath);
                         var sb = new System.Text.StringBuilder();
-                        sb.Append($"Path ({chain.Count - 1} hop(s)) from '{fromDef.Name}' to '{toDef.Name}':\n");
-                        sb.Append(NameOf(chain[0]));
-                        for (var i = 1; i < chain.Count; i++)
+                        sb.Append($"Path ({path.Count - 1} hop(s)) from '{fromDef.Name}' to '{toDef.Name}':\n");
+                        sb.Append(path[0].Node.Name);
+                        for (var i = 1; i < path.Count; i++)
                         {
-                            var step = prev[chain[i]];
-                            sb.Append(step.Forward ? $" --{step.Rel}--> " : $" <--{step.Rel}-- ").Append(NameOf(chain[i]));
+                            var step = path[i];
+                            sb.Append(step.Forward ? $" --{step.Relation}--> " : $" <--{step.Relation}-- ").Append(step.Node.Name);
                         }
                         return SendToolResponse(id, sb.ToString());
                     }

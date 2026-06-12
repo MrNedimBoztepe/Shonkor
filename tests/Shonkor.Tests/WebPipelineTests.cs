@@ -68,6 +68,14 @@ public class WebPipelineTests : IClassFixture<WebPipelineTests.AppFactory>
     }
 
     [Fact]
+    public async Task NodeReferencesEndpoint_WithoutKey_Returns401()
+    {
+        // The impact/dependencies endpoint is a normal /api/* surface — gated like the rest.
+        var res = await _client.GetAsync("/api/node/references?id=anything");
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+    }
+
+    [Fact]
     public async Task RagSaaSEndpoint_WithoutKey_Returns401()
     {
         var res = await _client.PostAsync("/api/rag/query",

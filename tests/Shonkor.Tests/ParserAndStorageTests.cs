@@ -291,6 +291,43 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task GraphPathFinder_FindsShortestChain_WithRealDirections()
+    {
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+
+        // A --CALLS--> B --CALLS--> C  (and an isolated D)
+        await storage.UpsertNodesAsync(new[]
+        {
+            new GraphNode { Id = "A", Type = "Method", Name = "Alpha", Content = "a" },
+            new GraphNode { Id = "B", Type = "Method", Name = "Beta", Content = "b" },
+            new GraphNode { Id = "C", Type = "Method", Name = "Gamma", Content = "c" },
+            new GraphNode { Id = "D", Type = "Method", Name = "Delta", Content = "d" }
+        });
+        await storage.UpsertEdgesAsync(new[]
+        {
+            new GraphEdge { SourceId = "A", TargetId = "B", Relationship = "CALLS" },
+            new GraphEdge { SourceId = "B", TargetId = "C", Relationship = "CALLS" }
+        });
+
+        var path = await Shonkor.Core.Services.GraphPathFinder.FindPathAsync(storage, "A", "C", maxHops: 5);
+
+        Assert.NotNull(path);
+        Assert.Equal(3, path!.Count);                       // A, B, C
+        Assert.Equal("A", path[0].Node.Id);
+        Assert.Null(path[0].Relation);                       // source has no incoming relation
+        Assert.Equal("B", path[1].Node.Id);
+        Assert.Equal("CALLS", path[1].Relation);
+        Assert.True(path[1].Forward);                        // edge points A->B (with the path direction)
+        Assert.Equal("C", path[2].Node.Id);
+        Assert.True(path[2].Forward);
+
+        // No path to the isolated node.
+        var none = await Shonkor.Core.Services.GraphPathFinder.FindPathAsync(storage, "A", "D", maxHops: 5);
+        Assert.Null(none);
+    }
+
+    [Fact]
     public async Task GetIncidentEdges_ReturnsBothDirections_WithEndpointNodes()
     {
         using var storage = new SqliteGraphStorageProvider(":memory:");
