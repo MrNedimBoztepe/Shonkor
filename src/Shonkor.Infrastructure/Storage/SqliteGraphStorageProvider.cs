@@ -588,6 +588,67 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Conservative cap on host parameters per statement (SQLite's default limit is 999).</summary>
+    private const int MaxSqlParameters = 900;
+
+    /// <inheritdoc />
+    public async Task DeleteByFilePathsAsync(IEnumerable<string> filePaths, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(filePaths);
+
+        var paths = filePaths.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.Ordinal).ToList();
+        if (paths.Count == 0) return;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        static string AddParams(SqliteCommand cmd, IReadOnlyList<string> values, string prefix)
+        {
+            var names = new string[values.Count];
+            for (var i = 0; i < values.Count; i++)
+            {
+                names[i] = $"{prefix}{i}";
+                cmd.Parameters.AddWithValue(names[i], values[i]);
+            }
+            return string.Join(", ", names);
+        }
+
+        // 1. Collect every node id belonging to any of the paths (so orphaned edges can be cleaned up).
+        var nodeIds = new List<string>();
+        foreach (var chunk in paths.Chunk(MaxSqlParameters))
+        {
+            await using var selectCmd = connection.CreateCommand();
+            var paramList = AddParams(selectCmd, chunk, "@p");
+            selectCmd.CommandText = $"SELECT Id FROM Nodes WHERE FilePath IN ({paramList});";
+            await using var reader = await selectCmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                nodeIds.Add(reader.GetString(0));
+            }
+        }
+
+        // 2. Delete the nodes by file path.
+        foreach (var chunk in paths.Chunk(MaxSqlParameters))
+        {
+            await using var deleteCmd = connection.CreateCommand();
+            var paramList = AddParams(deleteCmd, chunk, "@p");
+            deleteCmd.CommandText = $"DELETE FROM Nodes WHERE FilePath IN ({paramList});";
+            await deleteCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // 3. Delete orphaned edges. The id list is referenced twice (SourceId/TargetId); named
+        //    parameters can be reused, so the distinct-parameter count stays at the chunk size.
+        foreach (var chunk in nodeIds.Chunk(MaxSqlParameters))
+        {
+            await using var edgeCmd = connection.CreateCommand();
+            var paramList = AddParams(edgeCmd, chunk, "@n");
+            edgeCmd.CommandText = $"DELETE FROM Edges WHERE SourceId IN ({paramList}) OR TargetId IN ({paramList});";
+            await edgeCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     /// <inheritdoc />
     public async Task<IReadOnlyList<string>> GetAllIndexedFilePathsAsync(CancellationToken cancellationToken = default)
     {

@@ -1,11 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Shonkor.Core.Interfaces;
+using Shonkor.Core.Models;
 using Shonkor.Infrastructure.Services;
 
 namespace Shonkor.Web.Services;
@@ -30,18 +33,25 @@ public class SemanticEnrichmentService : BackgroundService
 
     private static readonly TimeSpan BasePollInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(15);
-    private const int BatchSize = 10;
+
+    // Tunable via config (SemanticEnrichment:BatchSize / :MaxParallelism). Client-side parallelism is
+    // safe: Ollama serializes internally when it can't parallelize, so concurrency never costs throughput.
+    private readonly int _batchSize;
+    private readonly int _maxParallelism;
 
     private int _consecutiveServiceFailures;
 
     public SemanticEnrichmentService(
         ProjectManager projectManager,
         IServiceScopeFactory scopeFactory,
-        ILogger<SemanticEnrichmentService> logger)
+        ILogger<SemanticEnrichmentService> logger,
+        IConfiguration configuration)
     {
         _projectManager = projectManager;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _batchSize = Math.Max(1, configuration.GetValue<int?>("SemanticEnrichment:BatchSize") ?? 16);
+        _maxParallelism = Math.Max(1, configuration.GetValue<int?>("SemanticEnrichment:MaxParallelism") ?? 4);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -118,49 +128,97 @@ public class SemanticEnrichmentService : BackgroundService
         {
             var storage = await _projectManager.GetStorageProviderAsync(project.Name, cancellationToken);
 
-            var pendingNodes = await storage.GetNodesPendingSemanticAnalysisAsync(BatchSize, cancellationToken);
+            var pendingNodes = await storage.GetNodesPendingSemanticAnalysisAsync(_batchSize, cancellationToken);
             if (pendingNodes.Count == 0) continue;
 
             _logger.LogInformation(
                 "Found {Count} nodes pending semantic analysis in project '{Project}'.",
                 pendingNodes.Count, project.Name);
 
-            foreach (var node in pendingNodes)
-            {
-                if (cancellationToken.IsCancellationRequested) return false;
+            var backendDown = await ProcessBatchAsync(
+                pendingNodes, analyzer, embeddingService, storage, _maxParallelism, _logger, cancellationToken)
+                .ConfigureAwait(false);
 
-                try
-                {
-                    var result = await analyzer.AnalyzeNodeAsync(node, cancellationToken);
-
-                    float[]? embedding = null;
-                    if (!string.IsNullOrWhiteSpace(result.Summary))
-                    {
-                        embedding = await embeddingService.GenerateEmbeddingAsync(result.Summary, cancellationToken);
-                    }
-
-                    await storage.UpdateNodeSemanticDataAsync(node.Id, result, embedding, cancellationToken);
-                }
-                catch (Exception ex) when (IsBackendUnavailable(ex) && !cancellationToken.IsCancellationRequested)
-                {
-                    // The backend itself is down/unreachable — abort the whole cycle and let the
-                    // circuit breaker apply backoff rather than grinding through the rest of the batch.
-                    _logger.LogWarning(ex,
-                        "Semantic backend unreachable while analyzing node {Id}; aborting this cycle.", node.Id);
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    // Per-node logic error (e.g. the model returned unparseable output). Skip this node;
-                    // it does not indicate the backend is down, so don't trip the breaker.
-                    _logger.LogWarning(ex, "Failed to analyze node {Id}. Skipping for now.", node.Id);
-                }
-            }
+            if (backendDown) return true;
+            if (cancellationToken.IsCancellationRequested) return false;
 
             _logger.LogInformation("Finished processing batch for project '{Project}'.", project.Name);
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Enriches a batch of nodes with bounded parallelism: each node is summarized, its summary embedded,
+    /// and the result persisted. The analyze→embed pair for one node stays sequential (the embedding
+    /// needs the summary), but separate nodes run concurrently up to <paramref name="maxParallelism"/>.
+    /// Returns <c>true</c> when the backend looks unreachable (so the caller can trip the circuit breaker).
+    /// Internal for testing.
+    /// </summary>
+    internal static async Task<bool> ProcessBatchAsync(
+        IReadOnlyList<GraphNode> nodes,
+        ISemanticAnalyzer analyzer,
+        IEmbeddingService embeddingService,
+        ISemanticGraphStore storage,
+        int maxParallelism,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        using var cycleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var backendDown = 0;
+
+        var options = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, maxParallelism),
+            CancellationToken = cycleCts.Token
+        };
+
+        try
+        {
+            await Parallel.ForEachAsync(nodes, options, async (node, ct) =>
+            {
+                try
+                {
+                    var result = await analyzer.AnalyzeNodeAsync(node, ct);
+
+                    float[]? embedding = null;
+                    if (!string.IsNullOrWhiteSpace(result.Summary))
+                    {
+                        embedding = await embeddingService.GenerateEmbeddingAsync(result.Summary, ct);
+                    }
+
+                    await storage.UpdateNodeSemanticDataAsync(node.Id, result, embedding, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Sibling tripped the breaker (or the app is stopping). Stop quietly.
+                }
+                catch (Exception ex) when (IsBackendUnavailable(ex))
+                {
+                    // The backend is down — trip the breaker and cancel the rest of this batch rather
+                    // than grinding through it; the caller applies exponential backoff.
+                    if (Interlocked.Exchange(ref backendDown, 1) == 0)
+                    {
+                        logger.LogWarning(ex,
+                            "Semantic backend unreachable while analyzing node {Id}; aborting this cycle.", node.Id);
+                        cycleCts.Cancel();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Per-node logic error (e.g. the model returned unparseable output). Skip this node;
+                    // it does not indicate the backend is down, so don't trip the breaker.
+                    logger.LogWarning(ex, "Failed to analyze node {Id}. Skipping for now.", node.Id);
+                }
+            }).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Parallel.ForEachAsync surfaces the cancellation once the batch unwinds — either the
+            // breaker tripped (handled via backendDown below) or the app is stopping.
+        }
+
+        return backendDown == 1;
     }
 
     /// <summary>Exponential backoff: 30s, 60s, 120s, … capped at <see cref="MaxBackoff"/>.</summary>

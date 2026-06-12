@@ -187,14 +187,13 @@ public sealed class GraphIndexScanner
             }
         }
 
-        // 4. Perform database updates (Deletes & Batch Upserts)
+        // 4. Perform database updates (Deletes & Batch Upserts).
+        // Clear all stale files in ONE transaction — looping per-file delete commits once per file,
+        // which dominates the cost on large changesets (first index, branch switch, bulk re-scan).
         if (filesToClear.Count > 0)
         {
-            foreach (var fileToClear in filesToClear)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await _storage.DeleteByFilePathAsync(fileToClear, cancellationToken).ConfigureAwait(false);
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            await _storage.DeleteByFilePathsAsync(filesToClear, cancellationToken).ConfigureAwait(false);
         }
 
         if (allNodesToUpsert.Count > 0)
