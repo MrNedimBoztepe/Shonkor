@@ -35,6 +35,7 @@ public class McpToolsTests
                 // Interaction nodes for get_open_threads (one open task, one done task, one open question).
                 new GraphNode { Id = "task::open", Name = "Implement caching", Type = "Task", Content = "todo", Properties = new() { ["status"] = "Todo" } },
                 new GraphNode { Id = "task::done", Name = "Old finished task", Type = "Task", Content = "done", Properties = new() { ["status"] = "Done" } },
+                new GraphNode { Id = "task::donespace", Name = "Trimmed done task", Type = "Task", Content = "done", Properties = new() { ["status"] = "Done " } },
                 new GraphNode { Id = "question::open", Name = "Why is X slow", Type = "Question", Content = "q", Properties = new() { ["status"] = "Open" } }
             });
             await storage.UpsertEdgesAsync(new[]
@@ -285,5 +286,19 @@ public class McpToolsTests
         Assert.Contains("Implement caching", text);   // open task
         Assert.Contains("Why is X slow", text);        // open question
         Assert.DoesNotContain("Old finished task", text); // Done -> excluded
+        Assert.DoesNotContain("Trimmed done task", text); // "Done " (trailing space) -> trimmed, still excluded
+    }
+
+    [Fact]
+    public async Task FindPath_TolerantOfNumericStringArg()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // maxHops as a JSON string "1" must not blow up with an internal error — ReadInt parses it.
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("find_path", new { from = "Gadget", to = "Widget", maxHops = "1" })));
+
+        Assert.Contains("Gadget --REFERENCES_TYPE--> Widget", text);
     }
 }

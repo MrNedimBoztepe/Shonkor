@@ -91,6 +91,70 @@ public sealed class McpRequestHandler
             ?? hits.FirstOrDefault();
     }
 
+    /// <summary>
+    /// Reads an integer tool argument tolerantly: accepts a JSON number (int or float) or a numeric
+    /// string, returning <paramref name="fallback"/> for null/missing/non-numeric input instead of
+    /// throwing. Keeps a mistyped client argument (e.g. <c>"5"</c> or <c>5.0</c>) from surfacing as a
+    /// generic <c>-32603</c> internal error.
+    /// </summary>
+    private static int ReadInt(JsonNode? value, int fallback)
+    {
+        if (value is null) return fallback;
+        try
+        {
+            return value.GetValueKind() switch
+            {
+                JsonValueKind.Number => (int)value.GetValue<double>(),
+                JsonValueKind.String => int.TryParse(value.GetValue<string>(), out var s) ? s : fallback,
+                _ => fallback
+            };
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    /// <summary>
+    /// Shared body for <c>impact_of</c> (incoming references) and <c>depends_on</c> (outgoing
+    /// references): resolves the symbol, pulls its 1-hop neighbourhood, keeps the edges incident to it
+    /// in the requested direction, and renders them grouped by relationship as
+    /// <c>relation\tname\thandle  — summary</c>. <paramref name="emptyMessage"/> is a format string with
+    /// <c>{0}</c>=name and <c>{1}</c>=type.
+    /// </summary>
+    private async Task<string> EdgeReportAsync(
+        IGraphStorageProvider storage, string? projectName, string symbol, bool incoming, string verb, string emptyMessage)
+    {
+        var basePath = GetProjectBasePath(projectName);
+        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+        if (def == null) return $"No definition found for '{symbol}'.";
+
+        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { def.Id }, 1).ConfigureAwait(false);
+        var nodeById = nodes.ToDictionary(n => n.Id);
+        // incoming: edges POINTING AT def (its dependents); outgoing: edges ORIGINATING at def (its dependencies).
+        var incident = edges
+            .Where(e => incoming ? e.TargetId == def.Id && e.SourceId != def.Id
+                                 : e.SourceId == def.Id && e.TargetId != def.Id)
+            .ToList();
+
+        if (incident.Count == 0) return string.Format(emptyMessage, def.Name, def.Type);
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"'{def.Name}' ({def.Type}) {verb} {incident.Count} node(s):\n");
+        foreach (var g in incident.GroupBy(e => e.Relationship).OrderByDescending(g => g.Count()))
+        {
+            foreach (var e in g)
+            {
+                var otherId = incoming ? e.SourceId : e.TargetId;
+                var other = nodeById.GetValueOrDefault(otherId);
+                var name = other?.Name ?? otherId;
+                var summary = other != null && !string.IsNullOrEmpty(other.Summary) ? $"  — {other.Summary}" : "";
+                sb.Append($"{g.Key}\t{name}\t{ToHandle(otherId, basePath)}{summary}\n");
+            }
+        }
+        return sb.ToString().TrimEnd();
+    }
+
     /// <summary>Returns <paramref name="path"/> relative to <paramref name="basePath"/> when contained, else the original.</summary>
     private static string Shorten(string? path, string basePath)
     {
@@ -556,7 +620,7 @@ public sealed class McpRequestHandler
                             return SendError(id, -32602, "Parameter 'query' is required");
                             
                         }
-                        var limit = args?["limit"]?.GetValue<int>() ?? 10;
+                        var limit = ReadInt(args?["limit"], 10);
                         var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
                         var typeFilter = args?["type"]?.ToString();
                         var results = await storage.SearchAsync(query, limit, filterType: typeFilter).ConfigureAwait(false);
@@ -614,7 +678,7 @@ public sealed class McpRequestHandler
                             return SendError(id, -32602, "Parameter 'query' is required");
                             
                         }
-                        var limit = args?["limit"]?.GetValue<int>() ?? 15;
+                        var limit = ReadInt(args?["limit"], 15);
                         var results = await storage.SearchAsync(query, limit).ConfigureAwait(false);
                         if (results.Count == 0)
                         {
@@ -641,9 +705,9 @@ public sealed class McpRequestHandler
                             return SendError(id, -32602, "Parameter 'seeds' is required and must be a non-empty array");
                             
                         }
-                        var hops = args?["hops"]?.GetValue<int>() ?? 2;
+                        var hops = ReadInt(args?["hops"], 2);
                         var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
-                        var maxChars = args?["maxChars"]?.GetValue<int>();
+                        var maxChars = ReadInt(args?["maxChars"], 0); // 0 = no limit
                         var basePath = GetProjectBasePath(projectName);
 
                         // Accept either raw node ids or short "@/…" handles as seeds.
@@ -672,10 +736,10 @@ public sealed class McpRequestHandler
                             sb.Append(string.Join("\n", edgeLines));
 
                             var output = sb.ToString();
-                            if (maxChars is > 0 && output.Length > maxChars.Value)
+                            if (maxChars > 0 && output.Length > maxChars)
                             {
-                                output = output[..maxChars.Value].TrimEnd()
-                                    + $"\n… (truncated to {maxChars.Value} chars; raise maxChars or reduce hops)";
+                                output = output[..maxChars].TrimEnd()
+                                    + $"\n… (truncated to {maxChars} chars; raise maxChars or reduce hops)";
                             }
                             return SendToolResponse(id, output);
                         }
@@ -710,40 +774,12 @@ public sealed class McpRequestHandler
                         {
                             return SendError(id, -32602, "Parameter 'symbol' is required");
                         }
-                        var basePath = GetProjectBasePath(projectName);
-
-                        // 1. Resolve the symbol to a definition node (prefer declarations, exact name).
-                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
-
-                        if (def == null)
-                        {
-                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
-                        }
-
-                        // 2. Expand one hop; edges that POINT AT the definition are its direct dependents.
-                        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { def.Id }, 1).ConfigureAwait(false);
-                        var nodeById = nodes.ToDictionary(n => n.Id);
-                        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id).ToList();
-
-                        if (incoming.Count == 0)
-                        {
-                            return SendToolResponse(id,
-                                $"Nothing references '{def.Name}' ({def.Type}) — safe to change in isolation, or it is an entry point.");
-                        }
-
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append($"'{def.Name}' ({def.Type}) is referenced by {incoming.Count} node(s):\n");
-                        foreach (var g in incoming.GroupBy(e => e.Relationship).OrderByDescending(g => g.Count()))
-                        {
-                            foreach (var e in g)
-                            {
-                                var dep = nodeById.GetValueOrDefault(e.SourceId);
-                                var name = dep?.Name ?? e.SourceId;
-                                var summary = dep != null && !string.IsNullOrEmpty(dep.Summary) ? $"  — {dep.Summary}" : "";
-                                sb.Append($"{g.Key}\t{name}\t{ToHandle(e.SourceId, basePath)}{summary}\n");
-                            }
-                        }
-                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                        // Incoming references: what would be affected if you change the symbol.
+                        var report = await EdgeReportAsync(storage, projectName, symbol, incoming: true,
+                            verb: "is referenced by",
+                            emptyMessage: "Nothing references '{0}' ({1}) — safe to change in isolation, or it is an entry point.")
+                            .ConfigureAwait(false);
+                        return SendToolResponse(id, report);
                     }
 
                 case "depends_on":
@@ -753,38 +789,12 @@ public sealed class McpRequestHandler
                         {
                             return SendError(id, -32602, "Parameter 'symbol' is required");
                         }
-                        var basePath = GetProjectBasePath(projectName);
-
-                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
-                        if (def == null)
-                        {
-                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
-                        }
-
-                        // Mirror of impact_of: edges that ORIGINATE at the definition are what it depends on.
-                        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { def.Id }, 1).ConfigureAwait(false);
-                        var nodeById = nodes.ToDictionary(n => n.Id);
-                        var outgoing = edges.Where(e => e.SourceId == def.Id && e.TargetId != def.Id).ToList();
-
-                        if (outgoing.Count == 0)
-                        {
-                            return SendToolResponse(id,
-                                $"'{def.Name}' ({def.Type}) depends on nothing in the graph — it is self-contained or a leaf.");
-                        }
-
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append($"'{def.Name}' ({def.Type}) depends on {outgoing.Count} node(s):\n");
-                        foreach (var g in outgoing.GroupBy(e => e.Relationship).OrderByDescending(g => g.Count()))
-                        {
-                            foreach (var e in g)
-                            {
-                                var dep = nodeById.GetValueOrDefault(e.TargetId);
-                                var name = dep?.Name ?? e.TargetId;
-                                var summary = dep != null && !string.IsNullOrEmpty(dep.Summary) ? $"  — {dep.Summary}" : "";
-                                sb.Append($"{g.Key}\t{name}\t{ToHandle(e.TargetId, basePath)}{summary}\n");
-                            }
-                        }
-                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                        // Outgoing references: the symbol's own direct dependencies.
+                        var report = await EdgeReportAsync(storage, projectName, symbol, incoming: false,
+                            verb: "depends on",
+                            emptyMessage: "'{0}' ({1}) depends on nothing in the graph — it is self-contained or a leaf.")
+                            .ConfigureAwait(false);
+                        return SendToolResponse(id, report);
                     }
 
                 case "verify_exists":
@@ -808,7 +818,8 @@ public sealed class McpRequestHandler
                         {
                             return SendToolResponse(id, $"NO — nothing named '{symbol}' is in the graph.");
                         }
-                        var nearest = string.Join(", ", hits.Take(5).Select(n => $"{n.Name} ({n.Type})").Distinct());
+                        // Distinct BEFORE Take so duplicate names don't shrink the suggestion list below 5.
+                        var nearest = string.Join(", ", hits.Select(n => $"{n.Name} ({n.Type})").Distinct().Take(5));
                         return SendToolResponse(id, $"NO exact match for '{symbol}'. Nearest: {nearest}.");
                     }
 
@@ -822,7 +833,7 @@ public sealed class McpRequestHandler
 
                         var items = await storage.GetNodesByTypesAsync(interactionTypes).ConfigureAwait(false);
                         var open = items
-                            .Where(n => !closedStatuses.Contains(n.Properties.GetValueOrDefault("status", "")))
+                            .Where(n => !closedStatuses.Contains(n.Properties.GetValueOrDefault("status", "").Trim()))
                             .ToList();
 
                         if (open.Count == 0)
@@ -855,7 +866,7 @@ public sealed class McpRequestHandler
                             return SendToolResponse(id, "Semantic search is unavailable here (no embedding backend wired). Use search_graph (FTS) instead, or run via the web server with Ollama.");
                         }
 
-                        var limit = args?["limit"]?.GetValue<int>() ?? 10;
+                        var limit = ReadInt(args?["limit"], 10);
                         var basePath = GetProjectBasePath(projectName);
 
                         var embedding = await _embeddingService.GenerateEmbeddingAsync(query).ConfigureAwait(false);
@@ -886,7 +897,7 @@ public sealed class McpRequestHandler
                         {
                             return SendError(id, -32602, "Parameters 'from' and 'to' are required");
                         }
-                        var maxHops = args?["maxHops"]?.GetValue<int>() ?? 5;
+                        var maxHops = ReadInt(args?["maxHops"], 5);
                         var basePath = GetProjectBasePath(projectName);
 
                         var fromDef = await ResolveDefinitionAsync(storage, fromArg).ConfigureAwait(false);
@@ -967,7 +978,7 @@ public sealed class McpRequestHandler
                             return SendError(id, -32602, "Parameter 'query' is required");
                             
                         }
-                        var hops = args?["hops"]?.GetValue<int>() ?? 2;
+                        var hops = ReadInt(args?["hops"], 2);
 
                         var searchResults = await storage.SearchAsync(query, 5).ConfigureAwait(false);
                         var seeds = searchResults.Select(r => r.Node.Id).ToList();
@@ -982,10 +993,10 @@ public sealed class McpRequestHandler
                         var markdown = _synthesizer.Synthesize(nodes, edges);
 
                         // Optional token budget: cap the capsule size, truncating at a section boundary.
-                        var maxChars = args?["maxChars"]?.GetValue<int>();
-                        if (maxChars is > 0 && markdown.Length > maxChars.Value)
+                        var maxChars = ReadInt(args?["maxChars"], 0); // 0 = no limit
+                        if (maxChars > 0 && markdown.Length > maxChars)
                         {
-                            markdown = TruncateAtBoundary(markdown, maxChars.Value);
+                            markdown = TruncateAtBoundary(markdown, maxChars);
                         }
 
                         return SendToolResponse(id, markdown);
