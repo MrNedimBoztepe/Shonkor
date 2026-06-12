@@ -1,10 +1,12 @@
 // Licensed to Shonkor under the MIT License.
 
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.StaticFiles;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Services;
 using Shonkor.Web.Endpoints;
+using Shonkor.Web.HealthChecks;
 using Shonkor.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,8 +19,10 @@ if (builder.Environment.IsProduction())
     builder.Logging.AddJsonConsole();
 }
 
-// Liveness/readiness probe endpoint (mapped + exempted from auth below).
-builder.Services.AddHealthChecks();
+// Health probes (mapped + exempted from auth below). The "ready" tag separates the readiness
+// check (workspace writable + graph store reachable) from plain liveness (process is up).
+builder.Services.AddHealthChecks()
+    .AddCheck<StorageHealthCheck>("storage", tags: new[] { "ready" });
 
 // --- Composition root ---
 
@@ -83,8 +87,14 @@ app.UseMiddleware<Shonkor.Web.Middleware.ApiKeyMiddleware>();
 
 // --- Endpoints ---
 
-// Liveness/readiness probe (public — exempted from the API key in ApiKeyMiddleware).
-app.MapHealthChecks("/health");
+// Health probes (public — exempted from the API key in ApiKeyMiddleware).
+// Liveness: the process is up and serving (no dependency checks run).
+var livenessOptions = new HealthCheckOptions { Predicate = _ => false };
+app.MapHealthChecks("/health", livenessOptions);
+app.MapHealthChecks("/health/live", livenessOptions);
+// Readiness: the workspace is writable and the active graph store answers — i.e. the app can
+// actually do work. Orchestrators should gate traffic on this one.
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") });
 
 // SaaS / integration endpoints.
 app.MapGraphRagEndpoints();

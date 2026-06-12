@@ -36,6 +36,23 @@ public class WebPipelineTests : IClassFixture<WebPipelineTests.AppFactory>
     }
 
     [Fact]
+    public async Task LivenessProbe_IsPublic_AndHealthy()
+    {
+        // /health/live runs no dependency checks — up as soon as the process serves.
+        var res = await _client.GetAsync("/health/live");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task ReadinessProbe_IsPublic_AndHealthy_OnWritableWorkspace()
+    {
+        // The factory roots a writable temp workspace with no projects, so readiness is healthy.
+        var res = await _client.GetAsync("/health/ready");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Healthy", await res.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task Root_ServesDashboardShell_WithoutKey()
     {
         // Static files are served before the API-key middleware, so the public shell loads.
