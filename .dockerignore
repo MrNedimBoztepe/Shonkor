@@ -1,0 +1,32 @@
+# Keep the Docker build context small and deterministic: never ship local build
+# output, VCS metadata, IDE files, or host-side data into the image.
+**/bin/
+**/obj/
+**/out/
+**/publish/
+
+.git/
+.gitignore
+.github/
+.vs/
+.vscode/
+.idea/
+**/*.user
+**/*.suo
+
+# Node / web tooling artifacts (if any wwwroot tooling is added later)
+**/node_modules/
+
+# Local data & secrets — must never bake into an image
+**/projects.json
+**/*.db
+**/*.db-wal
+**/*.db-shm
+.env
+*.env
+
+# Docs / CI that don't belong in the runtime image
+*.md
+docker-compose*.yml
+Dockerfile
+.dockerignore

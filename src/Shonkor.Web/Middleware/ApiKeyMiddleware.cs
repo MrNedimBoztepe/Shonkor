@@ -49,8 +49,9 @@ public class ApiKeyMiddleware
             return;
         }
 
-        // Health probe must stay public so container/k8s liveness/readiness checks work.
-        if (context.Request.Path.Equals("/health", StringComparison.OrdinalIgnoreCase))
+        // Health probes must stay public so container/k8s liveness/readiness checks work.
+        // Covers /health, /health/live and /health/ready.
+        if (context.Request.Path.StartsWithSegments("/health"))
         {
             await _next(context);
             return;
