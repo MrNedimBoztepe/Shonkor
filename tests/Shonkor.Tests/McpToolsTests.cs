@@ -143,6 +143,35 @@ public class McpToolsTests
         Assert.StartsWith("NO", no);
     }
 
+    [Fact]
+    public async Task FindPath_ReturnsChainWithRealEdgeDirection()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // Edge is Gadget --REFERENCES_TYPE--> Widget.
+        var forward = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("find_path", new { from = "Gadget", to = "Widget" })));
+        Assert.Contains("Gadget --REFERENCES_TYPE--> Widget", forward);
+
+        // Reverse direction must render the arrow the other way (traversed against the edge).
+        var backward = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("find_path", new { from = "Widget", to = "Gadget" })));
+        Assert.Contains("Widget <--REFERENCES_TYPE-- Gadget", backward);
+    }
+
+    [Fact]
+    public async Task FindPath_NoConnection_ReportsClearly()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // The open Task node shares no edge with Widget.
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("find_path", new { from = "Widget", to = "Implement caching" })));
+        Assert.Contains("No path", text);
+    }
+
     /// <summary>Returns a fixed embedding regardless of input — lets the test pin which seeded node ranks first.</summary>
     private sealed class StubEmbeddingService : IEmbeddingService
     {

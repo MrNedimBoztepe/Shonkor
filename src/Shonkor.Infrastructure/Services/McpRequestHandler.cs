@@ -76,6 +76,21 @@ public sealed class McpRequestHandler
         }
     }
 
+    /// <summary>
+    /// Resolves a free-text symbol to its best-matching definition node: prefers an exact-name declaration
+    /// (Class/Method/…), then any exact-name node, then the first declaration, then the first hit. Returns
+    /// <c>null</c> when nothing matches.
+    /// </summary>
+    private static async Task<GraphNode?> ResolveDefinitionAsync(IGraphStorageProvider storage, string symbol)
+    {
+        var hits = (await storage.SearchAsync(symbol, 8).ConfigureAwait(false)).Select(h => h.Node).ToList();
+        var defTypes = new[] { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Property", "Constructor" };
+        return hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase) && defTypes.Contains(n.Type))
+            ?? hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase))
+            ?? hits.FirstOrDefault(n => defTypes.Contains(n.Type))
+            ?? hits.FirstOrDefault();
+    }
+
     /// <summary>Returns <paramref name="path"/> relative to <paramref name="basePath"/> when contained, else the original.</summary>
     private static string Shorten(string? path, string basePath)
     {
@@ -357,6 +372,23 @@ public sealed class McpRequestHandler
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "query" }
+                            }
+                        },
+                        new
+                        {
+                            name = "find_path",
+                            description = "Explain HOW two symbols are connected: returns the shortest chain between them as 'A --REL--> B <--REL-- C …', with each arrow showing the real edge direction. Far cheaper than dumping a subgraph when you only need the connection. Returns a clear 'no path' message if they're unconnected within maxHops.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    from = new { type = "string", description = "Start symbol (name of a class/method/etc.)." },
+                                    to = new { type = "string", description = "Target symbol to reach." },
+                                    maxHops = new { type = "integer", description = "Max path length to search (default 5)." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "from", "to" }
                             }
                         },
                         new
@@ -666,13 +698,7 @@ public sealed class McpRequestHandler
                         var basePath = GetProjectBasePath(projectName);
 
                         // 1. Resolve the symbol to a definition node (prefer declarations, exact name).
-                        var hits = (await storage.SearchAsync(symbol, 8).ConfigureAwait(false)).Select(h => h.Node).ToList();
-                        var defTypes = new[] { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Property", "Constructor" };
-                        var def =
-                            hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase) && defTypes.Contains(n.Type))
-                            ?? hits.FirstOrDefault(n => string.Equals(n.Name, symbol, StringComparison.OrdinalIgnoreCase))
-                            ?? hits.FirstOrDefault(n => defTypes.Contains(n.Type))
-                            ?? hits.FirstOrDefault();
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
 
                         if (def == null)
                         {
@@ -794,6 +820,87 @@ public sealed class McpRequestHandler
                             return $"{r.Node.Type}\t{r.Node.Name}\t{ToHandle(r.Node.Id, basePath)}{summary}";
                         });
                         return SendToolResponse(id, string.Join("\n", lines));
+                    }
+
+                case "find_path":
+                    {
+                        var fromArg = args?["from"]?.ToString();
+                        var toArg = args?["to"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(fromArg) || string.IsNullOrWhiteSpace(toArg))
+                        {
+                            return SendError(id, -32602, "Parameters 'from' and 'to' are required");
+                        }
+                        var maxHops = args?["maxHops"]?.GetValue<int>() ?? 5;
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var fromDef = await ResolveDefinitionAsync(storage, fromArg).ConfigureAwait(false);
+                        if (fromDef == null) return SendToolResponse(id, $"No definition found for 'from' = '{fromArg}'.");
+                        var toDef = await ResolveDefinitionAsync(storage, toArg).ConfigureAwait(false);
+                        if (toDef == null) return SendToolResponse(id, $"No definition found for 'to' = '{toArg}'.");
+                        if (fromDef.Id == toDef.Id)
+                        {
+                            return SendToolResponse(id, $"'{fromArg}' and '{toArg}' resolve to the same node ({fromDef.Name}).");
+                        }
+
+                        // Fetch the neighbourhood once, then BFS in-memory. Edges are treated as undirected
+                        // for connectivity, but each step remembers its real direction + relation for display.
+                        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { fromDef.Id }, maxHops).ConfigureAwait(false);
+                        var nodeById = nodes.ToDictionary(n => n.Id);
+
+                        var adj = new Dictionary<string, List<(string Next, string Rel, bool Forward)>>();
+                        void AddEdge(string a, string b, string rel, bool forward)
+                        {
+                            if (!adj.TryGetValue(a, out var list)) adj[a] = list = new();
+                            list.Add((b, rel, forward));
+                        }
+                        foreach (var e in edges)
+                        {
+                            AddEdge(e.SourceId, e.TargetId, e.Relationship, true);
+                            AddEdge(e.TargetId, e.SourceId, e.Relationship, false);
+                        }
+
+                        var prev = new Dictionary<string, (string From, string Rel, bool Forward)>();
+                        var visited = new HashSet<string> { fromDef.Id };
+                        var queue = new Queue<string>();
+                        queue.Enqueue(fromDef.Id);
+                        var found = false;
+                        while (queue.Count > 0)
+                        {
+                            var cur = queue.Dequeue();
+                            if (cur == toDef.Id) { found = true; break; }
+                            if (!adj.TryGetValue(cur, out var neighbors)) continue;
+                            foreach (var (next, rel, forward) in neighbors)
+                            {
+                                if (visited.Add(next))
+                                {
+                                    prev[next] = (cur, rel, forward);
+                                    queue.Enqueue(next);
+                                }
+                            }
+                        }
+
+                        if (!found)
+                        {
+                            return SendToolResponse(id,
+                                $"No path from '{fromDef.Name}' to '{toDef.Name}' within {maxHops} hops — they may be in different components. Try raising maxHops.");
+                        }
+
+                        // Reconstruct target<-…<-source, then reverse to read source→target.
+                        var chain = new List<string>();
+                        for (var n = toDef.Id; n != fromDef.Id; n = prev[n].From) chain.Add(n);
+                        chain.Add(fromDef.Id);
+                        chain.Reverse();
+
+                        string NameOf(string nid) => nodeById.GetValueOrDefault(nid)?.Name ?? ToHandle(nid, basePath);
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"Path ({chain.Count - 1} hop(s)) from '{fromDef.Name}' to '{toDef.Name}':\n");
+                        sb.Append(NameOf(chain[0]));
+                        for (var i = 1; i < chain.Count; i++)
+                        {
+                            var step = prev[chain[i]];
+                            sb.Append(step.Forward ? $" --{step.Rel}--> " : $" <--{step.Rel}-- ").Append(NameOf(chain[i]));
+                        }
+                        return SendToolResponse(id, sb.ToString());
                     }
 
                 case "generate_capsule":
