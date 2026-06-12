@@ -332,6 +332,21 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
+                            name = "depends_on",
+                            description = "Inverse of impact_of: list what a symbol itself uses (outgoing REFERENCES_TYPE/IMPLEMENTS/CALLS edges) — its direct dependencies. Returns 'relation  name  handle  — summary' per dependency, or states it's self-contained. Use to understand a symbol's footprint before reading or changing it.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode')." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
                             name = "verify_exists",
                             description = "Fact-check that a symbol actually exists in the graph BEFORE asserting it. Returns 'YES — name (type) at handle' on an exact name match, otherwise 'NO' plus the nearest matching names. Use this to avoid claiming a class/method exists when it doesn't.",
                             inputSchema = new
@@ -726,6 +741,47 @@ public sealed class McpRequestHandler
                                 var name = dep?.Name ?? e.SourceId;
                                 var summary = dep != null && !string.IsNullOrEmpty(dep.Summary) ? $"  — {dep.Summary}" : "";
                                 sb.Append($"{g.Key}\t{name}\t{ToHandle(e.SourceId, basePath)}{summary}\n");
+                            }
+                        }
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "depends_on":
+                    {
+                        var symbol = args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        // Mirror of impact_of: edges that ORIGINATE at the definition are what it depends on.
+                        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { def.Id }, 1).ConfigureAwait(false);
+                        var nodeById = nodes.ToDictionary(n => n.Id);
+                        var outgoing = edges.Where(e => e.SourceId == def.Id && e.TargetId != def.Id).ToList();
+
+                        if (outgoing.Count == 0)
+                        {
+                            return SendToolResponse(id,
+                                $"'{def.Name}' ({def.Type}) depends on nothing in the graph — it is self-contained or a leaf.");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"'{def.Name}' ({def.Type}) depends on {outgoing.Count} node(s):\n");
+                        foreach (var g in outgoing.GroupBy(e => e.Relationship).OrderByDescending(g => g.Count()))
+                        {
+                            foreach (var e in g)
+                            {
+                                var dep = nodeById.GetValueOrDefault(e.TargetId);
+                                var name = dep?.Name ?? e.TargetId;
+                                var summary = dep != null && !string.IsNullOrEmpty(dep.Summary) ? $"  — {dep.Summary}" : "";
+                                sb.Append($"{g.Key}\t{name}\t{ToHandle(e.TargetId, basePath)}{summary}\n");
                             }
                         }
                         return SendToolResponse(id, sb.ToString().TrimEnd());

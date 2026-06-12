@@ -144,6 +144,23 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task DependsOn_ListsOutgoingReferences()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // Gadget --REFERENCES_TYPE--> Widget, so Gadget depends on Widget.
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("depends_on", new { symbol = "Gadget" })));
+        Assert.Contains("Widget", text);
+        Assert.Contains("REFERENCES_TYPE", text);
+        Assert.Contains("A reusable widget.", text); // dependency's AI summary
+
+        // Widget points at nothing -> self-contained.
+        var leaf = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("depends_on", new { symbol = "Widget" })));
+        Assert.Contains("self-contained", leaf);
+    }
+
+    [Fact]
     public async Task FindPath_ReturnsChainWithRealEdgeDirection()
     {
         var (pm, synth, _) = await SetupAsync();
