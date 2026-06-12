@@ -35,6 +35,7 @@ public class McpToolsTests
                 // Interaction nodes for get_open_threads (one open task, one done task, one open question).
                 new GraphNode { Id = "task::open", Name = "Implement caching", Type = "Task", Content = "todo", Properties = new() { ["status"] = "Todo" } },
                 new GraphNode { Id = "task::done", Name = "Old finished task", Type = "Task", Content = "done", Properties = new() { ["status"] = "Done" } },
+                new GraphNode { Id = "task::donespace", Name = "Trimmed done task", Type = "Task", Content = "done", Properties = new() { ["status"] = "Done " } },
                 new GraphNode { Id = "question::open", Name = "Why is X slow", Type = "Question", Content = "q", Properties = new() { ["status"] = "Open" } }
             });
             await storage.UpsertEdgesAsync(new[]
@@ -189,6 +190,51 @@ public class McpToolsTests
         Assert.Contains("No path", text);
     }
 
+    [Fact]
+    public async Task FindPath_MultiHop_ReconstructsFullChainInOrder()
+    {
+        // Cog --REFERENCES_TYPE--> Gadget --REFERENCES_TYPE--> Widget (an isolated 3-node chain,
+        // so the shared SetupAsync's assertions stay untouched).
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_chain_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var dbPath = Path.Combine(ws, "g.db");
+        string Nid(string n) => Path.Combine(ws, $"{n}.cs") + $"::{n}";
+
+        using (var storage = new SqliteGraphStorageProvider(dbPath))
+        {
+            await storage.InitializeAsync();
+            await storage.UpsertNodesAsync(new[]
+            {
+                new GraphNode { Id = Nid("Widget"), Name = "Widget", Type = "Class", FilePath = Path.Combine(ws, "Widget.cs") },
+                new GraphNode { Id = Nid("Gadget"), Name = "Gadget", Type = "Class", FilePath = Path.Combine(ws, "Gadget.cs") },
+                new GraphNode { Id = Nid("Cog"),    Name = "Cog",    Type = "Class", FilePath = Path.Combine(ws, "Cog.cs") }
+            });
+            await storage.UpsertEdgesAsync(new[]
+            {
+                new GraphEdge { SourceId = Nid("Cog"),    TargetId = Nid("Gadget"), Relationship = "REFERENCES_TYPE" },
+                new GraphEdge { SourceId = Nid("Gadget"), TargetId = Nid("Widget"), Relationship = "REFERENCES_TYPE" }
+            });
+        }
+
+        var registry = new
+        {
+            Organizations = Array.Empty<object>(),
+            Users = Array.Empty<object>(),
+            Projects = new[] { new { Name = "P", Path = ws, DatabasePath = dbPath, OrganizationId = "", RepositoryUrl = "", ApiKey = "" } },
+            ActiveProjectName = "P"
+        };
+        File.WriteAllText(Path.Combine(ws, "projects.json"), JsonSerializer.Serialize(registry));
+
+        var handler = new McpRequestHandler(new ProjectManager(ws), new ContextCapsuleSynthesizer(), "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("find_path", new { from = "Cog", to = "Widget" })));
+
+        // The full two-hop chain, in source->target order, each arrow forward.
+        Assert.Contains("Cog --REFERENCES_TYPE--> Gadget --REFERENCES_TYPE--> Widget", text);
+        Assert.Contains("2 hop(s)", text);
+    }
+
     /// <summary>Returns a fixed embedding regardless of input — lets the test pin which seeded node ranks first.</summary>
     private sealed class StubEmbeddingService : IEmbeddingService
     {
@@ -240,5 +286,19 @@ public class McpToolsTests
         Assert.Contains("Implement caching", text);   // open task
         Assert.Contains("Why is X slow", text);        // open question
         Assert.DoesNotContain("Old finished task", text); // Done -> excluded
+        Assert.DoesNotContain("Trimmed done task", text); // "Done " (trailing space) -> trimmed, still excluded
+    }
+
+    [Fact]
+    public async Task FindPath_TolerantOfNumericStringArg()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // maxHops as a JSON string "1" must not blow up with an internal error — ReadInt parses it.
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("find_path", new { from = "Gadget", to = "Widget", maxHops = "1" })));
+
+        Assert.Contains("Gadget --REFERENCES_TYPE--> Widget", text);
     }
 }

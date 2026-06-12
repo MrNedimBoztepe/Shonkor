@@ -27,4 +27,13 @@ public interface IGraphSearch
     /// by the given number of hops along edges in either direction.
     /// </summary>
     Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> GetSubgraphAsync(IEnumerable<string> seedNodeIds, int hops = 1, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the edges directly incident to a single node — those where it is the source or the
+    /// target — together with the nodes on the other end of each edge, keyed by id. Cheaper and more
+    /// precise than a 1-hop <see cref="GetSubgraphAsync"/> when only a node's direct dependents or
+    /// dependencies are needed: it touches just the node's own edges instead of materializing and
+    /// filtering its whole neighbourhood.
+    /// </summary>
+    Task<(IReadOnlyList<GraphEdge> Edges, IReadOnlyDictionary<string, GraphNode> Neighbours)> GetIncidentEdgesAsync(string nodeId, CancellationToken cancellationToken = default);
 }
