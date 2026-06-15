@@ -7,6 +7,7 @@ using System.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Shonkor.Core.Interfaces;
 using Shonkor.Infrastructure.Services;
 
@@ -20,7 +21,7 @@ public static class IndexEndpoints
     public static void MapIndexEndpoints(this WebApplication app)
     {
         // POST /api/index - scan and (re)index a project's directory into the graph.
-        app.MapPost("/api/index", async (IndexRequest? request, HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, CancellationToken ct) =>
+        app.MapPost("/api/index", async (IndexRequest? request, HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
             try
             {
@@ -60,7 +61,7 @@ public static class IndexEndpoints
                     activeParsers.AddRange(pluginLoad.Parsers);
 
                     var storage = await pm.GetStorageProviderAsync(project.Name, ct);
-                    var scanner = new GraphIndexScanner(storage, activeParsers);
+                    var scanner = new GraphIndexScanner(storage, activeParsers, loggerFactory.CreateLogger("Shonkor.Index"));
 
                     var result = await scanner.ScanDirectoryAsync(targetDir, exclusions, ct);
                     var stats = await storage.GetStatisticsAsync(ct);

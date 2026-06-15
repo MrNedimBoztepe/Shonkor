@@ -6,6 +6,7 @@ using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace Shonkor.Infrastructure.Services;
 
@@ -17,6 +18,7 @@ public sealed class GraphIndexScanner
 {
     private readonly IGraphStorageProvider _storage;
     private readonly IReadOnlyList<IFileParser> _parsers;
+    private readonly ILogger? _logger;
 
     // Upper bound on the content stored on a File node (full content is still hashed).
     private const int MaxFileNodeContentLength = 100_000;
@@ -26,13 +28,26 @@ public sealed class GraphIndexScanner
     /// </summary>
     /// <param name="storage">The storage provider for persisting the graph.</param>
     /// <param name="parsers">The parsers to use for extracting nodes and edges from files.</param>
-    public GraphIndexScanner(IGraphStorageProvider storage, IEnumerable<IFileParser> parsers)
+    /// <param name="logger">
+    /// Optional logger for scan diagnostics. When omitted, diagnostics go to <c>stderr</c> — never
+    /// <c>stdout</c>, which would corrupt the JSON-RPC stream when the scanner runs inside the stdio MCP
+    /// server (e.g. via <c>reindex_file</c>).
+    /// </param>
+    public GraphIndexScanner(IGraphStorageProvider storage, IEnumerable<IFileParser> parsers, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(parsers);
 
         _storage = storage;
         _parsers = parsers.ToList();
+        _logger = logger;
+    }
+
+    /// <summary>Routes a scan diagnostic to the logger, or to stderr — never stdout (see ctor remarks).</summary>
+    private void Warn(string message)
+    {
+        if (_logger != null) _logger.LogWarning("{ScanMessage}", message);
+        else Console.Error.WriteLine(message);
     }
 
     /// <summary>
@@ -109,7 +124,7 @@ public sealed class GraphIndexScanner
                 var fileInfo = new FileInfo(filePath);
                 if (fileInfo.Length > 5 * 1024 * 1024) // 5 MB limit
                 {
-                    Console.WriteLine($"Skipping large file {filePath} ({fileInfo.Length} bytes)");
+                    Warn($"Skipping large file {filePath} ({fileInfo.Length} bytes)");
                     return;
                 }
 
@@ -160,7 +175,7 @@ public sealed class GraphIndexScanner
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error parsing file {filePath}: {ex.Message}");
+                Warn($"Error parsing file {filePath}: {ex.Message}");
             }
         }).ConfigureAwait(false);
 

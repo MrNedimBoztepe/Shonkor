@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Services;
@@ -162,7 +163,7 @@ public static class WebhookEndpoints
 
         // POST /api/webhooks/github/push
         // Triggered by GitHub when code is pushed.
-        app.MapPost("/api/webhooks/github/push", async (HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, CancellationToken ct) =>
+        app.MapPost("/api/webhooks/github/push", async (HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
             try
             {
@@ -194,6 +195,7 @@ public static class WebhookEndpoints
                 }
 
                 // Fire and forget the background scanning so the webhook responds quickly (GitHub timeouts)
+                var webhookLogger = loggerFactory.CreateLogger("Shonkor.Webhook");
                 _ = Task.Run(async () =>
                 {
                     try
@@ -207,16 +209,16 @@ public static class WebhookEndpoints
                             : PluginLoadResult.Empty;
                         activeParsers.AddRange(pluginLoad.Parsers);
 
-                        var scanner = new GraphIndexScanner(storage, activeParsers);
+                        var scanner = new GraphIndexScanner(storage, activeParsers, webhookLogger);
                         var projectConfig = pm.GetProjectConfig(project.Name);
 
-                        Console.WriteLine($"[Webhook] Starting background incremental index for push event on project: {project.Name}");
+                        webhookLogger.LogInformation("Starting background incremental index for push event on project: {Project}", project.Name);
                         var result = await scanner.ScanDirectoryAsync(project.Path, projectConfig.ExcludePatterns, CancellationToken.None);
-                        Console.WriteLine($"[Webhook] Index complete: {result.FilesScanned} files scanned, {result.NodesCreated} nodes created/updated.");
+                        webhookLogger.LogInformation("Index complete: {Files} files scanned, {Nodes} nodes created/updated.", result.FilesScanned, result.NodesCreated);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[Webhook Error] {ex.Message}");
+                        webhookLogger.LogError(ex, "Background incremental index failed for project: {Project}", project.Name);
                     }
                     finally
                     {
