@@ -23,8 +23,9 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 * **MCP Server (Model Context Protocol)**: Provides the graph directly to AI assistants like **Claude** and **Antigravity** with a token-efficient toolset that closes the agentic edit loop:
   * **Find**: `search_graph` (FTS5), `search_semantic` (vector/meaning), `locate`.
   * **Read**: `get_source` (exact symbol body + `file:start-end`), `get_subgraph`, `generate_capsule`.
-  * **Analyze**: `impact_of` (who references it), `depends_on` (what it uses), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `verify_exists` (anti-hallucination fact-check).
-  * **Edit loop & memory**: `reindex_file` (refresh one file after editing), `get_open_threads`, `record_decision`/`milestone`/`task`/`question`.
+  * **Analyze**: `impact_of` (who references it), `depends_on` (what it uses), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).
+  * **Plan & apply**: `edit_plan` (a concrete edit checklist), `related_tests` (what to run after a change), `reindex_file` (refresh one file after editing).
+  * **Memory**: `get_open_threads`, `record_decision`/`milestone`/`task`/`question`.
   * See the [LLM Integration Manual](docs/user/llm_integration.md) for the full reference.
 * **Visual Web Dashboard**: A glassmorphic web interface with interactive 2D force-directed graph visualization (`force-graph`, WebGL Canvas), live physics, code preview (Prism.js), capsule creator, project and plugin management.
   * **Dual Search Modes**: Toggle between FTS5 Keyword Search (Network icon) and Vector-based Semantic Search (Brain icon).

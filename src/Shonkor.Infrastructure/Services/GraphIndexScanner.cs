@@ -287,8 +287,9 @@ public sealed class GraphIndexScanner
             ContentHash = contentHash
         });
 
-        // Replace the file's graph: clear the old nodes/edges, then upsert the fresh parse.
-        await _storage.DeleteByFilePathAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        // Replace the file's graph: clear the old nodes + outgoing edges (preserving incoming references
+        // from other files, whose targets keep stable ids), then upsert the fresh parse.
+        await _storage.ClearFileForReindexAsync(fullPath, cancellationToken).ConfigureAwait(false);
         await _storage.UpsertNodesAsync(nodes, cancellationToken).ConfigureAwait(false);
         if (edges.Count > 0)
         {

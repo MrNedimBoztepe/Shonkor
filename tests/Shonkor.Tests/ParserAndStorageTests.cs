@@ -332,6 +332,50 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task ScanFile_PreservesIncomingReferences_OnEdit()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_reidx_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var file = Path.Combine(dir, "Target.cs");
+        var fullPath = Path.GetFullPath(file);
+        var targetId = fullPath + "::Target";
+
+        try
+        {
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+
+            // Index Target.cs, then add an incoming reference owned by ANOTHER file (Caller -> Target).
+            await File.WriteAllTextAsync(file, "namespace D; public class Target { }");
+            await scanner.ScanFileAsync(file);
+            await storage.UpsertNodesAsync(new[]
+            {
+                new GraphNode { Id = "caller::Caller", Type = "Class", Name = "Caller", FilePath = Path.Combine(dir, "Caller.cs"), Content = "uses Target" }
+            });
+            await storage.UpsertEdgesAsync(new[]
+            {
+                new GraphEdge { SourceId = "caller::Caller", TargetId = targetId, Relationship = "REFERENCES_TYPE" }
+            });
+
+            // Edit Target.cs (add a method — same class name, so the node id is stable) and re-index it.
+            await File.WriteAllTextAsync(file, "namespace D; public class Target { public void M() {} }");
+            await scanner.ScanFileAsync(file);
+
+            // The incoming reference from Caller must survive the single-file re-index.
+            var (edges, _) = await storage.GetIncidentEdgesAsync(targetId);
+            Assert.Contains(edges, e => e.SourceId == "caller::Caller" && e.TargetId == targetId && e.Relationship == "REFERENCES_TYPE");
+            // And the edit landed (the new method node exists under the re-parsed type).
+            var (nodes, _) = await storage.GetSubgraphAsync(new[] { targetId }, 1);
+            Assert.Contains(nodes, n => n.Type == "Method" && n.Name == "M");
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task DeleteByFilePaths_RemovesNodesAndOrphanEdges_InOneTransaction()
     {
         using var storage = new SqliteGraphStorageProvider(":memory:");

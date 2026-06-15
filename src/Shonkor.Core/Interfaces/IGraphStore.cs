@@ -43,6 +43,15 @@ public interface IGraphStore
     Task DeleteByFilePathsAsync(IEnumerable<string> filePaths, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Clears a file's nodes and its OUTGOING/internal edges, but PRESERVES edges that point into the
+    /// file from other files (incoming references). Used by single-file re-indexing so an edit doesn't
+    /// drop a symbol's incoming references (which other files own and which only a whole-graph cross-tech
+    /// relink would otherwise restore). Re-parsing recreates the file's symbols with the same ids, so the
+    /// preserved incoming edges stay valid.
+    /// </summary>
+    Task ClearFileForReindexAsync(string filePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieves all File node paths currently stored in the graph.
     /// </summary>
     Task<IReadOnlyList<string>> GetAllIndexedFilePathsAsync(CancellationToken cancellationToken = default);

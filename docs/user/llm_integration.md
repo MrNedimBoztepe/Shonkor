@@ -94,12 +94,15 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 | `depends_on` | What a symbol itself uses (outgoing) — its footprint | Inverse of `impact_of` |
 | `find_usages` | Call/reference sites **with a code snippet** at each (graph-aware grep) | `relation  name  file:line  ⟶ <usage line>` |
 | `find_path` | Shortest connection chain between two symbols | `A --REL--> B <--REL-- C`, real edge directions |
+| `implementations_of` | Types that implement an interface / extend a base type | `IMPLEMENTS`/`EXTENDS`, with `file:line` + summaries |
 | `verify_exists` | Fact-check a symbol exists **before** asserting it | `YES`/`NO` + nearest names — anti-hallucination |
 
-**Edit loop**
+**Plan & apply a change**
 | Tool | Purpose | Note |
 |------|---------|------|
-| `reindex_file` | Re-index a single file after you edit it, so the graph matches the working tree | Local only (stdio CLI / dev relay); disabled in SaaS |
+| `edit_plan` | A concrete edit checklist: the definition + every reference site as `[ ] file:line  name  (relation)` | Ends with the verify steps |
+| `related_tests` | The tests that reference a symbol — what to run after changing it | Test-file heuristic (xUnit/NUnit/Go/Python/JS) |
+| `reindex_file` | Re-index a single file after you edit it, so the graph matches the working tree | Local only (stdio CLI / dev relay); disabled in SaaS; preserves incoming references |
 
 **Session memory**
 | Tool | Purpose | Note |
@@ -111,11 +114,12 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 ### Example Workflow: the agentic edit loop
 > "Rename the `Bar` method on `Foo` and update every caller."
 
-1. `impact_of` (or `find_usages`) with `symbol: "Bar"` → every site that would break, with the usage line at each.
+1. `edit_plan` with `symbol: "Bar"` → a ready-to-work checklist: the definition plus every reference site as `[ ] file:line  name  (relation)`.
 2. `get_source` with `symbol: "Bar"` → the exact body to edit (`file:start-end`), no need to read the whole file.
 3. *Make the edits in the working tree.*
-4. `reindex_file` with `path: "@/src/.../Foo.cs"` → refresh just that file so the graph matches the edit.
-5. `verify_exists` / `find_usages` again → confirm the change landed and nothing dangles.
+4. `reindex_file` for each changed path → refresh just those files so the graph matches the edit.
+5. `find_usages` / `verify_exists` again → confirm the change landed and nothing dangles.
+6. `related_tests` with `symbol: "Bar"` → exactly which tests to run.
 
 This closes the loop — precise read, see the impact, edit, refresh, re-check — far more token-efficient and reliable than repeatedly searching and reading whole files, because the structure and dependency edges live in the graph.
 
