@@ -115,11 +115,16 @@ dotnet run
 
 Shonkor is primarily designed as a **local** tool. For operation behind a proxy / as SaaS, the following applies:
 
+* **API keys / user tokens are stored SHA-256 hashed**, never in plaintext — `projects.json` holds only the hash, comparison is constant-time (`FixedTimeEquals`), and any legacy plaintext is auto-migrated to a hash on load. A new user's token is shown **once** at creation.
 * **API Keys & Secrets** do **not** belong in `appsettings.json` or `projects.json` (both are gitignored), but in user secrets / environment variables (`ApiKeys__<key>=<projectName>`, `GitHub__WebhookSecret=…`).
 * The **Loopback Auth Bypass** is only active in `Development`; in production, the API key check always applies.
 * **Dynamic Plugins** (runtime compilation of C#) are an RCE vector and are therefore **disabled by default** – opt-in via `Security:EnablePlugins=true`.
 * **Webhooks** verify `X-Hub-Signature-256` (HMAC) and fail without a configured secret (fail-closed).
 * `/api/browse` (file system browser) is only accessible locally/in development.
+
+### 🩺 Operations & CI/CD
+* **Health probes** (public): `/health` & `/health/live` (liveness) and `/health/ready` (readiness — workspace writable + active graph store reachable). Structured **JSON logs** in Production.
+* **CI/CD**: GitHub Actions builds & tests every PR to `main`; on `main`/version tags it publishes the hardened (non-root, healthchecked) Linux container image to GHCR.
 
 ---
 

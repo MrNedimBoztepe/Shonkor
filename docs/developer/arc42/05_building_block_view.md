@@ -46,8 +46,9 @@ graph TD
 ### 4. Shonkor.Web (Presentation Layer)
 * **Responsibility**: Provides a graphical, interactive dashboard and SaaS/Webhook endpoints.
 * **Important Building Blocks**:
-  * `Program.cs`: ASP.NET Core WebHost with Minimal APIs (Stats, Search, Subgraph, Capsule, Indexing, Project and Plugin Management, File System Browser).
-  * `Middleware/ApiKeyMiddleware`: Multi-tenant API key validation (constant time) with a loopback bypass restricted to Development.
+  * `Program.cs`: ASP.NET Core WebHost with Minimal APIs (Stats, Search, Subgraph, Capsule, Indexing, Node references/path, Project and Plugin Management, File System Browser). Maps liveness `/health`·`/health/live` and readiness `/health/ready`; emits JSON logs in Production.
+  * `Middleware/ApiKeyMiddleware`: Multi-tenant token validation against **SHA-256 hashes** (`TokenHasher`, constant-time `FixedTimeEquals`; legacy plaintext self-migrated), with a loopback bypass restricted to Development and `/health*` exempt.
+  * `HealthChecks/StorageHealthCheck`: Readiness check — confirms the project workspace is writable and the active graph store answers a query.
   * `Endpoints/GraphRagEndpoints`, `Endpoints/WebhookEndpoints`: SaaS RAG queries and HMAC-verified GitHub Webhooks.
-  * `Services/SemanticEnrichmentService`: Background worker (`BackgroundService`) that asynchronously retrieves nodes from the SQLite database, passes them to the `OllamaSemanticAnalyzer` for analysis, and writes the generated AI summaries back into the database.
-  * `wwwroot/`: Glassmorphic HTML/CSS/JS frontend with `force-graph` (WebGL canvas network visualization) and Prism.js (Syntax Highlighting).
+  * `Services/SemanticEnrichmentService`: Background worker (`BackgroundService`) that asynchronously enriches nodes via the local Ollama backend (summaries + embeddings), with bounded parallelism (`SemanticEnrichment:*`) and an exponential-backoff circuit breaker.
+  * `wwwroot/`: Glassmorphic HTML/CSS/JS frontend with `force-graph` (WebGL canvas network visualization), an Impact & Dependencies drawer + Find-Path tool, and Prism.js (Syntax Highlighting).

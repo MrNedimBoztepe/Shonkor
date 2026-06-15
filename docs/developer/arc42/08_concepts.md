@@ -88,7 +88,7 @@ Since the Web dashboard serves requests in parallel, `SqliteGraphStorageProvider
 ## 8.5 Security Model
 
 Shonkor is primarily local but supports a multi-tenant/SaaS mode:
-* **API Keys** are compared in constant time; the loopback bypass is only active in `Development` (otherwise, authentication behind a proxy collapses).
+* **API keys / user tokens** are stored **SHA-256 hashed** (`TokenHasher`), never in plaintext; `projects.json` holds only the hash. Presented keys are hashed and compared in constant time (`CryptographicOperations.FixedTimeEquals`). Legacy plaintext is migrated to a hash on load (self-healing), and a new user's token is returned only **once** at creation. The loopback bypass is only active in `Development` (otherwise, authentication behind a proxy collapses).
 * **Plugins** are an RCE vector: runtime compilation is opt-in (`Security:EnablePlugins`) and loads into an unloadable `AssemblyLoadContext`.
 * **Webhooks** verify `X-Hub-Signature-256` (HMAC) and sanitize repository names against path traversal.
 * Error responses disclose **no** internal details/paths; details are logged exclusively in the server log.
@@ -99,6 +99,31 @@ Shonkor is primarily local but supports a multi-tenant/SaaS mode:
 
 * **Project from working directory**: The MCP server derives the active project from its working directory (`FindProjectByPath`), not from the web-mutable `ActiveProjectName`. This decouples the dashboard and the AI context.
 * **Lean outputs**: `locate` and `search_graph` output compact text by default (`name -> file:line`) instead of JSON; `get_subgraph` outputs a compact `NODES`/`EDGES` block. `verbose: true` switches to full JSON. This reduces the token consumption of shallow lookups by ~90%.
+* **Reusable handles**: file-path node ids are emitted as short `@/<relative>` handles, which round-trip straight back as seeds/paths — cutting token cost and avoiding brittle absolute ids.
+* **Full toolset**: beyond find/read, the server exposes analysis (`impact_of`, `depends_on`, `find_usages`, `find_path`, `implementations_of`, `verify_exists`), the agentic **edit loop** (`get_source`, `reindex_file`, `edit_plan`, `related_tests`), and session memory (`get_open_threads`, `record_*`). See the [LLM Integration Manual](../../user/llm_integration.md) for the full reference.
+
+---
+
+## 8.9 Background Semantic Enrichment
+
+Summaries and embeddings are produced asynchronously by a `BackgroundService` (`SemanticEnrichmentService`) that polls for nodes needing analysis and delegates to the local Ollama backend.
+* **Bounded parallelism**: each batch is processed concurrently up to `SemanticEnrichment:MaxParallelism` (default 4); `SemanticEnrichment:BatchSize` (default 16) controls how many nodes are pulled per cycle. Client-side concurrency is safe — Ollama serializes internally when it can't parallelize, so it never costs throughput.
+* **Circuit breaker**: a backend outage cancels the rest of the batch and backs off exponentially (30s → … → 15 min) instead of hammering a dead Ollama; per-node logic errors skip the node without tripping the breaker.
+* **Handler lifetime**: the HTTP-backed analyzer/embedding clients are resolved from a per-cycle DI scope so `IHttpClientFactory` controls handler rotation (DNS refresh) instead of a singleton pinning one handler.
+
+---
+
+## 8.10 The Agentic Edit Loop
+
+The MCP tools close a full edit loop so an AI can change code, not just read it: read precisely (`get_source` → exact body + `file:start-end`), see the impact (`impact_of` / `find_usages` / `edit_plan`), edit, then **`reindex_file`** to refresh just that file so the graph matches the working tree. Single-file re-index (`ScanFileAsync` → `ClearFileForReindexAsync`) deletes only the file's own (outgoing/internal) edges and **preserves incoming references** other files own — re-parsing recreates the file's symbols with stable ids, so impact analysis stays intact across an edit (cross-tech links are otherwise only rebuilt on a full scan).
+
+---
+
+## 8.11 Operability: Health Probes, Logging & CI/CD
+
+* **Health probes** (public, auth-exempt): `/health` and `/health/live` are check-less **liveness** (the process is up); `/health/ready` is **readiness** — a `StorageHealthCheck` confirms the project workspace is writable and the active graph store answers a query. Orchestrators (Docker/Kubernetes) gate traffic on readiness.
+* **Structured logging**: in Production the app emits JSON console logs (`AddJsonConsole`) so a container/k8s log pipeline can parse them; Development keeps the readable console.
+* **CI/CD**: GitHub Actions runs build + test on every PR to `main`; on `main` and `v*.*.*` tags it builds and pushes the hardened (non-root, `HEALTHCHECK`-equipped) Linux image to GHCR. A `.dockerignore` keeps build output and host data out of the image context.
 
 ---
 
