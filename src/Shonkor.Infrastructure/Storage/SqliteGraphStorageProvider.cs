@@ -650,6 +650,55 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     }
 
     /// <inheritdoc />
+    public async Task ClearFileForReindexAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        // Collect the file's node ids so we can delete only edges that ORIGINATE from them.
+        var nodeIds = new List<string>();
+        await using (var selectCmd = connection.CreateCommand())
+        {
+            selectCmd.CommandText = "SELECT Id FROM Nodes WHERE FilePath = @path;";
+            selectCmd.Parameters.AddWithValue("@path", filePath);
+            await using var reader = await selectCmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                nodeIds.Add(reader.GetString(0));
+            }
+        }
+
+        await using (var deleteNodes = connection.CreateCommand())
+        {
+            deleteNodes.CommandText = "DELETE FROM Nodes WHERE FilePath = @path;";
+            deleteNodes.Parameters.AddWithValue("@path", filePath);
+            await deleteNodes.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // Delete only OUTGOING/internal edges (SourceId in the file). Edges that point INTO the file from
+        // other files (incoming references) are preserved: re-parsing recreates the file's symbols with
+        // the same ids, so those references stay valid across an edit — instead of being dropped until the
+        // next whole-graph cross-tech relink.
+        foreach (var chunk in nodeIds.Chunk(MaxSqlParameters))
+        {
+            await using var edgeCmd = connection.CreateCommand();
+            var paramNames = new List<string>(chunk.Length);
+            for (var i = 0; i < chunk.Length; i++)
+            {
+                var p = $"@s{i}";
+                paramNames.Add(p);
+                edgeCmd.Parameters.AddWithValue(p, chunk[i]);
+            }
+            edgeCmd.CommandText = $"DELETE FROM Edges WHERE SourceId IN ({string.Join(", ", paramNames)});";
+            await edgeCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<string>> GetAllIndexedFilePathsAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
