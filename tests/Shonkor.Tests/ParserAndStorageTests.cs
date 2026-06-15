@@ -332,6 +332,42 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task Scanner_DiagnosticsNeverGoToStdout()
+    {
+        // Scan diagnostics must go to stderr/logger, never stdout — stdout is the JSON-RPC channel of
+        // the stdio MCP server, and a stray line there would corrupt the protocol.
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_stdout_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // A >5 MB file triggers the "Skipping large file" diagnostic.
+            await File.WriteAllTextAsync(Path.Combine(dir, "Big.cs"), new string('a', 6 * 1024 * 1024));
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() }); // no logger
+
+            var original = Console.Out;
+            await using var captured = new StringWriter();
+            Console.SetOut(captured);
+            try
+            {
+                await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+            }
+            finally
+            {
+                Console.SetOut(original);
+            }
+
+            Assert.Equal(string.Empty, captured.ToString());
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ScanFile_PreservesIncomingReferences_OnEdit()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"shonkor_reidx_{Guid.NewGuid():N}");

@@ -82,7 +82,7 @@ public static class PluginLoader
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[PluginLoader] Error reading plugin '{file}': {ex.Message}");
+                    Console.Error.WriteLine($"[PluginLoader] Error reading plugin '{file}': {ex.Message}");
                 }
             }
 
@@ -133,7 +133,7 @@ public static class PluginLoader
                     diagnostic.Severity == DiagnosticSeverity.Error);
 
                 var errorMsg = string.Join("\n", failures.Select(f => $"{f.Id}: {f.GetMessage()}"));
-                Console.WriteLine($"[PluginLoader] Compilation failed:\n{errorMsg}");
+                Console.Error.WriteLine($"[PluginLoader] Compilation failed:\n{errorMsg}");
                 context.Unload();
                 return PluginLoadResult.Empty;
             }
@@ -150,14 +150,14 @@ public static class PluginLoader
                     if (Activator.CreateInstance(type) is IFileParser parser)
                     {
                         parsers.Add(parser);
-                        Console.WriteLine($"[PluginLoader] Loaded dynamic parser plugin: {type.Name}");
+                        Console.Error.WriteLine($"[PluginLoader] Loaded dynamic parser plugin: {type.Name}");
                     }
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[PluginLoader] Fatal error loading plugins: {ex.Message}");
+            Console.Error.WriteLine($"[PluginLoader] Fatal error loading plugins: {ex.Message}");
             context.Unload();
             throw;
         }
