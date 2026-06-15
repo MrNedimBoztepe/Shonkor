@@ -104,6 +104,18 @@ Automatically registers Shonkor in the MCP configuration files of detected clien
 > [!TIP]
 > For reproducible operation, it is recommended to run `dotnet publish` and point to the published `.exe` in the client configuration, rather than pointing to `bin/Debug`.
 
+#### `mcp-proxy`
+Bridges a local AI assistant to a **remote** Shonkor (SaaS) graph: it forwards stdio JSON-RPC to HTTP POSTs against the server's `/api/mcp/relay` endpoint, so the assistant talks to the hosted graph as if it were local.
+
+* **Syntax:** `shonkor mcp-proxy --url <relayUrl> [--project <name>]`
+* **Options:**
+  * `--url <url>`: The remote relay endpoint, e.g. `https://shonkor.yourdomain.com/api/mcp/relay`.
+  * `--project <name>`: Tenant/project to bind to (optional if `SHONKOR_PROJECT` is set; ignored when the server authenticates the tenant from the API key).
+* **Example:**
+  ```powershell
+  shonkor mcp-proxy --url https://shonkor.example.com/api/mcp/relay --project MyProject
+  ```
+
 ---
 
 ## 📊 Interpreting the Output
