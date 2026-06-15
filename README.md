@@ -22,8 +22,8 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 * **Token-Optimized Context Capsule Synthesizer**: Generates prompt-ready Markdown files including automatic **Mermaid.js** architecture diagrams.
 * **MCP Server (Model Context Protocol)**: Provides the graph directly to AI assistants like **Claude** and **Antigravity** with a token-efficient toolset that closes the agentic edit loop:
   * **Find**: `search_graph` (FTS5), `search_semantic` (vector/meaning), `locate`.
-  * **Read**: `get_source` (exact symbol body + `file:start-end`), `get_subgraph`, `generate_capsule`.
-  * **Analyze**: `impact_of` (who references it), `depends_on` (what it uses), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).
+  * **Read**: `signature` (signature only), `get_source` (exact symbol body + `file:start-end`), `outline` (file structure), `get_subgraph`, `generate_capsule`.
+  * **Analyze**: `impact_of` (who references it), `depends_on` (what it uses), `dependency_tree` (transitive reference tree), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).
   * **Plan & apply**: `edit_plan` (a concrete edit checklist), `related_tests` (what to run after a change), `reindex_file` (refresh one file after editing).
   * **Memory**: `get_open_threads`, `record_decision`/`milestone`/`task`/`question`.
   * See the [LLM Integration Manual](docs/user/llm_integration.md) for the full reference.
