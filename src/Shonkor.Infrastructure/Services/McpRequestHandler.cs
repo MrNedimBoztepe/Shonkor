@@ -125,6 +125,17 @@ public sealed class McpRequestHandler
     }
 
     /// <summary>
+    /// Heuristic for <c>related_tests</c>: whether a file path looks like a test file across common
+    /// ecosystems (xUnit/NUnit <c>*.Tests</c>, Go <c>_test</c>, Python <c>test_</c>, JS <c>.spec.</c>/
+    /// <c>.test.</c>/<c>__tests__</c>).
+    /// </summary>
+    private static bool LooksLikeTest(string? filePath)
+    {
+        var p = (filePath ?? string.Empty).ToLowerInvariant();
+        return p.Contains("test") || p.Contains(".spec.") || p.Contains("__tests__") || p.Contains("/spec/") || p.Contains("\\spec\\");
+    }
+
+    /// <summary>
     /// Returns the first non-empty line of <paramref name="content"/> that mentions <paramref name="name"/>
     /// (trimmed, capped at 160 chars), or <c>null</c> — a grep-like usage snippet for find_usages.
     /// </summary>
@@ -519,6 +530,51 @@ public sealed class McpRequestHandler
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "path" }
+                            }
+                        },
+                        new
+                        {
+                            name = "implementations_of",
+                            description = "List the types that implement an interface or extend a base type (incoming IMPLEMENTS/EXTENDS edges), each as 'relation  name  file:line  — summary'. More precise than impact_of when you specifically need subtypes (e.g. all IFileParser implementations).",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "Interface or base type name (e.g. 'IFileParser'). 'query' is accepted as an alias." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "related_tests",
+                            description = "List the tests that reference a symbol — i.e. what you should run after changing it. Returns 'testName  file:line' for each referencing node in a test file (xUnit/NUnit/Go/Python/JS conventions). States plainly when nothing covers it.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The type/method/symbol name to find tests for. 'query' is accepted as an alias." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "edit_plan",
+                            description = "Produce a concrete edit checklist for changing a symbol: its definition location plus every reference site as '[ ] file:line  name  (relation)', ready to work through. Combines impact analysis with precise locations; ends with the verify steps (reindex_file, find_usages/related_tests).",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The type/method/symbol you intend to change (e.g. rename or signature change). 'query' is accepted as an alias." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
                             }
                         },
                         new
@@ -1041,6 +1097,127 @@ public sealed class McpRequestHandler
                         }
                         return SendToolResponse(id,
                             $"Reindexed {handle}: {result.NodesCreated} node(s), {result.EdgesCreated} edge(s) in {result.Duration.TotalMilliseconds:F0} ms. (Cross-tech links refresh on a full scan.)");
+                    }
+
+                case "implementations_of":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        var name = def?.Name ?? symbol;
+
+                        // IMPLEMENTS/EXTENDS edges target the base type by NAME, so query by name.
+                        var (edges, neighbours) = await storage.GetIncidentEdgesAsync(name).ConfigureAwait(false);
+                        var impls = edges
+                            .Where(e => (e.Relationship == "IMPLEMENTS" || e.Relationship == "EXTENDS") && e.TargetId == name && e.SourceId != name)
+                            .ToList();
+
+                        if (impls.Count == 0)
+                        {
+                            return SendToolResponse(id, $"No implementations or subclasses of '{name}' found in the graph.");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"{impls.Count} type(s) implement/extend '{name}':\n");
+                        foreach (var e in impls.OrderBy(e => e.Relationship))
+                        {
+                            var impl = neighbours.GetValueOrDefault(e.SourceId);
+                            var implName = impl?.Name ?? e.SourceId;
+                            var loc = Shorten(impl != null && !string.IsNullOrEmpty(impl.FilePath) ? impl.FilePath : e.SourceId, basePath);
+                            if (impl?.StartLine is int line) loc += $":{line}";
+                            var summary = impl != null && !string.IsNullOrEmpty(impl.Summary) ? $"  — {impl.Summary}" : "";
+                            sb.Append($"{e.Relationship}\t{implName}\t{loc}{summary}\n");
+                        }
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "related_tests":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
+                        var tests = edges
+                            .Where(e => e.TargetId == def.Id && e.SourceId != def.Id)
+                            .Select(e => neighbours.GetValueOrDefault(e.SourceId))
+                            .Where(n => n != null && LooksLikeTest(n!.FilePath))
+                            .DistinctBy(n => n!.Id)
+                            .ToList();
+
+                        if (tests.Count == 0)
+                        {
+                            return SendToolResponse(id,
+                                $"No tests in the graph reference '{def.Name}' directly — the change may be untested, or covered only indirectly.");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"{tests.Count} test(s) likely covering '{def.Name}' (run these after changing it):\n");
+                        foreach (var t in tests)
+                        {
+                            var loc = Shorten(string.IsNullOrEmpty(t!.FilePath) ? t.Id : t.FilePath, basePath);
+                            if (t.StartLine is int line) loc += $":{line}";
+                            sb.Append($"{t.Name}\t{loc}\n");
+                        }
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "edit_plan":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        var defLoc = Shorten(string.IsNullOrEmpty(def.FilePath) ? def.Id : def.FilePath, basePath);
+                        if (def.StartLine is int dl) defLoc += $":{dl}";
+
+                        var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
+                        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id).ToList();
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"Edit plan — '{def.Name}' ({def.Type}) defined at {defLoc}\n");
+                        if (incoming.Count == 0)
+                        {
+                            sb.Append("No reference sites — safe to change in isolation.\n");
+                        }
+                        else
+                        {
+                            sb.Append($"Update {incoming.Count} reference site(s):\n");
+                            var i = 1;
+                            foreach (var e in incoming.OrderBy(e => e.Relationship))
+                            {
+                                var user = neighbours.GetValueOrDefault(e.SourceId);
+                                var userName = user?.Name ?? e.SourceId;
+                                var loc = Shorten(user != null && !string.IsNullOrEmpty(user.FilePath) ? user.FilePath : e.SourceId, basePath);
+                                if (user?.StartLine is int ul) loc += $":{ul}";
+                                sb.Append($"[ ] {i++}. {loc}\t{userName}\t({e.Relationship})\n");
+                            }
+                        }
+                        sb.Append("After editing: reindex_file each changed path, then find_usages / related_tests to confirm.");
+                        return SendToolResponse(id, sb.ToString());
                     }
 
                 case "get_open_threads":
