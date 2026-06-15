@@ -125,6 +125,30 @@ public sealed class McpRequestHandler
     }
 
     /// <summary>
+    /// Builds a compact signature line for a node from its stored properties (no body): a method/
+    /// constructor as <c>modifiers returnType Name(params)</c>, a property as <c>modifiers type Name</c>,
+    /// and a type as <c>modifiers kind Name</c>.
+    /// </summary>
+    private static string BuildSignature(GraphNode node)
+    {
+        var p = node.Properties;
+        var mods = p.GetValueOrDefault("modifiers", string.Empty).Trim();
+        string Compose(params string?[] parts) =>
+            string.Join(" ", parts.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!.Trim()));
+
+        switch (node.Type)
+        {
+            case "Method":
+            case "Constructor":
+                return Compose(mods, p.GetValueOrDefault("returnType", ""), $"{node.Name}({p.GetValueOrDefault("parameters", "").Trim()})");
+            case "Property":
+                return Compose(mods, p.GetValueOrDefault("returnType", ""), node.Name);
+            default:
+                return Compose(mods, node.Type.ToLowerInvariant(), node.Name);
+        }
+    }
+
+    /// <summary>
     /// Heuristic for <c>related_tests</c>: whether a file path looks like a test file across common
     /// ecosystems (xUnit/NUnit <c>*.Tests</c>, Go <c>_test</c>, Python <c>test_</c>, JS <c>.spec.</c>/
     /// <c>.test.</c>/<c>__tests__</c>).
@@ -572,6 +596,53 @@ public sealed class McpRequestHandler
                                 properties = new
                                 {
                                     symbol = new { type = "string", description = "The type/method/symbol you intend to change (e.g. rename or signature change). 'query' is accepted as an alias." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "signature",
+                            description = "Return ONLY a symbol's signature (modifiers, return type, parameters) plus its location — no body. The cheapest way to learn how to call something.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The method/type/property name (e.g. 'GenerateEmbeddingAsync'). 'query' is accepted as an alias." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "outline",
+                            description = "List a file's structure cheaply: its types and members as an indented '<type>  <name>:<line>' tree (via CONTAINS), so you can see what's in a file without reading it. Accepts an absolute/project-relative path or an '@/' handle.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new { type = "string", description = "File to outline: absolute, project-relative, or an '@/<relative>' handle." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "path" }
+                            }
+                        },
+                        new
+                        {
+                            name = "dependency_tree",
+                            description = "Transitive dependency tree over reference edges (REFERENCES_TYPE/IMPLEMENTS/EXTENDS), rendered indented to a given depth. direction 'uses' = what the symbol depends on (outgoing); 'used_by' = what depends on it (incoming). NOTE: this is type/reference-level (the graph does not resolve method-level calls). Cycles are marked, and the tree is capped for safety.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The root symbol (e.g. 'GraphNode'). 'query' is accepted as an alias." },
+                                    direction = new { type = "string", description = "'uses' (outgoing, default) or 'used_by' (incoming)." },
+                                    depth = new { type = "integer", description = "Tree depth (default 2, max 5)." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "symbol" }
@@ -1218,6 +1289,124 @@ public sealed class McpRequestHandler
                         }
                         sb.Append("After editing: reindex_file each changed path, then find_usages / related_tests to confirm.");
                         return SendToolResponse(id, sb.ToString());
+                    }
+
+                case "signature":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+                        var loc = Shorten(string.IsNullOrEmpty(def.FilePath) ? def.Id : def.FilePath, basePath);
+                        if (def.StartLine is int sl) loc += $":{sl}";
+                        return SendToolResponse(id, $"{BuildSignature(def)}\n@ {loc}");
+                    }
+
+                case "outline":
+                    {
+                        var rawPath = args?["path"]?.ToString() ?? args?["file"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(rawPath))
+                        {
+                            return SendError(id, -32602, "Parameter 'path' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+                        var resolved = FromHandle(rawPath, basePath);
+                        if (!System.IO.Path.IsPathRooted(resolved))
+                        {
+                            resolved = System.IO.Path.Combine(basePath, resolved);
+                        }
+                        var fileId = System.IO.Path.GetFullPath(resolved);
+
+                        var fileNode = await storage.GetNodeByIdAsync(fileId).ConfigureAwait(false);
+                        if (fileNode == null)
+                        {
+                            return SendToolResponse(id, $"File '{ToHandle(fileId, basePath)}' is not indexed.");
+                        }
+
+                        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { fileId }, 2).ConfigureAwait(false);
+                        var byId = nodes.ToDictionary(n => n.Id);
+                        var children = new Dictionary<string, List<string>>();
+                        foreach (var e in edges.Where(e => e.Relationship == "CONTAINS"))
+                        {
+                            if (!children.TryGetValue(e.SourceId, out var list)) children[e.SourceId] = list = new();
+                            list.Add(e.TargetId);
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append(ToHandle(fileId, basePath)).Append('\n');
+                        void Render(string nid, int depth)
+                        {
+                            if (!children.TryGetValue(nid, out var kids)) return;
+                            foreach (var cid in kids.OrderBy(c => byId.GetValueOrDefault(c)?.StartLine ?? 0))
+                            {
+                                var c = byId.GetValueOrDefault(cid);
+                                if (c == null) continue;
+                                var line = c.StartLine is int csl ? $":{csl}" : "";
+                                sb.Append(new string(' ', depth * 2)).Append($"{c.Type}\t{c.Name}{line}\n");
+                                Render(cid, depth + 1);
+                            }
+                        }
+                        Render(fileId, 1);
+                        var outline = sb.ToString().TrimEnd();
+                        return SendToolResponse(id, outline.Contains('\n') ? outline : outline + "\n  (no members)");
+                    }
+
+                case "dependency_tree":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var direction = (args?["direction"]?.ToString() ?? "uses").ToLowerInvariant();
+                        var usedBy = direction is "used_by" or "used-by" or "callers" or "incoming";
+                        var depth = Math.Clamp(ReadInt(args?["depth"], 2), 1, 5);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        var depRelations = new HashSet<string> { "REFERENCES_TYPE", "IMPLEMENTS", "EXTENDS" };
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"Dependency tree ({(usedBy ? "used-by" : "uses")}, depth {depth}) for '{def.Name}':\n");
+                        sb.Append($"{def.Name} ({def.Type})\n");
+
+                        var visited = new HashSet<string> { def.Id };
+                        var emitted = 0;
+                        const int maxNodes = 100;
+
+                        async Task Walk(string nodeId, int level)
+                        {
+                            if (level > depth || emitted >= maxNodes) return;
+                            var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
+                            var step = edges.Where(e => depRelations.Contains(e.Relationship)
+                                && (usedBy ? e.TargetId == nodeId && e.SourceId != nodeId
+                                           : e.SourceId == nodeId && e.TargetId != nodeId)).ToList();
+                            foreach (var e in step.OrderBy(e => e.Relationship))
+                            {
+                                if (emitted >= maxNodes) { sb.Append(new string(' ', level * 2)).Append("… (truncated)\n"); break; }
+                                var otherId = usedBy ? e.SourceId : e.TargetId;
+                                var other = neighbours.GetValueOrDefault(otherId);
+                                var arrow = usedBy ? $"<--{e.Relationship}--" : $"--{e.Relationship}-->";
+                                sb.Append(new string(' ', level * 2)).Append($"{arrow} {other?.Name ?? otherId} ({other?.Type ?? "?"})");
+                                emitted++;
+                                if (!visited.Add(otherId)) { sb.Append("  ↺\n"); continue; }
+                                sb.Append('\n');
+                                await Walk(otherId, level + 1).ConfigureAwait(false);
+                            }
+                        }
+                        await Walk(def.Id, 1).ConfigureAwait(false);
+
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
                     }
 
                 case "get_open_threads":
