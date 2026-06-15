@@ -40,7 +40,11 @@ public class McpToolsTests
                 // Tier-2 fixtures (unconnected to Widget/Gadget): an interface + impl, and a test referencing Widget.
                 new GraphNode { Id = Path.Combine(ws, "IThing.cs") + "::IThing", Name = "IThing", Type = "Interface", FilePath = Path.Combine(ws, "IThing.cs"), StartLine = 1, Content = "interface IThing" },
                 new GraphNode { Id = Path.Combine(ws, "Impl.cs") + "::Impl", Name = "Impl", Type = "Class", FilePath = Path.Combine(ws, "Impl.cs"), StartLine = 1, Content = "class Impl : IThing", Summary = "Implements IThing." },
-                new GraphNode { Id = Path.Combine(ws, "WidgetTests.cs") + "::WidgetTests", Name = "WidgetTests", Type = "Class", FilePath = Path.Combine(ws, "WidgetTests.cs"), StartLine = 7, Content = "class WidgetTests { Widget sut; }" }
+                new GraphNode { Id = Path.Combine(ws, "WidgetTests.cs") + "::WidgetTests", Name = "WidgetTests", Type = "Class", FilePath = Path.Combine(ws, "WidgetTests.cs"), StartLine = 7, Content = "class WidgetTests { Widget sut; }" },
+                // Tier-3 fixtures (unconnected): a file with a class + method, for signature/outline.
+                new GraphNode { Id = Path.Combine(ws, "Calc.cs"), Name = "Calc.cs", Type = "File", FilePath = Path.Combine(ws, "Calc.cs") },
+                new GraphNode { Id = Path.Combine(ws, "Calc.cs") + "::Calc", Name = "Calc", Type = "Class", FilePath = Path.Combine(ws, "Calc.cs"), StartLine = 1, Content = "class Calc" },
+                new GraphNode { Id = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Name = "Add", Type = "Method", FilePath = Path.Combine(ws, "Calc.cs"), StartLine = 3, Content = "int Add(int a, int b) => a + b;", Properties = new() { ["returnType"] = "int", ["modifiers"] = "public", ["parameters"] = "int a, int b" } }
             });
             await storage.UpsertEdgesAsync(new[]
             {
@@ -48,7 +52,10 @@ public class McpToolsTests
                 // IMPLEMENTS targets the base type by NAME (as the parser emits it).
                 new GraphEdge { SourceId = Path.Combine(ws, "Impl.cs") + "::Impl", TargetId = "IThing", Relationship = "IMPLEMENTS" },
                 // A test in a *Tests.cs file references Widget.
-                new GraphEdge { SourceId = Path.Combine(ws, "WidgetTests.cs") + "::WidgetTests", TargetId = widgetId, Relationship = "REFERENCES_TYPE" }
+                new GraphEdge { SourceId = Path.Combine(ws, "WidgetTests.cs") + "::WidgetTests", TargetId = widgetId, Relationship = "REFERENCES_TYPE" },
+                // Calc.cs CONTAINS Calc CONTAINS Add (for outline).
+                new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs"), TargetId = Path.Combine(ws, "Calc.cs") + "::Calc", Relationship = "CONTAINS" },
+                new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs") + "::Calc", TargetId = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Relationship = "CONTAINS" }
             });
         }
 
@@ -206,6 +213,28 @@ public class McpToolsTests
 
         var src = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("get_source", new { symbol = "Foo" })));
         Assert.Contains("Foo", src);
+    }
+
+    [Fact]
+    public async Task Tier3_Signature_Outline_DependencyTree()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // signature: a method rebuilt from stored properties, no body.
+        var sig = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("signature", new { symbol = "Add" })));
+        Assert.Contains("public int Add(int a, int b)", sig);
+
+        // outline: the file's CONTAINS hierarchy (Class -> Method).
+        var outline = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("outline", new { path = "@/Calc.cs" })));
+        Assert.Contains("Calc", outline);
+        Assert.Contains("Add", outline);
+        Assert.Contains("Method", outline);
+
+        // dependency_tree (uses): Gadget --REFERENCES_TYPE--> Widget.
+        var tree = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("dependency_tree", new { symbol = "Gadget", direction = "uses", depth = 2 })));
+        Assert.Contains("--REFERENCES_TYPE--> Widget", tree);
     }
 
     [Fact]
