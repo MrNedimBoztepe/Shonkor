@@ -29,15 +29,15 @@ sequenceDiagram
         
         Note over Scan, Db: (Optimization) Hash check to avoid unnecessary work
         
-        Scan->>Db: DeleteByFilePathAsync(filePath)
-        Db-->>Scan: Existing nodes/edges deleted
-        
         Scan->>Parser: ParseAsync(filePath, content)
         Parser-->>Scan: Returns (Nodes, Edges)
-        
-        Scan->>Db: UpsertNodesAsync(Nodes + Hash)
-        Scan->>Db: UpsertEdgesAsync(Edges)
     end
+
+    Note over Scan, Db: After the parallel scan: one batched delete + batched upserts
+    Scan->>Db: DeleteByFilePathsAsync(changed + stale files)
+    Db-->>Scan: Old nodes/edges cleared in a single transaction
+    Scan->>Db: UpsertNodesAsync(all Nodes + Hash)
+    Scan->>Db: UpsertEdgesAsync(all Edges)
     
     Scan-->>CLI: IndexResult (Scanned, Created)
     CLI-->>Dev: Console report with statistics

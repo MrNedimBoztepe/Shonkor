@@ -20,10 +20,16 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 * **Cross-Technology Linking**: A post-scan linker connects Next.js components ↔ Sitecore renderings ↔ C# controllers ↔ GraphQL templates and assigns everything to Helix modules (`BELONGS_TO_MODULE`).
 * **100% Offline & Self-Contained**: Local SQLite database (`shonkor.db`) with FTS5 full-text search and recursive CTE subgraph queries. No external API dependencies.
 * **Token-Optimized Context Capsule Synthesizer**: Generates prompt-ready Markdown files including automatic **Mermaid.js** architecture diagrams.
-* **MCP Server (Model Context Protocol)**: Provides the graph directly to AI assistants like **Claude** and **Antigravity** – with token-efficient tools (`search_graph`, `locate`, `get_subgraph`, `generate_capsule`, `record_*`).
+* **MCP Server (Model Context Protocol)**: Provides the graph directly to AI assistants like **Claude** and **Antigravity** with a token-efficient toolset that closes the agentic edit loop:
+  * **Find**: `search_graph` (FTS5), `search_semantic` (vector/meaning), `locate`.
+  * **Read**: `get_source` (exact symbol body + `file:start-end`), `get_subgraph`, `generate_capsule`.
+  * **Analyze**: `impact_of` (who references it), `depends_on` (what it uses), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `verify_exists` (anti-hallucination fact-check).
+  * **Edit loop & memory**: `reindex_file` (refresh one file after editing), `get_open_threads`, `record_decision`/`milestone`/`task`/`question`.
+  * See the [LLM Integration Manual](docs/user/llm_integration.md) for the full reference.
 * **Visual Web Dashboard**: A glassmorphic web interface with interactive 2D force-directed graph visualization (`force-graph`, WebGL Canvas), live physics, code preview (Prism.js), capsule creator, project and plugin management.
   * **Dual Search Modes**: Toggle between FTS5 Keyword Search (Network icon) and Vector-based Semantic Search (Brain icon).
   * **Ask AI (GraphRAG)**: Instantly generate AI answers based on the retrieved code context nodes using a local Ollama model directly in the dashboard UI.
+  * **Impact & Dependencies panel**: Selecting a node shows its authoritative "Referenced by" / "Depends on" lists (with AI summaries), and a **Find Path** tool traces the shortest connection to any other symbol.
 * **Multi-Project Registry**: Manage multiple codebases in parallel (`projects.json`), each with its own database.
 * **Powerful CLI**: Automation via `init`, `index`, `search`, `capsule`, and `mcp`.
 
