@@ -38,14 +38,21 @@ Edit `.env` to point `TARGET_PROJECTS_DIR` to your primary projects folder (e.g.
 ### Step 2: Start the Stack
 Run the following command from the repository root:
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
 This will:
-1. Build the Shonkor .NET container.
-2. Spin up an Ollama container and automatically pull the `qwen2.5-coder` model.
+1. Build the Shonkor .NET container (runs as a non-root user, with a `HEALTHCHECK` on `/health/ready`).
+2. Spin up an Ollama container and automatically pull **both** models: `qwen2.5-coder` (summaries) and `nomic-embed-text` (embeddings for semantic search). The web container waits until Ollama is healthy before starting.
 3. Expose the dashboard at `http://localhost:5290`.
 
+**Health probes** (also used by container/Kubernetes orchestration):
+* `GET /health` and `/health/live` — liveness (the process is up). Public, no API key.
+* `GET /health/ready` — readiness (the project workspace is writable and the active graph store answers). Gate traffic on this one.
+
 *Note: If you have an NVIDIA GPU, edit `docker-compose.yml` and uncomment the `deploy` section under the `ollama` service for massive performance gains.*
+
+### Prebuilt image (CI/CD)
+Every push to `main` builds and publishes the Linux image to the GitHub Container Registry via the `.github/workflows/cd.yml` pipeline, so you can also pull `ghcr.io/<owner>/shonkor:latest` instead of building locally.
 
 ---
 

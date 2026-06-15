@@ -70,22 +70,54 @@ If you host Shonkor as a centralized SaaS application (e.g. in Kubernetes), your
 The MCP server determines the active project **from its working directory** – which is the directory where the client is running. There is **no** global "active project" that can be influenced externally (e.g. from the web dashboard). Override via the `SHONKOR_PROJECT` environment variable. Each tool additionally accepts an optional `projectName` argument for cross-project queries.
 
 ### Available Tools (token-efficient)
+
+All tools accept an optional `projectName` for cross-project queries. Symbol-oriented tools also accept `query` as an alias for `symbol`. Short `@/<relative>` handles emitted by the tools can be passed straight back as seeds/paths.
+
+**Find — where is it?**
 | Tool | Purpose | Note |
-|------|-------|---------|
-| `locate` | Pure "Where is X?" lookup → `name -> file:line` | Most minimal output, ideal as a first step |
-| `search_graph` | FTS5 search; one line per match (`Type  Name  file:line`) | `verbose: true` for full JSON including connections |
-| `get_subgraph` | N-hop traversal around seed nodes | Compact text (`NODES`/`EDGES`); `verbose: true` for JSON |
-| `generate_capsule` | Markdown capsule with Mermaid + Code | `maxChars` caps the capsule to a token budget |
-| `get_stats` | Node/Edge statistics of the DB | |
-| `record_decision` / `record_milestone` / `record_task` / `record_question` | Persists decisions, milestones, tasks, and open questions as nodes in the graph | Linkable with `connectedNodeIds` |
+|------|---------|------|
+| `locate` | Pure "Where is X?" → `name -> file:line` | Most minimal output, ideal first step |
+| `search_graph` | FTS5 keyword search; one line per match | `verbose: true` for full JSON |
+| `search_semantic` | Vector/meaning search ("where is auth handled?") | Needs the embedding backend (web server + Ollama); degrades gracefully otherwise |
 
-### Example Workflow: Impact Analysis
-> "Which types depend on `GraphNode`?"
+**Read — show me the code**
+| Tool | Purpose | Note |
+|------|---------|------|
+| `get_source` | The EXACT source body of a symbol + `file:start-end` | Reads types via line-range locally; `maxChars` caps large bodies |
+| `get_subgraph` | N-hop traversal around seed nodes | Compact `NODES`/`EDGES` text; `verbose: true` for JSON; `maxChars` budget |
+| `generate_capsule` | Markdown capsule with Mermaid + code | `maxChars` caps to a token budget |
 
-1. `locate` with `query: "GraphNode"` → returns the definition file and line.
-2. `get_subgraph` with the found node ID and `hops: 1` → lists all types that use `GraphNode` via `REFERENCES_TYPE` edges – across file and module boundaries.
+**Analyze — impact & relationships**
+| Tool | Purpose | Note |
+|------|---------|------|
+| `impact_of` | What references a symbol (incoming) — *"what breaks if I change it?"* | Grouped by relation, with AI summaries |
+| `depends_on` | What a symbol itself uses (outgoing) — its footprint | Inverse of `impact_of` |
+| `find_usages` | Call/reference sites **with a code snippet** at each (graph-aware grep) | `relation  name  file:line  ⟶ <usage line>` |
+| `find_path` | Shortest connection chain between two symbols | `A --REL--> B <--REL-- C`, real edge directions |
+| `verify_exists` | Fact-check a symbol exists **before** asserting it | `YES`/`NO` + nearest names — anti-hallucination |
 
-This is significantly more token-efficient and complete than repeatedly searching + reading files because the dependency edges are directly in the graph.
+**Edit loop**
+| Tool | Purpose | Note |
+|------|---------|------|
+| `reindex_file` | Re-index a single file after you edit it, so the graph matches the working tree | Local only (stdio CLI / dev relay); disabled in SaaS |
+
+**Session memory**
+| Tool | Purpose | Note |
+|------|---------|------|
+| `get_open_threads` | Resume context: list still-open recorded tasks/questions/decisions/milestones | Call at the start of a session |
+| `record_decision` / `record_milestone` / `record_task` / `record_question` | Persist these as nodes in the graph | Linkable with `connectedNodeIds` |
+| `get_stats` | Node/edge statistics of the DB | |
+
+### Example Workflow: the agentic edit loop
+> "Rename the `Bar` method on `Foo` and update every caller."
+
+1. `impact_of` (or `find_usages`) with `symbol: "Bar"` → every site that would break, with the usage line at each.
+2. `get_source` with `symbol: "Bar"` → the exact body to edit (`file:start-end`), no need to read the whole file.
+3. *Make the edits in the working tree.*
+4. `reindex_file` with `path: "@/src/.../Foo.cs"` → refresh just that file so the graph matches the edit.
+5. `verify_exists` / `find_usages` again → confirm the change landed and nothing dangles.
+
+This closes the loop — precise read, see the impact, edit, refresh, re-check — far more token-efficient and reliable than repeatedly searching and reading whole files, because the structure and dependency edges live in the graph.
 
 ---
 
