@@ -38,7 +38,7 @@ Shonkor can be operated both as a **local developer tool** and as a **multi-tena
 * **SQLite Storage**: Stores nodes/edges isolated per tenant (`shonkor.db`) and indexes code snippets via FTS5.
 * **Web API (ASP.NET Core)**: 
   * Serves the dashboard.
-  * `ApiKeyMiddleware`: Shields SaaS endpoints (constant-time key comparison, loopback bypass only in development) and automatically routes requests to the tenant DB.
+  * `ApiKeyMiddleware`: Shields SaaS endpoints (tokens stored SHA-256 hashed, constant-time comparison, loopback bypass only in development, `/health*` exempt) and automatically routes requests to the tenant DB.
   * `WebhookEndpoints`: Receives GitHub events (`install`, `push`, `pr`) and verifies their HMAC signature (fail-closed without a secret).
   * `GraphRagEndpoints`: Provides AIs with a direct interface for capsule generation.
 * **MCP Server (CLI)**: Provides AI editors like Claude Code or Antigravity with direct access to the local graph via `stdio`. The active project is derived from the working directory. The token-efficient toolset spans find (`locate`, `search_graph`, `search_semantic`), read (`get_source`, `get_subgraph`, `generate_capsule`), analyze (`impact_of`, `depends_on`, `find_usages`, `find_path`, `verify_exists`), and the edit loop (`reindex_file`). See the [LLM Integration Manual](../../user/llm_integration.md) for the full reference.

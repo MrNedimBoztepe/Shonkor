@@ -105,6 +105,8 @@ The crawler will now recursively analyze all supported files, extract the syntac
 ### Incremental Updates (SHA256)
 With each subsequent call to `shonkor index`, the system uses SHA256 content hashes to detect changed files. Only modified files are deleted and re-parsed – unchanged files are skipped. This saves valuable computing time in large codebases. Binary files are detected based on NUL bytes in the header and are skipped.
 
+Files are parsed in parallel, and stale/changed files are cleared in a **single batched transaction** (instead of one transaction per file), so the write path stays constant-cost regardless of how many files changed — fast even on a first index or a branch switch.
+
 ---
 
 ## 🖥️ Web Dashboard
@@ -142,6 +144,7 @@ Shonkor can manage multiple codebases in parallel. The registry is located in th
 
 Shonkor is primarily a **local** tool. For proxy/SaaS operation, please note:
 
+* **Tokens are stored hashed**: project API keys and user tokens are persisted as **SHA-256 hashes**, not plaintext. Comparison is constant-time, and any legacy plaintext in `projects.json` is migrated to a hash automatically on load. A newly created user's token is returned **once** — store it then; it cannot be recovered later.
 * **Never put secrets in files**: API keys and webhook secrets belong in user secrets or environment variables, not in `appsettings.json`/`projects.json`:
   ```text
   ApiKeys__sk-your-key=ProjectName
