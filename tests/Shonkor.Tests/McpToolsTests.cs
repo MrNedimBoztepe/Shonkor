@@ -36,11 +36,19 @@ public class McpToolsTests
                 new GraphNode { Id = "task::open", Name = "Implement caching", Type = "Task", Content = "todo", Properties = new() { ["status"] = "Todo" } },
                 new GraphNode { Id = "task::done", Name = "Old finished task", Type = "Task", Content = "done", Properties = new() { ["status"] = "Done" } },
                 new GraphNode { Id = "task::donespace", Name = "Trimmed done task", Type = "Task", Content = "done", Properties = new() { ["status"] = "Done " } },
-                new GraphNode { Id = "question::open", Name = "Why is X slow", Type = "Question", Content = "q", Properties = new() { ["status"] = "Open" } }
+                new GraphNode { Id = "question::open", Name = "Why is X slow", Type = "Question", Content = "q", Properties = new() { ["status"] = "Open" } },
+                // Tier-2 fixtures (unconnected to Widget/Gadget): an interface + impl, and a test referencing Widget.
+                new GraphNode { Id = Path.Combine(ws, "IThing.cs") + "::IThing", Name = "IThing", Type = "Interface", FilePath = Path.Combine(ws, "IThing.cs"), StartLine = 1, Content = "interface IThing" },
+                new GraphNode { Id = Path.Combine(ws, "Impl.cs") + "::Impl", Name = "Impl", Type = "Class", FilePath = Path.Combine(ws, "Impl.cs"), StartLine = 1, Content = "class Impl : IThing", Summary = "Implements IThing." },
+                new GraphNode { Id = Path.Combine(ws, "WidgetTests.cs") + "::WidgetTests", Name = "WidgetTests", Type = "Class", FilePath = Path.Combine(ws, "WidgetTests.cs"), StartLine = 7, Content = "class WidgetTests { Widget sut; }" }
             });
             await storage.UpsertEdgesAsync(new[]
             {
-                new GraphEdge { SourceId = gadgetId, TargetId = widgetId, Relationship = "REFERENCES_TYPE" }
+                new GraphEdge { SourceId = gadgetId, TargetId = widgetId, Relationship = "REFERENCES_TYPE" },
+                // IMPLEMENTS targets the base type by NAME (as the parser emits it).
+                new GraphEdge { SourceId = Path.Combine(ws, "Impl.cs") + "::Impl", TargetId = "IThing", Relationship = "IMPLEMENTS" },
+                // A test in a *Tests.cs file references Widget.
+                new GraphEdge { SourceId = Path.Combine(ws, "WidgetTests.cs") + "::WidgetTests", TargetId = widgetId, Relationship = "REFERENCES_TYPE" }
             });
         }
 
@@ -198,6 +206,33 @@ public class McpToolsTests
 
         var src = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("get_source", new { symbol = "Foo" })));
         Assert.Contains("Foo", src);
+    }
+
+    [Fact]
+    public async Task Tier2_ImplementationsOf_RelatedTests_EditPlan()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // implementations_of: Impl IMPLEMENTS IThing (the edge targets the base type by name).
+        var impls = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("implementations_of", new { symbol = "IThing" })));
+        Assert.Contains("Impl", impls);
+        Assert.Contains("IMPLEMENTS", impls);
+
+        // related_tests: WidgetTests (in *Tests.cs) references Widget; Gadget (non-test) is excluded.
+        var tests = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("related_tests", new { symbol = "Widget" })));
+        Assert.Contains("WidgetTests", tests);
+        Assert.DoesNotContain("Gadget", tests);
+
+        // edit_plan: the definition + every reference site as a checklist, with the verify footer.
+        var plan = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("edit_plan", new { symbol = "Widget" })));
+        Assert.Contains("Edit plan", plan);
+        Assert.Contains("[ ]", plan);
+        Assert.Contains("WidgetTests", plan);
+        Assert.Contains("reindex_file", plan);
     }
 
     [Fact]
