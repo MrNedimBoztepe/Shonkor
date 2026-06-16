@@ -81,4 +81,17 @@ public interface IGraphStore
     /// Retrieves a single node by its identifier, or <c>null</c> if it does not exist.
     /// </summary>
     Task<GraphNode?> GetNodeByIdAsync(string id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the node-id scheme version this graph was built under (see
+    /// <see cref="Services.CsharpNodeId.SchemeVersion"/>). A value below the current version means the graph
+    /// holds ids in an outdated format and a full re-index is recommended. Unstamped legacy graphs read 0.
+    /// </summary>
+    Task<int> GetNodeIdSchemeVersionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stamps the graph with the node-id scheme <paramref name="version"/>. Called after a full scan, once
+    /// the whole graph has been (re)built under that scheme.
+    /// </summary>
+    Task SetNodeIdSchemeVersionAsync(int version, CancellationToken cancellationToken = default);
 }

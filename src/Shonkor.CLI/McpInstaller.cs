@@ -36,16 +36,29 @@ public static class McpInstaller
 
             Console.WriteLine($"Registering MCP Server with path: {exePath}");
 
+            // MCP clients launch this server with their own working directory (not the project dir),
+            // so we pin the workspace at install time via an env var. Otherwise the server can't
+            // locate projects.json / the active project and effectively does nothing.
+            var env = ResolveEnvironment();
+            if (env.TryGetValue("SHONKOR_WORKSPACE", out var ws))
+            {
+                Console.WriteLine($"Pinning SHONKOR_WORKSPACE={ws}");
+            }
+            if (env.TryGetValue("SHONKOR_PROJECT", out var proj))
+            {
+                Console.WriteLine($"Pinning SHONKOR_PROJECT={proj}");
+            }
+
             var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
 
             // Antigravity
             var antigravityPath = Path.Combine(userProfile, ".gemini", "config", "mcp_config.json");
-            await UpdateConfigFileAsync(antigravityPath, "shonkor", exePath, args);
+            await UpdateConfigFileAsync(antigravityPath, "shonkor", exePath, args, env);
 
             // Claude Desktop
             var claudePath = Path.Combine(appData, "Claude", "claude_desktop_config.json");
-            await UpdateConfigFileAsync(claudePath, "shonkor", exePath, args);
+            await UpdateConfigFileAsync(claudePath, "shonkor", exePath, args, env);
 
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("MCP Server successfully registered in available clients!");
@@ -62,7 +75,59 @@ public static class McpInstaller
         }
     }
 
-    private static async Task UpdateConfigFileAsync(string configPath, string serverName, string command, string[] args)
+    private static System.Collections.Generic.Dictionary<string, string> ResolveEnvironment()
+    {
+        var env = new System.Collections.Generic.Dictionary<string, string>();
+
+        // Honor an explicit override, otherwise walk up from the install-time working directory
+        // looking for the workspace marker (projects.json / shonkor.json).
+        var workspace = Environment.GetEnvironmentVariable("SHONKOR_WORKSPACE");
+        if (string.IsNullOrWhiteSpace(workspace))
+        {
+            workspace = ResolveWorkspacePath();
+        }
+        if (!string.IsNullOrWhiteSpace(workspace))
+        {
+            env["SHONKOR_WORKSPACE"] = workspace;
+        }
+
+        // We deliberately do NOT pin SHONKOR_PROJECT. MCP clients like Claude Desktop have no
+        // per-chat working directory, so a hardcoded project would lock every session to one graph.
+        // With SHONKOR_PROJECT unset, the server follows the registry's ActiveProjectName, which the
+        // user can switch without re-installing. An explicit override is still honored if present.
+        var project = Environment.GetEnvironmentVariable("SHONKOR_PROJECT");
+        if (!string.IsNullOrWhiteSpace(project))
+        {
+            env["SHONKOR_PROJECT"] = project;
+        }
+
+        return env;
+    }
+
+    private static string ResolveWorkspacePath()
+    {
+        var dir = Directory.GetCurrentDirectory();
+        var current = dir;
+        while (!string.IsNullOrEmpty(current))
+        {
+            if (File.Exists(Path.Combine(current, "projects.json")) ||
+                File.Exists(Path.Combine(current, "shonkor.json")))
+            {
+                return current;
+            }
+
+            var parent = Directory.GetParent(current);
+            if (parent == null || parent.FullName == current)
+            {
+                break;
+            }
+            current = parent.FullName;
+        }
+
+        return dir;
+    }
+
+    private static async Task UpdateConfigFileAsync(string configPath, string serverName, string command, string[] args, System.Collections.Generic.IReadOnlyDictionary<string, string>? env = null)
     {
         if (!File.Exists(configPath))
         {
@@ -106,11 +171,23 @@ public static class McpInstaller
                 argsArray.Add(arg);
             }
 
-            mcpServers[serverName] = new JsonObject
+            var serverNode = new JsonObject
             {
                 ["command"] = command,
                 ["args"] = argsArray
             };
+
+            if (env != null && env.Count > 0)
+            {
+                var envObject = new JsonObject();
+                foreach (var kvp in env)
+                {
+                    envObject[kvp.Key] = kvp.Value;
+                }
+                serverNode["env"] = envObject;
+            }
+
+            mcpServers[serverName] = serverNode;
 
             await File.WriteAllTextAsync(configPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
             Console.WriteLine($"Updated {configPath}");

@@ -107,6 +107,8 @@ With each subsequent call to `shonkor index`, the system uses SHA256 content has
 
 Files are parsed in parallel, and stale/changed files are cleared in a **single batched transaction** (instead of one transaction per file), so the write path stays constant-cost regardless of how many files changed — fast even on a first index or a branch switch.
 
+Each graph also records the **node-id scheme version** it was built under (SQLite `PRAGMA user_version`). When a Shonkor upgrade changes the id format (e.g. arity-discriminated method ids), the file content is unchanged — so the next `shonkor index` **force-reparses** every file to migrate the ids, then re-stamps the version. `get_stats` (and the MCP `get_stats` tool) report `SchemeVersion`/`CurrentSchemeVersion` and a `ReindexRecommended` hint if a graph is still on an older scheme.
+
 ### Exact C# resolution (opt-in)
 By default, C# type references are resolved by **name** (fast, but two same-named types in different namespaces are indistinguishable). Enable **semantic resolution** to resolve them **exactly** via a Roslyn `SemanticModel` — disambiguating namespaces, and additionally producing method-level `CALLS` edges:
 

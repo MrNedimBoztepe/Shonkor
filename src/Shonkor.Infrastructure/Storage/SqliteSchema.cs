@@ -116,6 +116,14 @@ internal static class SqliteSchema
             await ExecuteAsync(connection, "INSERT INTO NodesFts(NodesFts) VALUES('rebuild');", cancellationToken).ConfigureAwait(false);
         }
 
+        // Stamp a brand-new (empty) graph with the current node-id scheme version, so it isn't later
+        // mistaken for a stale legacy graph (which reads user_version 0). A non-empty database keeps its
+        // existing version — if that is below the current scheme, the mismatch is the re-index signal.
+        if (nodeCount == 0)
+        {
+            await ExecuteAsync(connection, $"PRAGMA user_version = {Core.Services.CsharpNodeId.SchemeVersion};", cancellationToken).ConfigureAwait(false);
+        }
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 

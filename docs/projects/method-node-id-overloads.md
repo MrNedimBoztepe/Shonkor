@@ -26,7 +26,7 @@ Rationale: arity is the only discriminator both the syntactic parser and the sem
 - The discriminator is **internal** to the id. User-facing resolution stays **name-based**: `ResolveDefinitionAsync` resolves `get_source("Foo")` by name (search), so the tools are unaffected by the id format; addressing a *specific* overload is still by `file:line` (or first-match, as today).
 
 ## Migration impact
-- **Existing graphs:** all method/constructor ids change → a **full re-index regenerates them** (ids are deterministic; no data-migration script needed). Bump an index/schema version and surface a "re-index recommended" signal on mismatch so stale method nodes/edges (old scheme) don't silently coexist.
+- **Existing graphs:** all method/constructor ids change → a **full re-index regenerates them** (ids are deterministic; no data-migration script needed). ✅ Implemented: the persisted `PRAGMA user_version` (= `CsharpNodeId.SchemeVersion`) lets a scan detect the old scheme and **force-reparse** (since unchanged content would otherwise be hash-skipped), and `get_stats` surfaces a "re-index recommended" signal so stale method nodes/edges don't silently coexist.
 - **Handles (`@/…`):** method ids appear as handles in tool output. Handles are ephemeral (per session), so impact is low; a stale handle simply won't resolve.
 - **`reindex_file`:** recreates the file's method nodes under the new scheme; cross-file `CALLS` ids must stay consistent — **couples to the drift-remediation project** (the relink uses the new scheme).
 - **Backward-compatible UX:** because tool resolution is name-based, the AI-facing behaviour is unchanged; only edge precision improves. Low user-facing risk.
@@ -35,7 +35,7 @@ Rationale: arity is the only discriminator both the syntactic parser and the sem
 1. ✅ `CsharpNodeId.ForMethod(filePath, type, method, arity)` → `…::{method}#{arity}` (single source of truth used by parser **and** `RoslynSemantics.ToNodeId`); `ForMember` retained for non-overloadable members (properties).
 2. ✅ `RoslynAstParser`: passes `node.ParameterList.Parameters.Count` for methods and constructors.
 3. ✅ `RoslynSemantics.ToNodeId`: appends `methodSymbol.Parameters.Length` for methods/constructors.
-4. ⏳ Index/schema version bump + a freshness signal recommending a full re-index on mismatch (ties into drift Layer 0) — **deferred to the drift-remediation project** (it owns the freshness/version signal).
+4. ✅ Scheme-version marker + freshness signal: `CsharpNodeId.SchemeVersion` (now `2`) is persisted per graph via SQLite `PRAGMA user_version`. A full scan **force-reparses** every file when the stored version is older (a scheme change doesn't alter file content, so the hash check would otherwise skip them) and re-stamps the version on completion. `get_stats` exposes `SchemeVersion`/`CurrentSchemeVersion` and a `ReindexRecommended` hint when a non-empty graph is stale.
 5. ✅ Tests: different-arity overloads get **distinct** nodes and `CALLS` to the **correct** one (`DifferentArityOverloads_GetDistinctNodes_AndCallsResolveToTheRightOne`); same-arity collision asserted as the known v1 limit (`SameArityOverloads_Collide_DocumentedV1Limit`, `ToNodeId_SameArityOverloads_Collide_KnownLimitation`).
 6. ✅ Docs: scheme + same-arity caveat documented here and in `CsharpNodeId` XML doc; Phase 2 (semantic node-extraction) recorded as the follow-up.
 
