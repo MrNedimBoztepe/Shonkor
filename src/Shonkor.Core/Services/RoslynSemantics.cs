@@ -1,0 +1,70 @@
+// Licensed to Shonkor under the MIT License.
+
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+
+namespace Shonkor.Core.Services;
+
+/// <summary>
+/// Semantic-core foundation (spike): builds a <see cref="CSharpCompilation"/> over a set of source files
+/// and maps a resolved Roslyn <see cref="ISymbol"/> back to a Shonkor graph node id. The future
+/// <c>SemanticCsharpLinker</c> uses these primitives to emit exact <c>REFERENCES_TYPE</c>/<c>IMPLEMENTS</c>/
+/// <c>EXTENDS</c>/<c>CALLS</c> edges (to node ids, not names). See docs/projects/semantic-csharp-core.md.
+/// </summary>
+public static class RoslynSemantics
+{
+    /// <summary>
+    /// Builds a compilation over the given <c>(path, code)</c> files using the host's reference assemblies
+    /// (R1: the trusted-platform-assemblies list — no build, no NuGet restore). Intra-codebase symbols
+    /// resolve because their sources are in the syntax trees; symbols in un-referenced third-party
+    /// assemblies stay unresolved (and have no node anyway). The <c>path</c> sets each tree's FilePath,
+    /// which <see cref="ToNodeId"/> relies on.
+    /// </summary>
+    public static CSharpCompilation BuildCompilation(IEnumerable<(string Path, string Code)> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+
+        var trees = files.Select(f => CSharpSyntaxTree.ParseText(f.Code, path: f.Path));
+        return CSharpCompilation.Create(
+            "ShonkorSemantic",
+            trees,
+            ReferenceAssemblies(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+    }
+
+    /// <summary>The host's reference assemblies (TPA list), used as compilation references without a build.</summary>
+    public static IReadOnlyList<MetadataReference> ReferenceAssemblies()
+    {
+        var tpa = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty;
+        return tpa
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(File.Exists)
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Maps a resolved symbol to its Shonkor node id (matching <see cref="CsharpNodeId"/>), or <c>null</c>
+    /// when the symbol is external (declared only in metadata, e.g. <c>System.String</c>) and therefore
+    /// has no node. Uses the symbol's first declaring syntax reference for the file path.
+    /// </summary>
+    public static string? ToNodeId(ISymbol? symbol)
+    {
+        if (symbol is null) return null;
+
+        var file = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree.FilePath;
+        if (string.IsNullOrEmpty(file)) return null; // external / metadata-only symbol
+
+        return symbol switch
+        {
+            INamedTypeSymbol type => CsharpNodeId.ForType(file, type.Name),
+            IMethodSymbol { MethodKind: MethodKind.Constructor } ctor when ctor.ContainingType is not null
+                => CsharpNodeId.ForMember(file, ctor.ContainingType.Name, "Constructor"),
+            IMethodSymbol method when method.ContainingType is not null
+                => CsharpNodeId.ForMember(file, method.ContainingType.Name, method.Name),
+            IPropertySymbol prop when prop.ContainingType is not null
+                => CsharpNodeId.ForMember(file, prop.ContainingType.Name, prop.Name),
+            _ => null
+        };
+    }
+}
