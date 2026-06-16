@@ -9,9 +9,12 @@ namespace Shonkor.Core.Services;
 /// <remarks>
 /// The scheme is name-based and namespace-free: a type is <c>{filePath}::{TypeName}</c>, a member is
 /// <c>{filePath}::{TypeName}::{MemberName}</c>. Methods and constructors append <c>#{arity}</c> (the
-/// parameter count) — the only discriminator the syntactic parser and the semantic linker can produce
-/// identically — so different-arity overloads get distinct ids. Same-arity overloads (e.g.
-/// <c>Foo(int)</c> vs <c>Foo(string)</c>) still collide; see docs/projects/method-node-id-overloads.md.
+/// parameter count) so different-arity overloads get distinct ids; when a same-arity overload sibling
+/// exists they additionally append <c>@{declarationSpanStart}</c> — the source offset of the declaration,
+/// which the syntactic parser and the semantic linker compute identically from the same source text — so
+/// same-arity overloads (e.g. <c>Foo(int)</c> vs <c>Foo(string)</c>) also get distinct ids. The only
+/// residual ambiguity is same-name/same-arity overloads of a <b>partial</b> type split across files (the
+/// parser sees one part, the symbol sees all). See docs/projects/method-node-id-overloads.md.
 /// </remarks>
 public static class CsharpNodeId
 {
@@ -21,9 +24,10 @@ public static class CsharpNodeId
     /// scheme change (e.g. adding <c>#{arity}</c>) does NOT change file content, the incremental hash check
     /// would otherwise skip every file and leave old-scheme ids in place. <b>Bump this whenever the id
     /// format changes.</b> History: v1 = name-only members (overloads collided); v2 = arity-discriminated
-    /// methods/constructors. Unstamped legacy graphs read as 0 (&lt; current → stale).
+    /// methods/constructors; v3 = same-arity overloads further disambiguated by declaration span.
+    /// Unstamped legacy graphs read as 0 (&lt; current → stale).
     /// </summary>
-    public const int SchemeVersion = 2;
+    public const int SchemeVersion = 3;
 
     /// <summary>Node id for a type declaration in <paramref name="filePath"/>.</summary>
     public static string ForType(string filePath, string typeName) => $"{filePath}::{typeName}";
@@ -34,9 +38,14 @@ public static class CsharpNodeId
 
     /// <summary>
     /// Node id for a method or constructor, discriminated by parameter count so different-arity overloads
-    /// don't collide: <c>{filePath}::{TypeName}::{MethodName}#{arity}</c>. Method names never contain
-    /// <c>#</c>, so the suffix is unambiguous.
+    /// don't collide: <c>{filePath}::{TypeName}::{MethodName}#{arity}</c>. When a same-arity overload
+    /// sibling exists, pass <paramref name="overloadSpanStart"/> (the declaration's source offset) to
+    /// further disambiguate: <c>…#{arity}@{spanStart}</c>. Both the syntactic parser and the semantic
+    /// linker derive the same span from the same source text, so the ids match. Method names never contain
+    /// <c>#</c> or <c>@</c>, so the suffixes are unambiguous.
     /// </summary>
-    public static string ForMethod(string filePath, string typeName, string methodName, int arity) =>
-        $"{filePath}::{typeName}::{methodName}#{arity}";
+    public static string ForMethod(string filePath, string typeName, string methodName, int arity, int? overloadSpanStart = null) =>
+        overloadSpanStart is int span
+            ? $"{filePath}::{typeName}::{methodName}#{arity}@{span}"
+            : $"{filePath}::{typeName}::{methodName}#{arity}";
 }
