@@ -107,6 +107,14 @@ With each subsequent call to `shonkor index`, the system uses SHA256 content has
 
 Files are parsed in parallel, and stale/changed files are cleared in a **single batched transaction** (instead of one transaction per file), so the write path stays constant-cost regardless of how many files changed — fast even on a first index or a branch switch.
 
+### Exact C# resolution (opt-in)
+By default, C# type references are resolved by **name** (fast, but two same-named types in different namespaces are indistinguishable). Enable **semantic resolution** to resolve them **exactly** via a Roslyn `SemanticModel` — disambiguating namespaces, and additionally producing method-level `CALLS` edges:
+
+* **Web / SaaS:** set `Indexing:SemanticCSharp=true` (e.g. `Indexing__SemanticCSharp=true` as an env var).
+* **CLI:** `SHONKOR_SEMANTIC_CSHARP=true shonkor index .`
+
+It's more accurate (this is what makes impact analysis precise for C#) but heavier — it builds a compilation per scan — so it's off by default. It needs no project build: intra-codebase symbols resolve from the source itself.
+
 ---
 
 ## 🖥️ Web Dashboard

@@ -11,7 +11,7 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 ## 🌟 Features
 
 * **Multi-Language AST Parsing**:
-  * **C# (.cs)**: Full Roslyn integration for extracting namespaces, classes, interfaces, records, structs, enums, properties, constructors, and methods – including inheritance (`IMPLEMENTS`/`EXTENDS`) and **type reference edges** (`REFERENCES_TYPE`) for true impact analysis.
+  * **C# (.cs)**: Full Roslyn integration for extracting namespaces, classes, interfaces, records, structs, enums, properties, constructors, and methods – including inheritance (`IMPLEMENTS`/`EXTENDS`) and **type reference edges** (`REFERENCES_TYPE`) for true impact analysis. Opt-in **semantic resolution** (`Indexing:SemanticCSharp` / `SHONKOR_SEMANTIC_CSHARP=true`) uses a Roslyn `SemanticModel` to resolve references **exactly** (disambiguating same-named types across namespaces) and adds method-level `CALLS` edges.
   * **JavaScript/TypeScript (.js, .jsx, .ts, .tsx)**: Extraction of ES imports, React components, and backend APIs.
   * **PHP (.php, .tpl)**: Regex-based module parser for OXID eShop with module extends and Smarty template blocks.
   * **Sitecore SCS (.yml, .yaml)**: Template and layout dependencies (Unicorn/SCS).

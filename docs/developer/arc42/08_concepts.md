@@ -77,6 +77,9 @@ Pure syntax trees provide containment (`CONTAINS`) and inheritance (`IMPLEMENTS`
 
 Analogously, cross-technology edges (`BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMPLATE`) and Helix module affiliations (`BELONGS_TO_MODULE`) are resolved. This pattern requires no additional storage API – it reads node properties and writes resolved edges back.
 
+### Exact resolution for C# (opt-in)
+The name-matching above is a heuristic: two same-named types in different namespaces are indistinguishable, so a name match links to *every* one. With **`Indexing:SemanticCSharp`** enabled (CLI: `SHONKOR_SEMANTIC_CSHARP=true`; default off), a **`SemanticCsharpLinker`** instead builds a Roslyn `CSharpCompilation` and resolves these references **exactly** via the `SemanticModel`, mapping each resolved symbol to its declaring node id (`CsharpNodeId`/`RoslynSemantics`): it disambiguates same-named types across namespaces, emits symbol-resolved `IMPLEMENTS`/`EXTENDS`/`REFERENCES_TYPE`, and additionally produces `CALLS` (method → method) edges. When active, the name-matching for C# is skipped (the cross-tech parts still run). This is what makes the "Precision" claim true for C#; it's heavier (a compilation per scan), so it stays opt-in. Metadata references use the runtime ref-assembly set (no project build), which fully resolves intra-codebase symbols — references *into* un-referenced third-party types are simply skipped (they have no node anyway).
+
 ---
 
 ## 8.4 Concurrency & Connection Management
