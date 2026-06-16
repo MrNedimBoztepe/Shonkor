@@ -1,6 +1,6 @@
 # Project: Graph drift remediation (incremental relink + freshness)
 
-**Status:** Planned · **Owner:** TBD · **Tracked in Shonkor (Brain graph):** see `get_open_threads`
+**Status:** P1 done — Layer 0 (freshness signals) + Layer 1 (scoped outgoing relink). P2–P3 planned. · **Tracked in Shonkor (Brain graph):** see `get_open_threads`
 
 ## Problem
 Cross-graph edges (`REFERENCES_TYPE`, `BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMPLATE`, `BELONGS_TO_MODULE`, future `CALLS`) are **not** produced by the parser but by a **whole-graph post-scan linker** (`CrossTechLinker`) that resolves each node's stored `referencedTypes` property against the definition nodes. **`reindex_file` skips this linker.** Hence drift in three forms:
@@ -17,9 +17,9 @@ Cross-graph edges (`REFERENCES_TYPE`, `BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMP
 
 ## Solution — layered
 
-**Layer 0 — Freshness as a first-class signal (cheapest, highest immediate value).** New `is_fresh(path)` + a drift report (`stale_files`) using the existing `ContentHash` (on-disk vs stored, plus on-disk-not-in-graph / in-graph-but-deleted). Annotate tool outputs when a resolved symbol lives in a stale file: "(graph may be stale for this file — reindex_file)". Makes drift **visible instead of silent**.
+**Layer 0 — Freshness as a first-class signal (cheapest, highest immediate value). ✅ DONE.** `GraphIndexScanner.CheckFreshnessAsync(path)` → `Fresh`/`Stale`/`Untracked`/`Deleted` and `DetectDriftAsync(dir)` → `DriftReport(Changed, New, Deleted)`, both using the existing `ContentHash` (on-disk vs stored). Surfaced as the MCP tools **`is_fresh`** and **`stale_files`**. Makes drift **visible instead of silent**. (Follow-up: auto-annotate every read tool's output when the resolved symbol lives in a stale file — currently the two explicit tools cover it.)
 
-**Layer 1 — make `reindex_file` relink-complete (core fix).** After re-parsing A, run a **scoped relink** that recomputes A's outgoing cross-graph edges. Refactor `CrossTechLinker` to operate on a node subset (A's nodes as the source) while resolving against all definitions. Keep it cheap with a targeted storage query `GetDefinitionsByNamesAsync(names)` (resolve only the names A references) instead of `GetAllNodesAsync`. Fixes drift forms 1 & 2.
+**Layer 1 — make `reindex_file` relink-complete (core fix). ✅ DONE (name-mode).** After re-parsing A, `CrossTechLinker.RelinkFileReferenceTypesAsync` recomputes **A's outgoing `REFERENCES_TYPE` edges** against all definitions, using the targeted `GetDefinitionsByNamesAsync(names)` (resolve only the names A references) + `GetNodesByFilePathAsync(A)` instead of `GetAllNodesAsync`. Wired into `ScanFileAsync`. Fixes drift forms 1 & 2 for the default (name-based) resolution. **Open:** semantic mode (`Indexing:SemanticCSharp`) still relinks `REFERENCES_TYPE`/`CALLS` only on a full scan — incremental semantic relink (reuse the compilation, swap one tree) is a later layer; and the other cross-tech edges (`BINDS_TO`/`CONTROLLER_OF`/`QUERIES_TEMPLATE`/`BELONGS_TO_MODULE`) still refresh on a full scan.
 
 **Layer 2 — incremental incoming-edge maintenance via a reverse index.** Maintain `typeName -> {referencing nodes/files}` as a small dedicated table (populated during indexing from `referencedTypes`; the JSON `Metadata` column isn't efficiently queryable). When A's symbol set changes, enqueue **only the files that actually reference it** for a scoped relink — bounding work to the referencers, not the repo. Fixes drift form 3 (incl. removing dangling edges).
 
@@ -28,7 +28,7 @@ Cross-graph edges (`REFERENCES_TYPE`, `BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMP
 **Layer 4 — git-aware bulk reconciliation.** On branch switch/pull, use `git diff --name-only <old> <new>` (or the webhook push payload) to re-index only the changed files + scoped relink of their referencers, instead of a full rescan. The webhook already does incremental indexing; extend it with the scoped relink.
 
 ## Phasing
-- **P1 (highest ROI, low risk):** Layer 0 (freshness + annotation) + Layer 1 (scoped outgoing relink, `GetDefinitionsByNamesAsync`). Fixes the observed case; makes residual drift non-silent.
+- **P1 (highest ROI, low risk): ✅ DONE.** Layer 0 (freshness tools `is_fresh`/`stale_files`) + Layer 1 (scoped outgoing `REFERENCES_TYPE` relink via `GetDefinitionsByNamesAsync`/`GetNodesByFilePathAsync`, wired into `ScanFileAsync`). Fixes the observed case; makes residual drift non-silent.
 - **P2:** reverse index + Layer 2 (incoming maintenance, rename/remove).
 - **P3:** background reconciliation + FileSystemWatcher / git-diff (Layers 3+4).
 

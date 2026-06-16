@@ -400,6 +400,119 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task ReindexFile_RelinksOutgoingReferenceTypeEdges()
+    {
+        // Drift Layer 1: after editing a file, reindex_file must recompute that file's outgoing
+        // REFERENCES_TYPE edges (otherwise impact/depends_on go stale until the next full scan).
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_relink_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var userFile = Path.Combine(dir, "User.cs");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "Widget.cs"), "namespace N { public class Widget { } }");
+            await File.WriteAllTextAsync(Path.Combine(dir, "Gadget.cs"), "namespace N { public class Gadget { } }");
+            await File.WriteAllTextAsync(userFile, "namespace N { public class User { public Widget W; } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            var userId = Path.GetFullPath(userFile) + "::User";
+            var widgetId = Path.GetFullPath(Path.Combine(dir, "Widget.cs")) + "::Widget";
+            var gadgetId = Path.GetFullPath(Path.Combine(dir, "Gadget.cs")) + "::Gadget";
+
+            // Baseline: the full scan linked User -> Widget.
+            var (e0, _) = await storage.GetIncidentEdgesAsync(widgetId);
+            Assert.Contains(e0, e => e.SourceId == userId && e.Relationship == "REFERENCES_TYPE");
+
+            // Edit User to reference Gadget instead, then reindex ONLY that file.
+            await File.WriteAllTextAsync(userFile, "namespace N { public class User { public Gadget G; } }");
+            await scanner.ScanFileAsync(userFile);
+
+            // The scoped relink recreated the outgoing edge to the NEW target...
+            var (eg, _) = await storage.GetIncidentEdgesAsync(gadgetId);
+            Assert.Contains(eg, e => e.SourceId == userId && e.Relationship == "REFERENCES_TYPE");
+            // ...and the stale edge to Widget is gone.
+            var (ew, _) = await storage.GetIncidentEdgesAsync(widgetId);
+            Assert.DoesNotContain(ew, e => e.SourceId == userId);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DetectDrift_ReportsChangedNewAndDeleted()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_drift_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var changedFile = Path.Combine(dir, "Changed.cs");
+        var oldFile = Path.Combine(dir, "Old.cs");
+        var newFile = Path.Combine(dir, "New.cs");
+        try
+        {
+            await File.WriteAllTextAsync(changedFile, "namespace N { public class Changed { } }");
+            await File.WriteAllTextAsync(oldFile, "namespace N { public class Old { } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            // Mutate the working tree: edit one, add one, delete one.
+            await File.WriteAllTextAsync(changedFile, "namespace N { public class Changed { public int X; } }");
+            await File.WriteAllTextAsync(newFile, "namespace N { public class New { } }");
+            File.Delete(oldFile);
+
+            var drift = await scanner.DetectDriftAsync(dir, Array.Empty<string>());
+
+            Assert.False(drift.IsClean);
+            Assert.Contains(Path.GetFullPath(changedFile), drift.Changed);
+            Assert.Contains(Path.GetFullPath(newFile), drift.New);
+            Assert.Contains(Path.GetFullPath(oldFile), drift.Deleted);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CheckFreshness_DetectsFreshStaleUntrackedDeleted()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_fresh_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var file = Path.Combine(dir, "F.cs");
+        var untracked = Path.Combine(dir, "U.cs");
+        try
+        {
+            await File.WriteAllTextAsync(file, "namespace N { public class F { } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            Assert.Equal(GraphIndexScanner.FreshnessState.Fresh, await scanner.CheckFreshnessAsync(file));
+
+            await File.WriteAllTextAsync(file, "namespace N { public class F { public int X; } }");
+            Assert.Equal(GraphIndexScanner.FreshnessState.Stale, await scanner.CheckFreshnessAsync(file));
+
+            await File.WriteAllTextAsync(untracked, "namespace N { public class U { } }");
+            Assert.Equal(GraphIndexScanner.FreshnessState.Untracked, await scanner.CheckFreshnessAsync(untracked));
+
+            File.Delete(file);
+            Assert.Equal(GraphIndexScanner.FreshnessState.Deleted, await scanner.CheckFreshnessAsync(file));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Scanner_StampsCurrentSchemeVersion_AfterScan()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"shonkor_schemev_{Guid.NewGuid():N}");

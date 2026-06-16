@@ -870,6 +870,74 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<GraphNode>> GetNodesByFilePathAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Nodes WHERE FilePath = @path;";
+        command.Parameters.AddWithValue("@path", filePath);
+
+        var nodes = new List<GraphNode>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            nodes.Add(SqliteRowMapper.ReadNode(reader));
+        }
+        return nodes;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, IReadOnlyList<GraphNode>>> GetDefinitionsByNamesAsync(IEnumerable<string> names, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+
+        var nameList = names.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.Ordinal).ToList();
+        var result = new Dictionary<string, List<GraphNode>>(StringComparer.Ordinal);
+        if (nameList.Count == 0)
+        {
+            return result.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<GraphNode>)kv.Value, StringComparer.Ordinal);
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        // Chunk to stay under SQLite's bound-parameter limit (definition types + names share the clause).
+        const int chunkSize = 400;
+        for (var offset = 0; offset < nameList.Count; offset += chunkSize)
+        {
+            var chunk = nameList.Skip(offset).Take(chunkSize).ToList();
+
+            await using var command = connection.CreateCommand();
+            var paramNames = new List<string>(chunk.Count);
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                var p = $"@n{i}";
+                paramNames.Add(p);
+                command.Parameters.AddWithValue(p, chunk[i]);
+            }
+
+            command.CommandText =
+                $"SELECT * FROM Nodes WHERE Type IN ('Class','Interface','Record','Struct','Enum') " +
+                $"AND Name IN ({string.Join(", ", paramNames)});";
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var node = SqliteRowMapper.ReadNode(reader);
+                if (!result.TryGetValue(node.Name, out var list))
+                {
+                    list = new List<GraphNode>();
+                    result[node.Name] = list;
+                }
+                list.Add(node);
+            }
+        }
+
+        return result.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<GraphNode>)kv.Value, StringComparer.Ordinal);
+    }
+
+    /// <inheritdoc />
     public async Task<GraphNode?> GetNodeByIdAsync(string id, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);

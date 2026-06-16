@@ -79,30 +79,11 @@ public sealed class GraphIndexScanner
         var nodesCreated = 0;
         var edgesCreated = 0;
 
-        var matcher = new Matcher();
-        matcher.AddInclude("**/*"); // Include everything by default
-        foreach (var excludePattern in excludePatterns)
-        {
-            matcher.AddExclude(excludePattern);
-        }
-
-        var dirInfo = new DirectoryInfoWrapper(new DirectoryInfo(directoryPath));
-        var matchingResult = matcher.Execute(dirInfo);
-
         // Pre-compute parser mappings for fast lookup
         var parserMap = BuildParserMap();
 
-        // 1. Gather all files supported by our parsers
-        var candidateFiles = new List<string>();
-        foreach (var fileMatch in matchingResult.Files)
-        {
-            var filePath = Path.GetFullPath(Path.Combine(directoryPath, fileMatch.Path));
-            var extension = Path.GetExtension(filePath);
-            if (parserMap.ContainsKey(extension))
-            {
-                candidateFiles.Add(filePath);
-            }
-        }
+        // 1. Gather all files supported by our parsers (respecting the exclude globs).
+        var candidateFiles = EnumerateCandidateFiles(directoryPath, excludePatterns, parserMap);
 
         // 2. Pre-fetch existing file content hashes directly (no full-content / subgraph load).
         var existingHashes = await _storage.GetContentHashesAsync(candidateFiles, cancellationToken).ConfigureAwait(false);
@@ -250,6 +231,146 @@ public sealed class GraphIndexScanner
         return new IndexResult(filesScanned, nodesCreated, edgesCreated, stopwatch.Elapsed);
     }
 
+    /// <summary>
+    /// Enumerates the files under <paramref name="directoryPath"/> that match the parser extensions and are
+    /// not excluded by <paramref name="excludePatterns"/>. Shared by the full scan and drift detection so both
+    /// see the exact same candidate set.
+    /// </summary>
+    private static List<string> EnumerateCandidateFiles(
+        string directoryPath,
+        IReadOnlyList<string> excludePatterns,
+        Dictionary<string, List<IFileParser>> parserMap)
+    {
+        var matcher = new Matcher();
+        matcher.AddInclude("**/*");
+        foreach (var excludePattern in excludePatterns)
+        {
+            matcher.AddExclude(excludePattern);
+        }
+
+        var dirInfo = new DirectoryInfoWrapper(new DirectoryInfo(directoryPath));
+        var matchingResult = matcher.Execute(dirInfo);
+
+        var candidateFiles = new List<string>();
+        foreach (var fileMatch in matchingResult.Files)
+        {
+            var filePath = Path.GetFullPath(Path.Combine(directoryPath, fileMatch.Path));
+            if (parserMap.ContainsKey(Path.GetExtension(filePath)))
+            {
+                candidateFiles.Add(filePath);
+            }
+        }
+        return candidateFiles;
+    }
+
+    /// <summary>The freshness of a single file relative to the graph.</summary>
+    public enum FreshnessState
+    {
+        /// <summary>On disk and in the graph with a matching content hash — the graph reflects the file.</summary>
+        Fresh,
+        /// <summary>On disk and in the graph but the content hash differs — the file was edited since indexing.</summary>
+        Stale,
+        /// <summary>On disk (and parseable) but not in the graph — never indexed.</summary>
+        Untracked,
+        /// <summary>In the graph but no longer on disk — deleted since indexing.</summary>
+        Deleted
+    }
+
+    /// <summary>
+    /// A drift report for a directory: files whose on-disk content diverges from the graph. <see cref="Changed"/>
+    /// = indexed but content hash now differs; <see cref="New"/> = on disk (parseable) but not indexed;
+    /// <see cref="Deleted"/> = indexed but missing on disk. Empty lists mean the graph matches the working tree.
+    /// </summary>
+    public record DriftReport(IReadOnlyList<string> Changed, IReadOnlyList<string> New, IReadOnlyList<string> Deleted)
+    {
+        public bool IsClean => Changed.Count == 0 && New.Count == 0 && Deleted.Count == 0;
+    }
+
+    /// <summary>
+    /// Compares the on-disk working tree under <paramref name="directoryPath"/> against the graph and reports
+    /// drift, WITHOUT modifying the graph. Uses the same SHA256 content hashes as the incremental scan.
+    /// </summary>
+    public async Task<DriftReport> DetectDriftAsync(
+        string directoryPath,
+        IReadOnlyList<string> excludePatterns,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directoryPath);
+        ArgumentNullException.ThrowIfNull(excludePatterns);
+
+        var parserMap = BuildParserMap();
+        var candidateFiles = EnumerateCandidateFiles(directoryPath, excludePatterns, parserMap);
+        var candidateSet = new HashSet<string>(candidateFiles, StringComparer.OrdinalIgnoreCase);
+
+        var storedHashes = await _storage.GetContentHashesAsync(candidateFiles, cancellationToken).ConfigureAwait(false);
+
+        var changed = new List<string>();
+        var added = new List<string>();
+        foreach (var filePath in candidateFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!storedHashes.TryGetValue(filePath, out var storedHash))
+            {
+                added.Add(filePath);
+                continue;
+            }
+
+            // Don't read very large or binary files for hashing — they're skipped by the scanner too.
+            try
+            {
+                var info = new FileInfo(filePath);
+                if (info.Length > 5 * 1024 * 1024 || await IsLikelyBinaryAsync(filePath, cancellationToken).ConfigureAwait(false))
+                {
+                    continue;
+                }
+                var content = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
+                if (ComputeSha256Hash(content) != storedHash)
+                {
+                    changed.Add(filePath);
+                }
+            }
+            catch (IOException)
+            {
+                // Unreadable right now — don't report as drift; a later scan will reconcile.
+            }
+        }
+
+        // Indexed files under this directory that no longer match a candidate (deleted or now excluded).
+        var deleted = new List<string>();
+        var indexedFiles = await _storage.GetAllIndexedFilePathsAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var indexedFile in indexedFiles)
+        {
+            if (indexedFile.StartsWith(directoryPath, StringComparison.OrdinalIgnoreCase)
+                && !candidateSet.Contains(indexedFile))
+            {
+                deleted.Add(indexedFile);
+            }
+        }
+
+        return new DriftReport(changed, added, deleted);
+    }
+
+    /// <summary>
+    /// Reports whether a single file's graph representation is in sync with its on-disk content
+    /// (see <see cref="FreshnessState"/>), without modifying the graph.
+    /// </summary>
+    public async Task<FreshnessState> CheckFreshnessAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        var fullPath = Path.GetFullPath(filePath);
+
+        var storedHashes = await _storage.GetContentHashesAsync(new[] { fullPath }, cancellationToken).ConfigureAwait(false);
+        var inGraph = storedHashes.TryGetValue(fullPath, out var storedHash);
+        var onDisk = File.Exists(fullPath);
+
+        if (inGraph && !onDisk) return FreshnessState.Deleted;
+        if (!inGraph && onDisk) return FreshnessState.Untracked;
+        if (!inGraph) return FreshnessState.Untracked; // neither on disk nor in graph → treat as untracked
+
+        var content = await File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        return ComputeSha256Hash(content) == storedHash ? FreshnessState.Fresh : FreshnessState.Stale;
+    }
+
     /// <summary>Maps each supported file extension to the parsers that handle it.</summary>
     private Dictionary<string, List<IFileParser>> BuildParserMap()
     {
@@ -338,6 +459,16 @@ public sealed class GraphIndexScanner
         if (edges.Count > 0)
         {
             await _storage.UpsertEdgesAsync(edges, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Scoped relink: ClearFileForReindexAsync dropped this file's outgoing cross-file edges, and the
+        // per-file parse doesn't produce REFERENCES_TYPE (a whole-graph post-pass does). Recompute just this
+        // file's outgoing REFERENCES_TYPE edges so impact/dependency analysis stays correct across the edit,
+        // without a full rescan. Skipped in semantic mode — there the SemanticCsharpLinker owns exact
+        // resolution via a compilation (a whole-graph concern; incremental semantic relink is a later layer).
+        if (!_semanticCsharp)
+        {
+            await CrossTechLinker.RelinkFileReferenceTypesAsync(_storage, fullPath, cancellationToken).ConfigureAwait(false);
         }
 
         stopwatch.Stop();

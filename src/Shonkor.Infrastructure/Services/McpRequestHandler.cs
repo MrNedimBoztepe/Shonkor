@@ -544,7 +544,7 @@ public sealed class McpRequestHandler
                         new
                         {
                             name = "reindex_file",
-                            description = "Re-index a SINGLE file after you edit it, so the graph matches the working tree before you query again — closes the edit loop. Clears the file's old nodes/edges and re-parses it (a missing file is removed). Accepts an absolute path, a project-relative path, or an '@/' handle. Available only where the MCP server can see the files (local stdio/dev); degrades with a clear message otherwise. Cross-tech links refresh on a full scan, not here.",
+                            description = "Re-index a SINGLE file after you edit it, so the graph matches the working tree before you query again — closes the edit loop. Clears the file's old nodes/edges, re-parses it (a missing file is removed), and relinks the file's outgoing REFERENCES_TYPE edges so impact/dependency stay correct. Accepts an absolute path, a project-relative path, or an '@/' handle. Available only where the MCP server can see the files (local stdio/dev); degrades with a clear message otherwise. Other cross-tech links (BINDS_TO/CALLS) refresh on a full scan.",
                             inputSchema = new
                             {
                                 type = "object",
@@ -554,6 +554,34 @@ public sealed class McpRequestHandler
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "path" }
+                            }
+                        },
+                        new
+                        {
+                            name = "is_fresh",
+                            description = "Anti-drift check for ONE file: does the graph still match the file on disk? Returns Fresh (in sync), Stale (edited since indexing — run reindex_file), Untracked (on disk but never indexed), or Deleted (indexed but gone from disk). Use before trusting analysis for a file you may have just changed.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new { type = "string", description = "File to check: absolute, project-relative, or an '@/<relative>' handle." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "path" }
+                            }
+                        },
+                        new
+                        {
+                            name = "stale_files",
+                            description = "Drift report for the whole project: lists files whose on-disk content diverges from the graph — Changed (edited since indexing), New (on disk but unindexed), Deleted (indexed but gone). An empty report means the graph matches the working tree. Use to decide whether a full re-index is needed before trusting graph-wide analysis.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                }
                             }
                         },
                         new
@@ -1167,7 +1195,75 @@ public sealed class McpRequestHandler
                             return SendToolResponse(id, $"Cleared '{handle}' from the graph (file missing, unparsable, or empty).");
                         }
                         return SendToolResponse(id,
-                            $"Reindexed {handle}: {result.NodesCreated} node(s), {result.EdgesCreated} edge(s) in {result.Duration.TotalMilliseconds:F0} ms. (Cross-tech links refresh on a full scan.)");
+                            $"Reindexed {handle}: {result.NodesCreated} node(s), {result.EdgesCreated} edge(s) in {result.Duration.TotalMilliseconds:F0} ms. (REFERENCES_TYPE relinked for this file; other cross-tech links refresh on a full scan.)");
+                    }
+
+                case "is_fresh":
+                    {
+                        var rawPath = args?["path"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(rawPath))
+                        {
+                            return SendError(id, -32602, "Parameter 'path' is required");
+                        }
+                        if (_fileParsers == null)
+                        {
+                            return SendToolResponse(id,
+                                "is_fresh is unavailable here (no filesystem access). Run via the local MCP server in the project directory.");
+                        }
+
+                        var basePath = GetProjectBasePath(projectName);
+                        var resolved = FromHandle(rawPath, basePath);
+                        if (!System.IO.Path.IsPathRooted(resolved))
+                        {
+                            resolved = System.IO.Path.Combine(basePath, resolved);
+                        }
+
+                        var scanner = new GraphIndexScanner(storage, _fileParsers);
+                        var state = await scanner.CheckFreshnessAsync(resolved).ConfigureAwait(false);
+                        var handle = ToHandle(System.IO.Path.GetFullPath(resolved), basePath);
+                        var hint = state switch
+                        {
+                            GraphIndexScanner.FreshnessState.Fresh => "the graph matches the file on disk.",
+                            GraphIndexScanner.FreshnessState.Stale => "the file was edited since indexing — run reindex_file before trusting analysis.",
+                            GraphIndexScanner.FreshnessState.Untracked => "the file is on disk but not in the graph — run reindex_file (or a full index).",
+                            GraphIndexScanner.FreshnessState.Deleted => "the file is in the graph but gone from disk — run reindex_file to remove it.",
+                            _ => string.Empty
+                        };
+                        return SendToolResponse(id, $"{state}: {handle} — {hint}");
+                    }
+
+                case "stale_files":
+                    {
+                        if (_fileParsers == null)
+                        {
+                            return SendToolResponse(id,
+                                "stale_files is unavailable here (no filesystem access). Run via the local MCP server in the project directory.");
+                        }
+
+                        var basePath = GetProjectBasePath(projectName);
+                        var resolvedName = ResolveProjectName(projectName) ?? _projectManager.GetActiveProjectName();
+                        var excludePatterns = _projectManager.GetProjectConfig(resolvedName).ExcludePatterns;
+
+                        var scanner = new GraphIndexScanner(storage, _fileParsers);
+                        var drift = await scanner.DetectDriftAsync(basePath, excludePatterns).ConfigureAwait(false);
+
+                        if (drift.IsClean)
+                        {
+                            return SendToolResponse(id, "Graph matches the working tree — no drift detected.");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"Drift detected: {drift.Changed.Count} changed, {drift.New.Count} new, {drift.Deleted.Count} deleted. Run a full index (or reindex_file each) to reconcile.\n");
+                        void AppendGroup(string label, IReadOnlyList<string> files)
+                        {
+                            if (files.Count == 0) return;
+                            sb.Append($"\n{label}:\n");
+                            foreach (var f in files) sb.Append($"  {ToHandle(f, basePath)}\n");
+                        }
+                        AppendGroup("CHANGED (edited since indexing)", drift.Changed);
+                        AppendGroup("NEW (on disk, not indexed)", drift.New);
+                        AppendGroup("DELETED (indexed, gone from disk)", drift.Deleted);
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
                     }
 
                 case "implementations_of":

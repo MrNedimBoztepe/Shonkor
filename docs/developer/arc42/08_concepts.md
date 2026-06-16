@@ -118,7 +118,11 @@ Summaries and embeddings are produced asynchronously by a `BackgroundService` (`
 
 ## 8.10 The Agentic Edit Loop
 
-The MCP tools close a full edit loop so an AI can change code, not just read it: read precisely (`get_source` → exact body + `file:start-end`), see the impact (`impact_of` / `find_usages` / `edit_plan`), edit, then **`reindex_file`** to refresh just that file so the graph matches the working tree. Single-file re-index (`ScanFileAsync` → `ClearFileForReindexAsync`) deletes only the file's own (outgoing/internal) edges and **preserves incoming references** other files own — re-parsing recreates the file's symbols with stable ids, so impact analysis stays intact across an edit (cross-tech links are otherwise only rebuilt on a full scan).
+The MCP tools close a full edit loop so an AI can change code, not just read it: read precisely (`get_source` → exact body + `file:start-end`), see the impact (`impact_of` / `find_usages` / `edit_plan`), edit, then **`reindex_file`** to refresh just that file so the graph matches the working tree. Single-file re-index (`ScanFileAsync` → `ClearFileForReindexAsync`) deletes only the file's own (outgoing/internal) edges and **preserves incoming references** other files own — re-parsing recreates the file's symbols with stable ids, so impact analysis stays intact across an edit.
+
+**Anti-drift (cross-graph edges are a whole-graph post-pass, so a single-file edit can drift):**
+* **Scoped relink:** after re-parsing the file, `reindex_file` runs `CrossTechLinker.RelinkFileReferenceTypesAsync` to recompute **that file's outgoing `REFERENCES_TYPE` edges** (resolving only the names it references via `GetDefinitionsByNamesAsync`) — so `impact_of`/`depends_on` stay correct across an edit without a full rescan. Semantic-mode resolution and the other cross-tech edges (`BINDS_TO`/`CALLS`/…) still rebuild on a full scan.
+* **Freshness signals:** `is_fresh(path)` reports `Fresh`/`Stale`/`Untracked`/`Deleted` for one file, and `stale_files` reports project-wide drift (`Changed`/`New`/`Deleted`) — both by comparing on-disk SHA256 against the stored `ContentHash`. This makes drift **visible instead of silent** so the AI knows when to `reindex_file` or run a full index.
 
 ---
 
