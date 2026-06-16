@@ -31,7 +31,7 @@ A `CSharpCompilation` needs references. **Key insight that dissolves most of the
 
 ### Symbol → node-id mapping
 Map a resolved symbol to a Shonkor node id via `symbol.DeclaringSyntaxReferences[0]` → SyntaxTree.FilePath + the type/member name path, reproducing the parser's id scheme (`{filePath}::{Type}` / `{filePath}::{Type}::{Member}`). Symbols with no declaring syntax in the indexed set (external/metadata) → skipped.
-- **Overload collision (real, pre-existing):** method node ids do **not** encode the signature, so `Foo(int)` and `Foo(string)` share one id. Semantic `CALLS` would expose this (both calls map to one node). To do call-level right, method ids likely need arity/signature — a **model change with migration/handle implications**. Decide: v1 accept the collision (flag it) vs. change the id scheme.
+- **Overload collision (resolved):** method node ids now encode `#{arity}` and, for same-arity overloads, `@{declarationSpan}`, so `Foo(int)` and `Foo(string)` get distinct nodes and `CALLS` resolves to the right one. See [method-node-id-overloads.md](method-node-id-overloads.md) (Phase 1 + 2, scheme version 3, force-reparse on drift). Residual: same-arity overloads of a partial type split across files.
 
 ## Performance & drift coupling
 Building a compilation is O(repo) and cannot run on every single-file `reindex_file`. So the semantic linker is a **whole-graph / full-scan concern** — the **same shape** as cross-tech and `CALLS`. This couples directly to the **drift-remediation project**: a single-file edit must **rebind the changed file + its dependents** (Roslyn supports incremental compilation: reuse the compilation, swap one syntax tree). The three projects (semantic-core, call_hierarchy, drift) are one coherent thrust; **semantic-core is the foundation**, `CALLS` falls out of it, and drift must maintain its edges incrementally.
@@ -39,7 +39,7 @@ Building a compilation is O(repo) and cannot run on every single-file `reindex_f
 ## Work breakdown
 1. **Spike:** compilation over a sample project (R1 refs) → resolve a base type, a type reference, and an invocation to symbols → map each to the parser's node id → validate round-trip (incl. the overload-id collision).
 2. **`SemanticCsharpLinker`** post-scan pass emitting `IMPLEMENTS`/`EXTENDS`/`REFERENCES_TYPE`/`CALLS` from the `SemanticModel`; replaces C# name-matching.
-3. **Method node-id scheme** — include signature/arity to resolve overloads (model change + migration), or accept the collision in v1 with a clear flag.
+3. ✅ **Method node-id scheme** — arity + declaration-span discriminator resolves overloads (incl. same-arity); scheme version persisted + force-reparse on drift. See [method-node-id-overloads.md](method-node-id-overloads.md).
 4. **Metadata references R1** (ref-assemblies + AppDomain), documented limitation; R2 (assets.json deep mode) as opt-in later.
 5. **Retire `referencedTypes` name-matching for C#** in `CrossTechLinker`; keep it for non-C#; drop or keep the property accordingly.
 6. **Wire into `GraphIndexScanner`** (full scan) + coordinate with drift for incremental (incremental compilation: reuse + swap tree + rebind dependents).
@@ -48,7 +48,7 @@ Building a compilation is O(repo) and cannot run on every single-file `reindex_f
 9. **Docs/positioning:** make the "Precision" claim true; concept + tool reference updates.
 
 ## Open questions / risks
-- **Method node-id change** (signature/arity) is breaking for existing ids/handles — migrate, or version the id scheme?
+- ✅ **Method node-id change** (arity + span) — resolved via a persisted scheme version (`PRAGMA user_version`) that force-reparses stale graphs and surfaces a `ReindexRecommended` hint, so no migration script is needed.
 - **Incremental semantic relink:** how much to rebind on a single-file edit (file + dependents)? Couples to drift.
 - **R1 completeness:** is skipping edges into un-referenced externals acceptable? (Likely yes — no nodes for them.)
 - **Perf budget** on very large monorepos; when to fall back to syntactic-only.

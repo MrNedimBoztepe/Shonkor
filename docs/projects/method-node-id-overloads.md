@@ -1,6 +1,6 @@
 # Concept: Method node-id scheme for overloads (semantic C# core, Task 3)
 
-**Status:** Phase 1 done (arity discriminator) · Phase 2 planned (symbol-derived ids) · **Part of:** Semantic C# core (`milestone::41058af4`) · **Tracked in Shonkor:** `get_open_threads`
+**Status:** Done — Phase 1 (arity discriminator) + Phase 2 (declaration-span discriminator for same-arity overloads). · **Part of:** Semantic C# core (`milestone::41058af4`) · **Tracked in Shonkor:** `get_open_threads`
 
 ## Problem
 Method (and constructor) node ids are `{filePath}::{TypeName}::{MethodName}` — **no signature**. So overloads collide:
@@ -16,10 +16,12 @@ Nodes are created by the **syntactic** parser (`RoslynAstParser`, no symbol info
 - A discriminator both sides produce **identically** is **arity** (parameter count): the parser counts syntax params, the linker counts symbol params — always equal.
 
 ## Decision: phased discriminator
-1. **Phase 1 (now, low-risk, high-coverage): arity.** Method/constructor id becomes `{filePath}::{Type}::{Method}#{arity}` (the `Name` stays `Foo` for display; the discriminator is internal to the id and invisible in tool output). Parser and linker agree by construction. Resolves **different-arity** overloads — the common case. Same-arity overloads (`Foo(int)` vs `Foo(string)`) still collide; documented and accepted for v1.
-2. **Phase 2 (full precision, later): symbol-derived ids.** Move C# node *extraction* onto the `SemanticModel` (the "D2" path) so the id uses the symbol's canonical form (`GetDocumentationCommentId()` or `Parameters.Select(p => p.Type.ToDisplayString())`). Precise for all overloads, but couples node creation to the compilation (only when `Indexing:SemanticCSharp` is on); the syntactic/default path keeps arity.
+1. **Phase 1 (done): arity.** Method/constructor id becomes `{filePath}::{Type}::{Method}#{arity}` (the `Name` stays `Foo` for display; the discriminator is internal to the id and invisible in tool output). Parser and linker agree by construction. Resolves **different-arity** overloads — the common case.
+2. **Phase 2 (done): declaration span.** When a same-arity overload sibling exists, the id additionally appends `@{declarationSpanStart}` — the source offset of the method/constructor declaration. Both sides compute it **identically from the same source text**: the parser from `node.Span.Start`, the linker from `methodSymbol.DeclaringSyntaxReferences[0].Span.Start`. So `Foo(int)` and `Foo(string)` get **distinct** ids and `CALLS` resolves to the right overload — no node collapse, no orphaned edges.
 
-Rationale: arity is the only discriminator both the syntactic parser and the semantic linker can produce **identically without** semantic node-extraction — so Phase 1 is safe and self-consistent; Phase 2 buys full precision when we're ready to make node extraction semantic.
+Rationale: we considered the "D2 path" (moving C# node *extraction* onto the `SemanticModel` for symbol-canonical ids like `GetDocumentationCommentId()`). The declaration-span discriminator achieves the same user-visible precision with **no parser/linker divergence and no node-extraction refactor** — the span is a property of the source text, so the two sides cannot disagree. It applies in **both** modes (the parser change is mode-independent; it simply stops same-arity nodes from collapsing). The id is only span-suffixed when a same-arity sibling actually exists, so the common (non-overloaded) method keeps a stable `name#arity` id — important for the incremental edit loop.
+
+**Residual ambiguity:** same-name/same-arity overloads of a **partial** type split across files — the parser sees only one part's members (so treats it as a singleton), while the symbol sees all parts (so adds a span). This is rarer than the same-file same-arity case Phase 2 fixes; full symbol-canonical ids (D2) would close it if it ever matters.
 
 ## Scope
 - Applies to **methods and constructors** only. Properties use the same id shape but can't be overloaded (indexers are a rare exception, ignored for now) — left unchanged.
@@ -36,14 +38,15 @@ Rationale: arity is the only discriminator both the syntactic parser and the sem
 2. ✅ `RoslynAstParser`: passes `node.ParameterList.Parameters.Count` for methods and constructors.
 3. ✅ `RoslynSemantics.ToNodeId`: appends `methodSymbol.Parameters.Length` for methods/constructors.
 4. ✅ Scheme-version marker + freshness signal: `CsharpNodeId.SchemeVersion` (now `2`) is persisted per graph via SQLite `PRAGMA user_version`. A full scan **force-reparses** every file when the stored version is older (a scheme change doesn't alter file content, so the hash check would otherwise skip them) and re-stamps the version on completion. `get_stats` exposes `SchemeVersion`/`CurrentSchemeVersion` and a `ReindexRecommended` hint when a non-empty graph is stale.
-5. ✅ Tests: different-arity overloads get **distinct** nodes and `CALLS` to the **correct** one (`DifferentArityOverloads_GetDistinctNodes_AndCallsResolveToTheRightOne`); same-arity collision asserted as the known v1 limit (`SameArityOverloads_Collide_DocumentedV1Limit`, `ToNodeId_SameArityOverloads_Collide_KnownLimitation`).
-6. ✅ Docs: scheme + same-arity caveat documented here and in `CsharpNodeId` XML doc; Phase 2 (semantic node-extraction) recorded as the follow-up.
+5. ✅ **Phase 2 — declaration span:** `CsharpNodeId.ForMethod` gains an optional `overloadSpanStart` → `…#{arity}@{span}`. `RoslynAstParser` detects same-file same-arity siblings (`MethodOverloadSpan`/`ConstructorOverloadSpan`) and passes `node.Span.Start`; `RoslynSemantics.ToNodeId` mirrors it from the resolved symbol's declaring syntax (`OverloadSpan`). `SchemeVersion` bumped to **3**.
+6. ✅ Tests: different-arity overloads get **distinct** nodes + correct `CALLS` (`DifferentArityOverloads_…`); **same-arity** overloads now also get **distinct** nodes + correct `CALLS` (`SameArityOverloads_GetDistinctNodes_AndCallResolvesToTheRightOne`, `ToNodeId_SameArityOverloads_GetDistinctIds_ViaDeclarationSpan`).
+7. ✅ Docs: scheme + the (now narrow) partial-class residual documented here and in `CsharpNodeId` XML doc.
 
-## Open questions
-- Separator: `#{arity}` vs another token — must never appear in a method name (safe) and must round-trip if anything parses ids.
-- Same-arity overloads in Phase 1: accept the collision, or add a cheap secondary key (e.g. ordinal of the declaration in the type) that both sides can agree on? (Ordinal is fragile across edits — likely no.)
+## Resolved questions
+- Separator: `#{arity}` plus `@{span}` — neither token appears in a method name, so ids are unambiguous.
+- Same-arity discrimination: solved by **declaration span** (a deterministic key both sides derive from the same source text), not ordinal. Span is only appended when a same-arity sibling exists, so non-overloaded methods keep a stable id; the edit-fragility concern is therefore confined to actual overload groups (and re-index regenerates all ids consistently).
 
 ## Definition of done
-- `Foo(int)` and `Foo(int,int)` produce **distinct** method nodes; a call to each yields a `CALLS` edge to the **right** node.
-- Same-arity overloads collide, and that is the **only** documented residual ambiguity.
-- A scheme/version mismatch surfaces a clear "re-index recommended" signal (no silent old/new id coexistence).
+- ✅ `Foo(int)` and `Foo(int,int)` produce **distinct** method nodes; a call to each yields a `CALLS` edge to the **right** node.
+- ✅ `Foo(int)` and `Foo(string)` (same arity) now also produce **distinct** nodes with correct `CALLS`; the **only** residual ambiguity is same-arity overloads of a **partial** type split across files.
+- ✅ A scheme/version mismatch surfaces a clear "re-index recommended" signal and force-reparses (no silent old/new id coexistence).

@@ -59,12 +59,30 @@ public static class RoslynSemantics
         {
             INamedTypeSymbol type => CsharpNodeId.ForType(file, type.Name),
             IMethodSymbol { MethodKind: MethodKind.Constructor } ctor when ctor.ContainingType is not null
-                => CsharpNodeId.ForMethod(file, ctor.ContainingType.Name, "Constructor", ctor.Parameters.Length),
+                => CsharpNodeId.ForMethod(file, ctor.ContainingType.Name, "Constructor", ctor.Parameters.Length, OverloadSpan(ctor)),
             IMethodSymbol method when method.ContainingType is not null
-                => CsharpNodeId.ForMethod(file, method.ContainingType.Name, method.Name, method.Parameters.Length),
+                => CsharpNodeId.ForMethod(file, method.ContainingType.Name, method.Name, method.Parameters.Length, OverloadSpan(method)),
             IPropertySymbol prop when prop.ContainingType is not null
                 => CsharpNodeId.ForMember(file, prop.ContainingType.Name, prop.Name),
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Returns the declaration's source offset when <paramref name="method"/> has a same-kind, same-arity
+    /// overload sibling in its containing type — mirroring the parser's <c>MethodOverloadSpan</c> so node
+    /// and edge ids match. Returns <c>null</c> for non-overloaded methods (stable name#arity id).
+    /// </summary>
+    private static int? OverloadSpan(IMethodSymbol method)
+    {
+        var siblings = method.ContainingType
+            .GetMembers(method.Name)
+            .OfType<IMethodSymbol>()
+            .Count(m => m.MethodKind == method.MethodKind && m.Parameters.Length == method.Parameters.Length);
+
+        if (siblings <= 1) return null;
+
+        var span = method.DeclaringSyntaxReferences.FirstOrDefault()?.Span;
+        return span?.Start;
     }
 }

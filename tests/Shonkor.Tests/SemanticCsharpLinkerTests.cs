@@ -100,20 +100,29 @@ public class SemanticCsharpLinkerTests
     }
 
     [Fact]
-    public async Task SameArityOverloads_Collide_DocumentedV1Limit()
+    public async Task SameArityOverloads_GetDistinctNodes_AndCallResolvesToTheRightOne()
     {
-        // Bar(int) and Bar(string) share arity 1 -> same id. This is the accepted v1 limitation
-        // (arity is the only discriminator the parser and the linker can produce identically);
-        // full precision is the Phase 2 follow-up. See docs/projects/method-node-id-overloads.md.
+        // Bar(int) and Bar(string) share arity 1; Phase 2 disambiguates them by declaration span, so they
+        // are distinct nodes and a call to Bar(1) resolves to the int overload (not the string one).
         using var storage = await LinkAsync(
             ("/repo/C.cs",
              "namespace N { public class C { " +
              "public void Bar(int x) { } " +
-             "public void Bar(string s) { } } }"));
+             "public void Bar(string s) { } " +
+             "public void Run() { Bar(1); } } }"));
 
-        // Only one node exists for both same-arity overloads (they collapsed onto Bar#1).
-        Assert.NotNull(await storage.GetNodeByIdAsync("/repo/C.cs::C::Bar#1"));
-        var (allNodes, _) = await storage.GetSubgraphAsync(new[] { "/repo/C.cs::C" }, 1);
-        Assert.Single(allNodes, n => n.Type == "Method" && n.Name == "Bar");
+        // Two distinct method nodes named "Bar" survived (no same-arity collapse).
+        var (typeSubgraph, _) = await storage.GetSubgraphAsync(new[] { "/repo/C.cs::C" }, 1);
+        var barNodes = typeSubgraph.Where(n => n.Type == "Method" && n.Name == "Bar").ToList();
+        Assert.Equal(2, barNodes.Count);
+
+        // Exactly one CALLS edge from Run, and it targets the int overload.
+        var (cNodes, cEdges) = await storage.GetSubgraphAsync(new[] { "/repo/C.cs::C" }, 2);
+        var calls = cEdges.Where(e => e.Relationship == "CALLS" && e.SourceId.Contains("::Run#")).ToList();
+        Assert.Single(calls);
+        var calleeId = calls[0].TargetId;
+        var callee = await storage.GetNodeByIdAsync(calleeId);
+        Assert.NotNull(callee);
+        Assert.Contains("int", callee!.Properties.GetValueOrDefault("parameters", ""));
     }
 }

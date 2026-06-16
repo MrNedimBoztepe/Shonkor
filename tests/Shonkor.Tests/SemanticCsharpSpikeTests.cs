@@ -73,10 +73,10 @@ public class SemanticCsharpSpikeTests
     }
 
     [Fact]
-    public void ToNodeId_SameArityOverloads_Collide_KnownLimitation()
+    public void ToNodeId_SameArityOverloads_GetDistinctIds_ViaDeclarationSpan()
     {
-        // The id encodes arity, not parameter types, so SAME-arity overloads still share one id
-        // (Add(int) and Add(string) both -> ::C::Add#1). This is the accepted v1 residual ambiguity.
+        // Phase 2: same-arity overloads (Add(int) vs Add(string)) are disambiguated by declaration span,
+        // so they no longer share an id. Both ids keep the #1 arity tag plus a distinct @{span} suffix.
         var comp = RoslynSemantics.BuildCompilation(new[]
         {
             ("/repo/C.cs", "namespace N { public class C { public void Add(int a) { } public void Add(string a) { } } }")
@@ -87,7 +87,11 @@ public class SemanticCsharpSpikeTests
         var s1 = model.GetDeclaredSymbol(methods[0]);
         var s2 = model.GetDeclaredSymbol(methods[1]);
 
-        Assert.Equal(RoslynSemantics.ToNodeId(s1), RoslynSemantics.ToNodeId(s2)); // collide -> same id (the open question)
+        var id1 = RoslynSemantics.ToNodeId(s1);
+        var id2 = RoslynSemantics.ToNodeId(s2);
+        Assert.NotEqual(id1, id2);                       // distinct now
+        Assert.Contains("::C::Add#1@", id1);
+        Assert.Contains("::C::Add#1@", id2);
     }
 
     [Fact]

@@ -150,7 +150,8 @@ public sealed class RoslynAstParser : IFileParser
         {
             var methodName = node.Identifier.Text;
             var parentName = _currentTypeNodeId is not null ? _currentTypeNodeId.Split("::").Last() : "global";
-            var methodNodeId = CsharpNodeId.ForMethod(filePath, parentName, methodName, node.ParameterList.Parameters.Count);
+            var arity = node.ParameterList.Parameters.Count;
+            var methodNodeId = CsharpNodeId.ForMethod(filePath, parentName, methodName, arity, MethodOverloadSpan(node, methodName, arity));
 
             Nodes.Add(new GraphNode
             {
@@ -220,7 +221,8 @@ public sealed class RoslynAstParser : IFileParser
         {
             var constructorName = node.Identifier.Text;
             var parentName = _currentTypeNodeId is not null ? _currentTypeNodeId.Split("::").Last() : "global";
-            var constructorNodeId = CsharpNodeId.ForMethod(filePath, parentName, "Constructor", node.ParameterList.Parameters.Count);
+            var ctorArity = node.ParameterList.Parameters.Count;
+            var constructorNodeId = CsharpNodeId.ForMethod(filePath, parentName, "Constructor", ctorArity, ConstructorOverloadSpan(node, ctorArity));
 
             Nodes.Add(new GraphNode
             {
@@ -248,6 +250,46 @@ public sealed class RoslynAstParser : IFileParser
             }
 
             base.VisitConstructorDeclaration(node);
+        }
+
+        /// <summary>
+        /// Returns the declaration's source offset when the enclosing type declares more than one method
+        /// with the same name and arity (a same-arity overload group), so their node ids can be made
+        /// distinct; otherwise <c>null</c> (the common, non-overloaded case keeps a stable name#arity id).
+        /// The semantic linker derives the identical offset from the resolved symbol's declaring syntax.
+        /// </summary>
+        private static int? MethodOverloadSpan(MethodDeclarationSyntax node, string name, int arity)
+        {
+            if (node.Parent is not TypeDeclarationSyntax type) return null;
+            var siblings = 0;
+            foreach (var member in type.Members)
+            {
+                if (member is MethodDeclarationSyntax m
+                    && m.Identifier.Text == name
+                    && m.ParameterList.Parameters.Count == arity)
+                {
+                    siblings++;
+                    if (siblings > 1) return node.Span.Start;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>Constructor counterpart of <see cref="MethodOverloadSpan"/> (overloads share the type's name, so only arity discriminates).</summary>
+        private static int? ConstructorOverloadSpan(ConstructorDeclarationSyntax node, int arity)
+        {
+            if (node.Parent is not TypeDeclarationSyntax type) return null;
+            var siblings = 0;
+            foreach (var member in type.Members)
+            {
+                if (member is ConstructorDeclarationSyntax c
+                    && c.ParameterList.Parameters.Count == arity)
+                {
+                    siblings++;
+                    if (siblings > 1) return node.Span.Start;
+                }
+            }
+            return null;
         }
 
         /// <summary>
