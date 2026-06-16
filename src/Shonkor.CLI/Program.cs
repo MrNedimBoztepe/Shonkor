@@ -206,7 +206,9 @@ public static class Program
                 new GraphQLParser()
             };
 
-            var scanner = new GraphIndexScanner(storage, parsers);
+            // Opt-in semantic C# linking (exact REFERENCES_TYPE/IMPLEMENTS/EXTENDS/CALLS via Roslyn).
+            var semanticCsharp = string.Equals(Environment.GetEnvironmentVariable("SHONKOR_SEMANTIC_CSHARP"), "true", StringComparison.OrdinalIgnoreCase);
+            var scanner = new GraphIndexScanner(storage, parsers, semanticCsharp: semanticCsharp);
 
             Console.WriteLine("Scanning and indexing files... (this may take a few moments)");
             var result = await scanner.ScanDirectoryAsync(absoluteDir, config.ExcludePatterns);

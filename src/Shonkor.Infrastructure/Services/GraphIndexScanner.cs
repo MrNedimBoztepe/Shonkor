@@ -33,7 +33,9 @@ public sealed class GraphIndexScanner
     /// <c>stdout</c>, which would corrupt the JSON-RPC stream when the scanner runs inside the stdio MCP
     /// server (e.g. via <c>reindex_file</c>).
     /// </param>
-    public GraphIndexScanner(IGraphStorageProvider storage, IEnumerable<IFileParser> parsers, ILogger? logger = null)
+    private readonly bool _semanticCsharp;
+
+    public GraphIndexScanner(IGraphStorageProvider storage, IEnumerable<IFileParser> parsers, ILogger? logger = null, bool semanticCsharp = false)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(parsers);
@@ -41,6 +43,7 @@ public sealed class GraphIndexScanner
         _storage = storage;
         _parsers = parsers.ToList();
         _logger = logger;
+        _semanticCsharp = semanticCsharp;
     }
 
     /// <summary>Routes a scan diagnostic to the logger, or to stderr — never stdout (see ctor remarks).</summary>
@@ -213,9 +216,18 @@ public sealed class GraphIndexScanner
             edgesCreated = allEdgesToUpsert.Count;
         }
 
-        // 5. Establish Cross-Technology and Helix Architecture mappings (Post-Scan)
+        // 5. Establish Cross-Technology and Helix Architecture mappings (Post-Scan). When semantic C#
+        //    linking is enabled, skip the ambiguous name-based REFERENCES_TYPE resolution here — the
+        //    semantic linker produces those edges exactly (resolved symbols), then runs below.
         cancellationToken.ThrowIfCancellationRequested();
-        await CrossTechLinker.EstablishCrossTechnologyConnectionsAsync(_storage, directoryPath, cancellationToken).ConfigureAwait(false);
+        await CrossTechLinker.EstablishCrossTechnologyConnectionsAsync(
+            _storage, directoryPath, cancellationToken, resolveCSharpTypeReferences: !_semanticCsharp).ConfigureAwait(false);
+
+        if (_semanticCsharp)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await SemanticCsharpLinker.EstablishSemanticEdgesAsync(_storage, directoryPath, cancellationToken).ConfigureAwait(false);
+        }
 
         stopwatch.Stop();
         return new IndexResult(filesScanned, nodesCreated, edgesCreated, stopwatch.Elapsed);

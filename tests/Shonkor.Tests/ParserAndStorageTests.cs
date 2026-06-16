@@ -368,6 +368,38 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task ScanDirectory_SemanticCsharp_ResolvesReferenceToCorrectFile()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_sem_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "AThing.cs"), "namespace A { public class Thing { } }");
+            await File.WriteAllTextAsync(Path.Combine(dir, "BThing.cs"), "namespace B { public class Thing { } }");
+            await File.WriteAllTextAsync(Path.Combine(dir, "User.cs"),   "using A; namespace U { public class User { public Thing Field; } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            // semanticCsharp: true -> the name-based C# resolution is skipped and the SemanticCsharpLinker runs.
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() }, logger: null, semanticCsharp: true);
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::User";
+
+            // User references A.Thing exactly (the imported one) — name matching would have linked BOTH.
+            var (aEdges, _) = await storage.GetIncidentEdgesAsync(Path.GetFullPath(Path.Combine(dir, "AThing.cs")) + "::Thing");
+            Assert.Contains(aEdges, e => e.SourceId == userId && e.Relationship == "REFERENCES_TYPE");
+
+            var (bEdges, _) = await storage.GetIncidentEdgesAsync(Path.GetFullPath(Path.Combine(dir, "BThing.cs")) + "::Thing");
+            Assert.DoesNotContain(bEdges, e => e.SourceId == userId); // the ambiguous name-based edge must NOT exist
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ScanFile_PreservesIncomingReferences_OnEdit()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"shonkor_reidx_{Guid.NewGuid():N}");
