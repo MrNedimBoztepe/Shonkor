@@ -70,6 +70,20 @@ public interface IGraphStore
     Task<IReadOnlyDictionary<string, IReadOnlyList<GraphNode>>> GetDefinitionsByNamesAsync(IEnumerable<string> names, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the distinct file paths that reference any of the given type names (via the reverse index
+    /// maintained from <c>referencedTypes</c>). Used by drift Layer 2: when a file renames/removes a type,
+    /// only its referencers need their incoming edges relinked — not the whole repo.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetReferencingFilePathsAsync(IEnumerable<string> typeNames, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes edges of the given <paramref name="relationship"/> that ORIGINATE from any node in
+    /// <paramref name="filePath"/> (outgoing edges). Used to clear a referencer's stale outgoing edges
+    /// before a scoped relink, without re-parsing that file.
+    /// </summary>
+    Task DeleteOutgoingEdgesByFilePathAsync(string filePath, string relationship, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the stored content hash for each of the given File node IDs (paths) that exist,
     /// keyed by node ID. Used for fast incremental-scan change detection without loading content.
     /// </summary>
