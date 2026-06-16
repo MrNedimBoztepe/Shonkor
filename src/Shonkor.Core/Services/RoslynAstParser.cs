@@ -114,7 +114,7 @@ public sealed class RoslynAstParser : IFileParser
         public override void VisitEnumDeclaration(EnumDeclarationSyntax node)
         {
             var typeName = node.Identifier.Text;
-            var typeNodeId = $"{filePath}::{typeName}";
+            var typeNodeId = CsharpNodeId.ForType(filePath, typeName);
 
             var members = string.Join(", ", node.Members.Select(m => m.Identifier.Text));
 
@@ -150,7 +150,7 @@ public sealed class RoslynAstParser : IFileParser
         {
             var methodName = node.Identifier.Text;
             var parentName = _currentTypeNodeId is not null ? _currentTypeNodeId.Split("::").Last() : "global";
-            var methodNodeId = $"{filePath}::{parentName}::{methodName}";
+            var methodNodeId = CsharpNodeId.ForMember(filePath, parentName, methodName);
 
             Nodes.Add(new GraphNode
             {
@@ -186,7 +186,7 @@ public sealed class RoslynAstParser : IFileParser
         {
             var propertyName = node.Identifier.Text;
             var parentName = _currentTypeNodeId is not null ? _currentTypeNodeId.Split("::").Last() : "global";
-            var propertyNodeId = $"{filePath}::{parentName}::{propertyName}";
+            var propertyNodeId = CsharpNodeId.ForMember(filePath, parentName, propertyName);
 
             Nodes.Add(new GraphNode
             {
@@ -220,7 +220,7 @@ public sealed class RoslynAstParser : IFileParser
         {
             var constructorName = node.Identifier.Text;
             var parentName = _currentTypeNodeId is not null ? _currentTypeNodeId.Split("::").Last() : "global";
-            var constructorNodeId = $"{filePath}::{parentName}::Constructor";
+            var constructorNodeId = CsharpNodeId.ForMember(filePath, parentName, "Constructor");
 
             Nodes.Add(new GraphNode
             {
@@ -262,7 +262,7 @@ public sealed class RoslynAstParser : IFileParser
             SyntaxTokenList modifiers)
         {
             var typeName = identifier.Text;
-            var typeNodeId = $"{filePath}::{typeName}";
+            var typeNodeId = CsharpNodeId.ForType(filePath, typeName);
 
             // Collect the names of all types this declaration references (field/property/parameter/
             // return/object-creation/base types). These are resolved post-scan into REFERENCES_TYPE
