@@ -64,6 +64,23 @@ internal static class SqliteSchema
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_edges_target ON Edges(TargetId);", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_nodes_filepath ON Nodes(FilePath);", cancellationToken).ConfigureAwait(false);
 
+        // Reverse index of C# type references (drift Layer 2): which node (and file) references a type by
+        // NAME. Derived from each node's `referencedTypes` metadata during upsert (the JSON Metadata column
+        // isn't efficiently queryable). Lets a rename/remove in one file relink only the files that actually
+        // reference the changed type — bounding incoming-edge maintenance to the referencers, not the repo.
+        await ExecuteAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS TypeReferences (
+                TypeName TEXT NOT NULL,
+                NodeId   TEXT NOT NULL,
+                FilePath TEXT,
+                PRIMARY KEY (TypeName, NodeId)
+            );
+            """,
+            cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_typerefs_name ON TypeReferences(TypeName);", cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_typerefs_file ON TypeReferences(FilePath);", cancellationToken).ConfigureAwait(false);
+
         await ExecuteAsync(connection,
             """
             CREATE VIRTUAL TABLE IF NOT EXISTS NodesFts USING fts5(

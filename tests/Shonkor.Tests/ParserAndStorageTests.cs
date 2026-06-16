@@ -444,6 +444,84 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task ReindexFile_RemovesDanglingIncomingEdges_OnRename()
+    {
+        // Drift Layer 2: A defines Widget, B references it. Renaming Widget away in A (and reindexing ONLY A)
+        // must remove B's now-dangling REFERENCES_TYPE edge, via the reverse index — without reindexing B.
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_rename_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var defFile = Path.Combine(dir, "Def.cs");
+        try
+        {
+            await File.WriteAllTextAsync(defFile, "namespace N { public class Widget { } }");
+            await File.WriteAllTextAsync(Path.Combine(dir, "User.cs"), "namespace N { public class User { public Widget W; } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::User";
+            var widgetId = Path.GetFullPath(defFile) + "::Widget";
+
+            // Baseline: User -> Widget exists.
+            var (e0, _) = await storage.GetIncidentEdgesAsync(widgetId);
+            Assert.Contains(e0, e => e.SourceId == userId && e.Relationship == "REFERENCES_TYPE");
+
+            // Rename Widget -> Gadget in Def.cs, then reindex ONLY Def.cs (NOT User.cs).
+            await File.WriteAllTextAsync(defFile, "namespace N { public class Gadget { } }");
+            await scanner.ScanFileAsync(defFile);
+
+            // The dangling User -> Widget edge is gone (Widget no longer defined; User wasn't re-parsed).
+            var (eu, _) = await storage.GetIncidentEdgesAsync(userId);
+            Assert.DoesNotContain(eu, e => e.SourceId == userId && e.Relationship == "REFERENCES_TYPE");
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReindexFile_CreatesNewlyResolvableIncomingEdges_OnAddedDefinition()
+    {
+        // Drift Layer 2 (dual): B references Widget before it's defined (no edge). Adding Widget in A and
+        // reindexing ONLY A must create B -> Widget via the reverse index — without reindexing B.
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_added_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var defFile = Path.Combine(dir, "Def.cs");
+        try
+        {
+            await File.WriteAllTextAsync(defFile, "namespace N { public class Placeholder { } }");
+            await File.WriteAllTextAsync(Path.Combine(dir, "User.cs"), "namespace N { public class User { public Widget W; } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::User";
+            var widgetId = Path.GetFullPath(defFile) + "::Widget";
+
+            // Baseline: Widget undefined -> no edge.
+            var (e0, _) = await storage.GetIncidentEdgesAsync(userId);
+            Assert.DoesNotContain(e0, e => e.SourceId == userId && e.Relationship == "REFERENCES_TYPE");
+
+            // Add Widget to Def.cs, then reindex ONLY Def.cs.
+            await File.WriteAllTextAsync(defFile, "namespace N { public class Placeholder { } public class Widget { } }");
+            await scanner.ScanFileAsync(defFile);
+
+            // User -> Widget became resolvable and was created.
+            var (eu, _) = await storage.GetIncidentEdgesAsync(widgetId);
+            Assert.Contains(eu, e => e.SourceId == userId && e.Relationship == "REFERENCES_TYPE");
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task DetectDrift_ReportsChangedNewAndDeleted()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"shonkor_drift_{Guid.NewGuid():N}");

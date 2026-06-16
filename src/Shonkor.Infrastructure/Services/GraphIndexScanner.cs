@@ -415,10 +415,16 @@ public sealed class GraphIndexScanner
 
         var parserMap = BuildParserMap();
 
+        // Capture the type names this file currently defines, BEFORE we clear it. Comparing against the
+        // post-parse set tells us which definitions were renamed/removed/added, so we can relink the files
+        // that reference them (drift Layer 2 — incoming-edge maintenance).
+        var oldDefNames = DefinitionNames(await _storage.GetNodesByFilePathAsync(fullPath, cancellationToken).ConfigureAwait(false));
+
         // No parser for this extension, file gone, too large, or binary -> ensure no stale data lingers.
         if (!parserMap.TryGetValue(extension, out var fileParsers) || fileParsers.Count == 0 || !File.Exists(fullPath))
         {
             await _storage.DeleteByFilePathAsync(fullPath, cancellationToken).ConfigureAwait(false);
+            await MaintainReferencersAsync(oldDefNames, fullPath, cancellationToken).ConfigureAwait(false);
             return Cleared();
         }
 
@@ -426,6 +432,7 @@ public sealed class GraphIndexScanner
         if (info.Length > 5 * 1024 * 1024 || await IsLikelyBinaryAsync(fullPath, cancellationToken).ConfigureAwait(false))
         {
             await _storage.DeleteByFilePathAsync(fullPath, cancellationToken).ConfigureAwait(false);
+            await MaintainReferencersAsync(oldDefNames, fullPath, cancellationToken).ConfigureAwait(false);
             return Cleared();
         }
 
@@ -471,8 +478,47 @@ public sealed class GraphIndexScanner
             await CrossTechLinker.RelinkFileReferenceTypesAsync(_storage, fullPath, cancellationToken).ConfigureAwait(false);
         }
 
+        // Drift Layer 2: if this edit renamed/removed/added any type definition, relink the OTHER files that
+        // reference those names — removing now-dangling incoming edges and creating newly-resolvable ones —
+        // bounded to the referencers via the reverse index (not a whole-graph pass).
+        var changedDefNames = new HashSet<string>(oldDefNames, StringComparer.Ordinal);
+        changedDefNames.SymmetricExceptWith(DefinitionNames(nodes));
+        await MaintainReferencersAsync(changedDefNames, fullPath, cancellationToken).ConfigureAwait(false);
+
         stopwatch.Stop();
         return new IndexResult(1, nodes.Count, edges.Count, stopwatch.Elapsed);
+    }
+
+    /// <summary>The node types that represent a C# type definition (a rename/remove of which can dangle references).</summary>
+    private static readonly HashSet<string> DefinitionTypes = new(StringComparer.Ordinal) { "Class", "Interface", "Record", "Struct", "Enum" };
+
+    /// <summary>The distinct names of the type-definition nodes in <paramref name="nodes"/>.</summary>
+    private static HashSet<string> DefinitionNames(IEnumerable<GraphNode> nodes) =>
+        nodes.Where(n => DefinitionTypes.Contains(n.Type) && !string.IsNullOrEmpty(n.Name))
+             .Select(n => n.Name)
+             .ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Relinks the outgoing <c>REFERENCES_TYPE</c> edges of every file that references any of
+    /// <paramref name="changedDefNames"/> (found via the reverse index), excluding <paramref name="excludeFile"/>.
+    /// This removes edges that now dangle (the referenced definition was renamed/removed) and creates edges
+    /// that became resolvable (a referenced name is now defined). Skipped in semantic mode — exact resolution
+    /// there is a whole-graph/compilation concern (a later drift layer).
+    /// </summary>
+    private async Task MaintainReferencersAsync(IEnumerable<string> changedDefNames, string excludeFile, CancellationToken cancellationToken)
+    {
+        if (_semanticCsharp) return;
+
+        var names = changedDefNames.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.Ordinal).ToList();
+        if (names.Count == 0) return;
+
+        var referencers = await _storage.GetReferencingFilePathsAsync(names, cancellationToken).ConfigureAwait(false);
+        foreach (var referencer in referencers)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.Equals(referencer, excludeFile, StringComparison.OrdinalIgnoreCase)) continue;
+            await CrossTechLinker.RelinkFileReferenceTypesAsync(_storage, referencer, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static string ComputeSha256Hash(string input)

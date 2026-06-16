@@ -120,6 +120,19 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
 
         await command.PrepareAsync(cancellationToken).ConfigureAwait(false);
 
+        // Reverse-index maintenance (drift Layer 2): re-sync each node's referencedTypes rows on upsert.
+        await using var refDelete = connection.CreateCommand();
+        refDelete.CommandText = "DELETE FROM TypeReferences WHERE NodeId = @NodeId;";
+        var rdNodeId = refDelete.Parameters.Add("@NodeId", SqliteType.Text);
+        await refDelete.PrepareAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var refInsert = connection.CreateCommand();
+        refInsert.CommandText = "INSERT OR IGNORE INTO TypeReferences (TypeName, NodeId, FilePath) VALUES (@TypeName, @NodeId, @FilePath);";
+        var riTypeName = refInsert.Parameters.Add("@TypeName", SqliteType.Text);
+        var riNodeId = refInsert.Parameters.Add("@NodeId", SqliteType.Text);
+        var riFilePath = refInsert.Parameters.Add("@FilePath", SqliteType.Text);
+        await refInsert.PrepareAsync(cancellationToken).ConfigureAwait(false);
+
         foreach (var node in nodes)
         {
             pId.Value = node.Id;
@@ -136,6 +149,21 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             pEmbedding.Value = (object?)SqliteRowMapper.EmbeddingToBytes(node.Embedding) ?? DBNull.Value;
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+            // Refresh the reverse index for this node: drop its old rows, re-add from referencedTypes.
+            rdNodeId.Value = node.Id;
+            await refDelete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+            if (node.Properties.TryGetValue("referencedTypes", out var refCsv) && !string.IsNullOrWhiteSpace(refCsv))
+            {
+                riNodeId.Value = node.Id;
+                riFilePath.Value = (object?)node.FilePath ?? DBNull.Value;
+                foreach (var typeName in refCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    riTypeName.Value = typeName;
+                    await refInsert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -562,6 +590,14 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             await deleteCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        // Drop the file's reverse-index rows (drift Layer 2).
+        await using (var refCmd = connection.CreateCommand())
+        {
+            refCmd.CommandText = "DELETE FROM TypeReferences WHERE FilePath = @path;";
+            refCmd.Parameters.AddWithValue("@path", filePath);
+            await refCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         // Delete orphaned edges referencing the deleted nodes.
         if (nodeIds.Count > 0)
         {
@@ -628,13 +664,18 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             }
         }
 
-        // 2. Delete the nodes by file path.
+        // 2. Delete the nodes by file path (and their reverse-index rows — drift Layer 2).
         foreach (var chunk in paths.Chunk(MaxSqlParameters))
         {
             await using var deleteCmd = connection.CreateCommand();
             var paramList = AddParams(deleteCmd, chunk, "@p");
             deleteCmd.CommandText = $"DELETE FROM Nodes WHERE FilePath IN ({paramList});";
             await deleteCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+            await using var refCmd = connection.CreateCommand();
+            var refList = AddParams(refCmd, chunk, "@r");
+            refCmd.CommandText = $"DELETE FROM TypeReferences WHERE FilePath IN ({refList});";
+            await refCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         // 3. Delete orphaned edges. The id list is referenced twice (SourceId/TargetId); named
@@ -676,6 +717,14 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             deleteNodes.CommandText = "DELETE FROM Nodes WHERE FilePath = @path;";
             deleteNodes.Parameters.AddWithValue("@path", filePath);
             await deleteNodes.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // Drop the file's reverse-index rows; re-parse + upsert repopulates them (drift Layer 2).
+        await using (var refCmd = connection.CreateCommand())
+        {
+            refCmd.CommandText = "DELETE FROM TypeReferences WHERE FilePath = @path;";
+            refCmd.Parameters.AddWithValue("@path", filePath);
+            await refCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         // Delete only OUTGOING/internal edges (SourceId in the file). Edges that point INTO the file from
@@ -935,6 +984,81 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         }
 
         return result.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<GraphNode>)kv.Value, StringComparer.Ordinal);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> GetReferencingFilePathsAsync(IEnumerable<string> typeNames, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(typeNames);
+
+        var names = typeNames.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.Ordinal).ToList();
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        if (names.Count == 0) return paths.ToList();
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        const int chunkSize = 400;
+        for (var offset = 0; offset < names.Count; offset += chunkSize)
+        {
+            var chunk = names.Skip(offset).Take(chunkSize).ToList();
+
+            await using var command = connection.CreateCommand();
+            var paramNames = new List<string>(chunk.Count);
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                var p = $"@n{i}";
+                paramNames.Add(p);
+                command.Parameters.AddWithValue(p, chunk[i]);
+            }
+            command.CommandText =
+                $"SELECT DISTINCT FilePath FROM TypeReferences WHERE FilePath IS NOT NULL AND TypeName IN ({string.Join(", ", paramNames)});";
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                paths.Add(reader.GetString(0));
+            }
+        }
+
+        return paths.ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteOutgoingEdgesByFilePathAsync(string filePath, string relationship, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(relationship);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        // The file's node ids are the edge sources. Delete matching outgoing edges in chunks.
+        var nodeIds = new List<string>();
+        await using (var selectCmd = connection.CreateCommand())
+        {
+            selectCmd.CommandText = "SELECT Id FROM Nodes WHERE FilePath = @path;";
+            selectCmd.Parameters.AddWithValue("@path", filePath);
+            await using var reader = await selectCmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                nodeIds.Add(reader.GetString(0));
+            }
+        }
+        if (nodeIds.Count == 0) return;
+
+        foreach (var chunk in nodeIds.Chunk(MaxSqlParameters))
+        {
+            await using var edgeCmd = connection.CreateCommand();
+            var paramNames = new List<string>(chunk.Length);
+            for (var i = 0; i < chunk.Length; i++)
+            {
+                var p = $"@s{i}";
+                paramNames.Add(p);
+                edgeCmd.Parameters.AddWithValue(p, chunk[i]);
+            }
+            edgeCmd.Parameters.AddWithValue("@rel", relationship);
+            edgeCmd.CommandText = $"DELETE FROM Edges WHERE RelationType = @rel AND SourceId IN ({string.Join(", ", paramNames)});";
+            await edgeCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />

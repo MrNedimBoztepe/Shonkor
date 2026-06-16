@@ -228,6 +228,11 @@ public static class CrossTechLinker
         var fileNodes = await storage.GetNodesByFilePathAsync(filePath, cancellationToken).ConfigureAwait(false);
         if (fileNodes.Count == 0) return;
 
+        // Clear the file's existing outgoing REFERENCES_TYPE edges first, so this is idempotent and removes
+        // danglers when relinking a referencer that wasn't itself re-parsed (drift Layer 2). After a normal
+        // reindex_file the file was already cleared, so this is a cheap no-op there.
+        await storage.DeleteOutgoingEdgesByFilePathAsync(filePath, "REFERENCES_TYPE", cancellationToken).ConfigureAwait(false);
+
         // Gather every referenced type name this file declares, then resolve them in one query.
         var referencedNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var node in fileNodes)
