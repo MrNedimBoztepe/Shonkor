@@ -107,6 +107,18 @@ public sealed class GraphIndexScanner
         // 2. Pre-fetch existing file content hashes directly (no full-content / subgraph load).
         var existingHashes = await _storage.GetContentHashesAsync(candidateFiles, cancellationToken).ConfigureAwait(false);
 
+        // 2a. If the graph was built under an older node-id scheme, the incremental hash check would skip
+        //     unchanged files and leave their ids in the outdated format (a scheme change doesn't alter file
+        //     content). Force a full reparse of every candidate so the whole graph is rebuilt under the
+        //     current scheme; the version is re-stamped once the scan completes (step 6).
+        var schemeStale =
+            await _storage.GetNodeIdSchemeVersionAsync(cancellationToken).ConfigureAwait(false)
+                < Shonkor.Core.Services.CsharpNodeId.SchemeVersion;
+        if (schemeStale)
+        {
+            Warn($"Node-id scheme is outdated; forcing a full reparse to migrate to scheme v{Shonkor.Core.Services.CsharpNodeId.SchemeVersion}.");
+        }
+
         // 3. Process candidate files incrementally
         var allNodesToUpsert = new ConcurrentBag<GraphNode>();
         var allEdgesToUpsert = new ConcurrentBag<GraphEdge>();
@@ -141,8 +153,9 @@ public sealed class GraphIndexScanner
                 var content = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
                 var contentHash = ComputeSha256Hash(content);
 
-                // Incremental Hash Check: skip if hash matches DB
-                if (existingHashes.TryGetValue(filePath, out var existingHash) && existingHash == contentHash)
+                // Incremental Hash Check: skip if hash matches DB (unless the id scheme is stale, in which
+                // case every file must be reparsed to migrate its ids to the current scheme).
+                if (!schemeStale && existingHashes.TryGetValue(filePath, out var existingHash) && existingHash == contentHash)
                 {
                     return; // Unchanged!
                 }
@@ -228,6 +241,10 @@ public sealed class GraphIndexScanner
             cancellationToken.ThrowIfCancellationRequested();
             await SemanticCsharpLinker.EstablishSemanticEdgesAsync(_storage, directoryPath, cancellationToken).ConfigureAwait(false);
         }
+
+        // 6. Stamp the graph with the current node-id scheme — the whole tree was just (re)built under it,
+        //    so any prior staleness is now resolved and get_stats stops recommending a re-index.
+        await _storage.SetNodeIdSchemeVersionAsync(Shonkor.Core.Services.CsharpNodeId.SchemeVersion, cancellationToken).ConfigureAwait(false);
 
         stopwatch.Stop();
         return new IndexResult(filesScanned, nodesCreated, edgesCreated, stopwatch.Elapsed);

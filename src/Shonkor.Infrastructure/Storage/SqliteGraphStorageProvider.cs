@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
+using Shonkor.Core.Services;
 using Microsoft.Data.Sqlite;
 
 namespace Shonkor.Infrastructure.Storage;
@@ -779,11 +780,40 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var edgesByRelation = await GetGroupedCountsAsync(connection,
             "SELECT RelationType, COUNT(*) FROM Edges GROUP BY RelationType;", cancellationToken).ConfigureAwait(false);
 
+        var schemeVersion = await ReadUserVersionAsync(connection, cancellationToken).ConfigureAwait(false);
+
         return new GraphStatistics(
             totalNodes,
             totalEdges,
             nodesByType,
-            edgesByRelation);
+            edgesByRelation,
+            schemeVersion,
+            CsharpNodeId.SchemeVersion);
+    }
+
+    /// <inheritdoc />
+    public async Task<int> GetNodeIdSchemeVersionAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await ReadUserVersionAsync(connection, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task SetNodeIdSchemeVersionAsync(int version, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        // PRAGMA user_version does not accept parameters; version is an int, so inlining is injection-safe.
+        command.CommandText = $"PRAGMA user_version = {version};";
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<int> ReadUserVersionAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA user_version;";
+        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result is null ? 0 : Convert.ToInt32(result);
     }
 
     /// <inheritdoc />

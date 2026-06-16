@@ -15,6 +15,16 @@ namespace Shonkor.Core.Services;
 /// </remarks>
 public static class CsharpNodeId
 {
+    /// <summary>
+    /// Version of the node-id scheme. Persisted with each graph (SQLite <c>PRAGMA user_version</c>) so a
+    /// graph built under an older scheme can be detected and a full re-index recommended/forced. Because a
+    /// scheme change (e.g. adding <c>#{arity}</c>) does NOT change file content, the incremental hash check
+    /// would otherwise skip every file and leave old-scheme ids in place. <b>Bump this whenever the id
+    /// format changes.</b> History: v1 = name-only members (overloads collided); v2 = arity-discriminated
+    /// methods/constructors. Unstamped legacy graphs read as 0 (&lt; current → stale).
+    /// </summary>
+    public const int SchemeVersion = 2;
+
     /// <summary>Node id for a type declaration in <paramref name="filePath"/>.</summary>
     public static string ForType(string filePath, string typeName) => $"{filePath}::{typeName}";
 

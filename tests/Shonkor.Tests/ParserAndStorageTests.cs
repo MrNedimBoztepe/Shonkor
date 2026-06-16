@@ -400,6 +400,80 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task Scanner_StampsCurrentSchemeVersion_AfterScan()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_schemev_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "S.cs"), "namespace N { public class S { public void M() {} } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            // The whole tree was just built under the current scheme -> stamped, no re-index recommended.
+            Assert.Equal(CsharpNodeId.SchemeVersion, await storage.GetNodeIdSchemeVersionAsync());
+            var stats = await storage.GetStatisticsAsync();
+            Assert.False(stats.ReindexRecommended);
+            Assert.Equal(CsharpNodeId.SchemeVersion, stats.CurrentSchemeVersion);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task GetStatistics_ReportsReindexRecommended_WhenSchemeStale()
+    {
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+
+        // A non-empty graph stamped with an older scheme -> the mismatch must surface as a re-index hint.
+        await storage.UpsertNodesAsync(new[] { new GraphNode { Id = "x", Name = "x", Type = "Class" } });
+        await storage.SetNodeIdSchemeVersionAsync(1);
+
+        var stats = await storage.GetStatisticsAsync();
+        Assert.Equal(1, stats.SchemeVersion);
+        Assert.True(stats.ReindexRecommended);
+    }
+
+    [Fact]
+    public async Task Scanner_ForcesReparse_WhenSchemeStale_DespiteUnchangedFiles()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_forcereparse_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "S.cs"), "namespace N { public class S { public void M() {} } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+
+            var first = await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+            Assert.True(first.NodesCreated > 0);
+
+            // An unchanged rescan normally skips every file (hash match) -> nothing re-created.
+            var unchanged = await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+            Assert.Equal(0, unchanged.NodesCreated);
+
+            // Simulate a legacy graph: roll the stored scheme back. Despite the files being unchanged,
+            // the next scan must force a full reparse to migrate the ids, then re-stamp the version.
+            await storage.SetNodeIdSchemeVersionAsync(1);
+            var migrated = await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+            Assert.True(migrated.NodesCreated > 0); // forced reparse, not skipped
+            Assert.Equal(CsharpNodeId.SchemeVersion, await storage.GetNodeIdSchemeVersionAsync());
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ScanFile_PreservesIncomingReferences_OnEdit()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"shonkor_reidx_{Guid.NewGuid():N}");

@@ -1553,7 +1553,14 @@ public sealed class McpRequestHandler
                             stats.TotalNodes,
                             stats.TotalEdges,
                             stats.NodesByType,
-                            stats.EdgesByRelation
+                            stats.EdgesByRelation,
+                            stats.SchemeVersion,
+                            stats.CurrentSchemeVersion,
+                            // Surfaced so the AI knows the graph's ids are in an outdated format and a full
+                            // re-index (shonkor index .) is recommended before trusting method-level results.
+                            ReindexRecommended = stats.ReindexRecommended
+                                ? $"Graph built under node-id scheme v{stats.SchemeVersion} < current v{stats.CurrentSchemeVersion}; run a full re-index (shonkor index .) to migrate method/constructor ids."
+                                : null
                         };
                         return SendToolResponse(id, JsonSerializer.Serialize(formattedStats));
                     }
