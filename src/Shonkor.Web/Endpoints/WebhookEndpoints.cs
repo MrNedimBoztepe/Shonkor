@@ -209,7 +209,8 @@ public static class WebhookEndpoints
                             : PluginLoadResult.Empty;
                         activeParsers.AddRange(pluginLoad.Parsers);
 
-                        var scanner = new GraphIndexScanner(storage, activeParsers, webhookLogger);
+                        var scanner = new GraphIndexScanner(storage, activeParsers, webhookLogger,
+                            semanticCsharp: config.GetValue<bool>("Indexing:SemanticCSharp"));
                         var projectConfig = pm.GetProjectConfig(project.Name);
 
                         webhookLogger.LogInformation("Starting background incremental index for push event on project: {Project}", project.Name);

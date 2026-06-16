@@ -14,10 +14,16 @@ public static class CrossTechLinker
     /// <summary>
     /// Executes the post-processing phase, mapping cross-technology edges and Helix architecture modules.
     /// </summary>
+    /// <param name="resolveCSharpTypeReferences">
+    /// When true (default), resolves C# <c>referencedTypes</c> into <c>REFERENCES_TYPE</c> edges by NAME.
+    /// Set to false when the semantic linker (<see cref="SemanticCsharpLinker"/>) is active — it produces
+    /// those edges exactly (resolved symbols), so the ambiguous name matching must not also run.
+    /// </param>
     public static async Task EstablishCrossTechnologyConnectionsAsync(
         IGraphStorageProvider storage,
         string directoryPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool resolveCSharpTypeReferences = true)
     {
         ArgumentNullException.ThrowIfNull(storage);
 
@@ -107,40 +113,44 @@ public static class CrossTechLinker
             }
         }
 
-        // 4.5 Resolve C# type references (referencedTypes property) into REFERENCES_TYPE edges.
+        // 4.5 Resolve C# type references (referencedTypes property) into REFERENCES_TYPE edges by NAME.
         // This turns the parser's bare type-name references into real node-to-node dependency edges,
-        // enabling "who uses type X?" impact traversal across files.
-        var typeDefinitionsByName = new Dictionary<string, List<GraphNode>>(StringComparer.Ordinal);
-        foreach (var def in allNodes.Where(n => n.Type is "Class" or "Interface" or "Record" or "Struct" or "Enum"))
+        // enabling "who uses type X?" impact traversal across files. Skipped when the semantic linker is
+        // active — it resolves these exactly (a name match creates an edge to EVERY same-named type).
+        if (resolveCSharpTypeReferences)
         {
-            if (string.IsNullOrEmpty(def.Name)) continue;
-            if (!typeDefinitionsByName.TryGetValue(def.Name, out var list))
+            var typeDefinitionsByName = new Dictionary<string, List<GraphNode>>(StringComparer.Ordinal);
+            foreach (var def in allNodes.Where(n => n.Type is "Class" or "Interface" or "Record" or "Struct" or "Enum"))
             {
-                list = new List<GraphNode>();
-                typeDefinitionsByName[def.Name] = list;
-            }
-            list.Add(def);
-        }
-
-        foreach (var node in allNodes)
-        {
-            if (!node.Properties.TryGetValue("referencedTypes", out var referencedCsv) || string.IsNullOrWhiteSpace(referencedCsv))
-            {
-                continue;
-            }
-
-            foreach (var typeName in referencedCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                if (!typeDefinitionsByName.TryGetValue(typeName, out var definitions))
+                if (string.IsNullOrEmpty(def.Name)) continue;
+                if (!typeDefinitionsByName.TryGetValue(def.Name, out var list))
                 {
-                    continue; // Reference to a type not defined in this codebase (e.g. BCL) -> no edge.
+                    list = new List<GraphNode>();
+                    typeDefinitionsByName[def.Name] = list;
+                }
+                list.Add(def);
+            }
+
+            foreach (var node in allNodes)
+            {
+                if (!node.Properties.TryGetValue("referencedTypes", out var referencedCsv) || string.IsNullOrWhiteSpace(referencedCsv))
+                {
+                    continue;
                 }
 
-                foreach (var definition in definitions)
+                foreach (var typeName in referencedCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 {
-                    if (definition.Id == node.Id) continue; // skip self
+                    if (!typeDefinitionsByName.TryGetValue(typeName, out var definitions))
+                    {
+                        continue; // Reference to a type not defined in this codebase (e.g. BCL) -> no edge.
+                    }
 
-                    newEdges.Add(new GraphEdge { SourceId = node.Id, TargetId = definition.Id, Relationship = "REFERENCES_TYPE" });
+                    foreach (var definition in definitions)
+                    {
+                        if (definition.Id == node.Id) continue; // skip self
+
+                        newEdges.Add(new GraphEdge { SourceId = node.Id, TargetId = definition.Id, Relationship = "REFERENCES_TYPE" });
+                    }
                 }
             }
         }
