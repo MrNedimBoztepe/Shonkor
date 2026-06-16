@@ -57,6 +57,19 @@ public interface IGraphStore
     Task<IReadOnlyList<string>> GetAllIndexedFilePathsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Retrieves all nodes whose <see cref="GraphNode.FilePath"/> equals <paramref name="filePath"/>
+    /// (the symbols declared in that file). Used by the scoped relink after a single-file re-index.
+    /// </summary>
+    Task<IReadOnlyList<GraphNode>> GetNodesByFilePathAsync(string filePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves the given type names to their definition nodes (Class/Interface/Record/Struct/Enum),
+    /// keyed by name (a name may map to several same-named definitions across namespaces/files). Lets a
+    /// scoped relink resolve only the names a file references, instead of loading the whole graph.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, IReadOnlyList<GraphNode>>> GetDefinitionsByNamesAsync(IEnumerable<string> names, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the stored content hash for each of the given File node IDs (paths) that exist,
     /// keyed by node ID. Used for fast incremental-scan change detection without loading content.
     /// </summary>

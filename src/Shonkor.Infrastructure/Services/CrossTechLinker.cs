@@ -205,6 +205,71 @@ public static class CrossTechLinker
         }
     }
 
+    /// <summary>
+    /// Scoped relink for a single re-indexed file: recomputes just <b>that file's</b> outgoing
+    /// <c>REFERENCES_TYPE</c> edges (by NAME) without a whole-graph pass. After <c>reindex_file</c> the file's
+    /// symbols are re-parsed but their cross-file reference edges are gone (those are a whole-graph post-pass);
+    /// this restores them so impact analysis stays correct across an edit. It resolves only the names the file
+    /// references (<see cref="IGraphStore.GetDefinitionsByNamesAsync"/>) rather than loading the whole graph.
+    /// </summary>
+    /// <remarks>
+    /// Name-based (the default resolution). When the semantic C# linker is active it owns exact
+    /// <c>REFERENCES_TYPE</c>/<c>CALLS</c> resolution via a compilation, which is a whole-graph concern — so the
+    /// caller skips this in semantic mode (incremental semantic relink is a later drift layer).
+    /// </remarks>
+    public static async Task RelinkFileReferenceTypesAsync(
+        IGraphStorageProvider storage,
+        string filePath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(storage);
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        var fileNodes = await storage.GetNodesByFilePathAsync(filePath, cancellationToken).ConfigureAwait(false);
+        if (fileNodes.Count == 0) return;
+
+        // Gather every referenced type name this file declares, then resolve them in one query.
+        var referencedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var node in fileNodes)
+        {
+            if (node.Properties.TryGetValue("referencedTypes", out var csv) && !string.IsNullOrWhiteSpace(csv))
+            {
+                foreach (var name in csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    referencedNames.Add(name);
+                }
+            }
+        }
+        if (referencedNames.Count == 0) return;
+
+        var definitionsByName = await storage.GetDefinitionsByNamesAsync(referencedNames, cancellationToken).ConfigureAwait(false);
+
+        var newEdges = new List<GraphEdge>();
+        foreach (var node in fileNodes)
+        {
+            if (!node.Properties.TryGetValue("referencedTypes", out var csv) || string.IsNullOrWhiteSpace(csv))
+            {
+                continue;
+            }
+
+            foreach (var typeName in csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!definitionsByName.TryGetValue(typeName, out var definitions)) continue;
+
+                foreach (var definition in definitions)
+                {
+                    if (definition.Id == node.Id) continue; // skip self
+                    newEdges.Add(new GraphEdge { SourceId = node.Id, TargetId = definition.Id, Relationship = "REFERENCES_TYPE" });
+                }
+            }
+        }
+
+        if (newEdges.Count > 0)
+        {
+            await storage.UpsertEdgesAsync(newEdges, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private record struct HelixModuleInfo(string Layer, string Module);
 
     /// <summary>

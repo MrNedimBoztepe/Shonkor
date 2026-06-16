@@ -24,7 +24,8 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
   * **Find**: `search_graph` (FTS5), `search_semantic` (vector/meaning), `locate`.
   * **Read**: `signature` (signature only), `get_source` (exact symbol body + `file:start-end`), `outline` (file structure), `get_subgraph`, `generate_capsule`.
   * **Analyze**: `impact_of` (who references it), `depends_on` (what it uses), `dependency_tree` (transitive reference tree), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).
-  * **Plan & apply**: `edit_plan` (a concrete edit checklist), `related_tests` (what to run after a change), `reindex_file` (refresh one file after editing).
+  * **Plan & apply**: `edit_plan` (a concrete edit checklist), `related_tests` (what to run after a change), `reindex_file` (refresh one file after editing — relinks its `REFERENCES_TYPE` edges).
+  * **Freshness (anti-drift)**: `is_fresh` (is one file's graph in sync with disk?), `stale_files` (project-wide drift report: changed / new / deleted).
   * **Memory**: `get_open_threads`, `record_decision`/`milestone`/`task`/`question`.
   * See the [LLM Integration Manual](docs/user/llm_integration.md) for the full reference.
 * **Visual Web Dashboard**: A glassmorphic web interface with interactive 2D force-directed graph visualization (`force-graph`, WebGL Canvas), live physics, code preview (Prism.js), capsule creator, project and plugin management.
