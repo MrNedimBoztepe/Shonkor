@@ -68,14 +68,15 @@ public class SemanticCsharpSpikeTests
         var invocation = tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>().First();
         var symbol = model.GetSymbolInfo(invocation).Symbol;
 
-        // The CALLS edge would point caller -> this node id.
-        Assert.Equal("/repo/S.cs::S::Helper", RoslynSemantics.ToNodeId(symbol));
+        // The CALLS edge would point caller -> this node id (arity-discriminated: Helper has 0 params).
+        Assert.Equal("/repo/S.cs::S::Helper#0", RoslynSemantics.ToNodeId(symbol));
     }
 
     [Fact]
-    public void ToNodeId_Overloads_Collide_KnownLimitation()
+    public void ToNodeId_SameArityOverloads_Collide_KnownLimitation()
     {
-        // The name-based id scheme does not encode signatures, so overloads share one id.
+        // The id encodes arity, not parameter types, so SAME-arity overloads still share one id
+        // (Add(int) and Add(string) both -> ::C::Add#1). This is the accepted v1 residual ambiguity.
         var comp = RoslynSemantics.BuildCompilation(new[]
         {
             ("/repo/C.cs", "namespace N { public class C { public void Add(int a) { } public void Add(string a) { } } }")

@@ -150,7 +150,7 @@ public sealed class RoslynAstParser : IFileParser
         {
             var methodName = node.Identifier.Text;
             var parentName = _currentTypeNodeId is not null ? _currentTypeNodeId.Split("::").Last() : "global";
-            var methodNodeId = CsharpNodeId.ForMember(filePath, parentName, methodName);
+            var methodNodeId = CsharpNodeId.ForMethod(filePath, parentName, methodName, node.ParameterList.Parameters.Count);
 
             Nodes.Add(new GraphNode
             {
@@ -220,7 +220,7 @@ public sealed class RoslynAstParser : IFileParser
         {
             var constructorName = node.Identifier.Text;
             var parentName = _currentTypeNodeId is not null ? _currentTypeNodeId.Split("::").Last() : "global";
-            var constructorNodeId = CsharpNodeId.ForMember(filePath, parentName, "Constructor");
+            var constructorNodeId = CsharpNodeId.ForMethod(filePath, parentName, "Constructor", node.ParameterList.Parameters.Count);
 
             Nodes.Add(new GraphNode
             {
