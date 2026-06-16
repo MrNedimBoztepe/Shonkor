@@ -1,6 +1,6 @@
 # Concept: Method node-id scheme for overloads (semantic C# core, Task 3)
 
-**Status:** Planned · **Part of:** Semantic C# core (`milestone::41058af4`) · **Tracked in Shonkor:** `get_open_threads`
+**Status:** Phase 1 done (arity discriminator) · Phase 2 planned (symbol-derived ids) · **Part of:** Semantic C# core (`milestone::41058af4`) · **Tracked in Shonkor:** `get_open_threads`
 
 ## Problem
 Method (and constructor) node ids are `{filePath}::{TypeName}::{MethodName}` — **no signature**. So overloads collide:
@@ -32,12 +32,12 @@ Rationale: arity is the only discriminator both the syntactic parser and the sem
 - **Backward-compatible UX:** because tool resolution is name-based, the AI-facing behaviour is unchanged; only edge precision improves. Low user-facing risk.
 
 ## Work breakdown
-1. `CsharpNodeId.ForMember` gains an optional arity; methods/constructors include `#{arity}` (single source of truth used by parser **and** `RoslynSemantics.ToNodeId`).
-2. `RoslynAstParser`: pass the syntactic parameter count when building method/constructor ids.
-3. `RoslynSemantics.ToNodeId`: append `methodSymbol.Parameters.Length` for methods/constructors.
-4. Index/schema version bump + a freshness signal recommending a full re-index on mismatch (ties into drift Layer 0).
-5. Tests: two different-arity overloads get **distinct** nodes and `CALLS` to the **correct** one; same-arity collision is asserted as the known v1 limit.
-6. Docs: note the scheme + the same-arity caveat; record Phase 2 (semantic node-extraction) as the follow-up.
+1. ✅ `CsharpNodeId.ForMethod(filePath, type, method, arity)` → `…::{method}#{arity}` (single source of truth used by parser **and** `RoslynSemantics.ToNodeId`); `ForMember` retained for non-overloadable members (properties).
+2. ✅ `RoslynAstParser`: passes `node.ParameterList.Parameters.Count` for methods and constructors.
+3. ✅ `RoslynSemantics.ToNodeId`: appends `methodSymbol.Parameters.Length` for methods/constructors.
+4. ⏳ Index/schema version bump + a freshness signal recommending a full re-index on mismatch (ties into drift Layer 0) — **deferred to the drift-remediation project** (it owns the freshness/version signal).
+5. ✅ Tests: different-arity overloads get **distinct** nodes and `CALLS` to the **correct** one (`DifferentArityOverloads_GetDistinctNodes_AndCallsResolveToTheRightOne`); same-arity collision asserted as the known v1 limit (`SameArityOverloads_Collide_DocumentedV1Limit`, `ToNodeId_SameArityOverloads_Collide_KnownLimitation`).
+6. ✅ Docs: scheme + same-arity caveat documented here and in `CsharpNodeId` XML doc; Phase 2 (semantic node-extraction) recorded as the follow-up.
 
 ## Open questions
 - Separator: `#{arity}` vs another token — must never appear in a method name (safe) and must round-trip if anything parses ids.

@@ -59,9 +59,9 @@ public static class RoslynSemantics
         {
             INamedTypeSymbol type => CsharpNodeId.ForType(file, type.Name),
             IMethodSymbol { MethodKind: MethodKind.Constructor } ctor when ctor.ContainingType is not null
-                => CsharpNodeId.ForMember(file, ctor.ContainingType.Name, "Constructor"),
+                => CsharpNodeId.ForMethod(file, ctor.ContainingType.Name, "Constructor", ctor.Parameters.Length),
             IMethodSymbol method when method.ContainingType is not null
-                => CsharpNodeId.ForMember(file, method.ContainingType.Name, method.Name),
+                => CsharpNodeId.ForMethod(file, method.ContainingType.Name, method.Name, method.Parameters.Length),
             IPropertySymbol prop when prop.ContainingType is not null
                 => CsharpNodeId.ForMember(file, prop.ContainingType.Name, prop.Name),
             _ => null
