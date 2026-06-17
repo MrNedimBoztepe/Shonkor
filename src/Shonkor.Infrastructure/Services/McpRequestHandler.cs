@@ -327,7 +327,10 @@ public sealed class McpRequestHandler
     /// as the default for all tool calls that don't pass an explicit projectName, decoupling the MCP from
     /// the web dashboard's mutable active-project flag.
     /// </param>
-    public McpRequestHandler(ProjectManager projectManager, ContextCapsuleSynthesizer synthesizer, string? contextProjectName = null, bool lockToContextProject = false, IEmbeddingService? embeddingService = null, IEnumerable<IFileParser>? fileParsers = null)
+    /// <summary>Shared compilation cache so a semantic-project <c>reindex_file</c> refreshes CALLS incrementally (swap one tree) instead of rebuilding the compilation per edit. Null = no caching (reindex_file stays name-mode).</summary>
+    private readonly SemanticCompilationCache? _compilationCache;
+
+    public McpRequestHandler(ProjectManager projectManager, ContextCapsuleSynthesizer synthesizer, string? contextProjectName = null, bool lockToContextProject = false, IEmbeddingService? embeddingService = null, IEnumerable<IFileParser>? fileParsers = null, SemanticCompilationCache? compilationCache = null)
     {
         _projectManager = projectManager ?? throw new ArgumentNullException(nameof(projectManager));
         _synthesizer = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
@@ -335,6 +338,7 @@ public sealed class McpRequestHandler
         _lockToContextProject = lockToContextProject;
         _embeddingService = embeddingService;
         _fileParsers = fileParsers;
+        _compilationCache = compilationCache;
     }
 
     /// <summary>
@@ -1203,8 +1207,17 @@ public sealed class McpRequestHandler
                             resolved = System.IO.Path.Combine(basePath, resolved);
                         }
 
-                        var scanner = new GraphIndexScanner(storage, _fileParsers);
-                        var result = await scanner.ScanFileAsync(resolved).ConfigureAwait(false);
+                        // When the project opts into semantic indexing, route through the cached reconcile so
+                        // CALLS / exact REFERENCES_TYPE refresh incrementally (swap one tree) — not just the
+                        // fast name-mode structure. Falls back to the plain single-file path otherwise.
+                        var semantic = _compilationCache is not null
+                            && _projectManager.GetProjects()
+                                .FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase))?.SemanticCSharp == true;
+
+                        var scanner = new GraphIndexScanner(storage, _fileParsers, semanticCsharp: semantic, compilationCache: _compilationCache);
+                        var result = semantic
+                            ? await scanner.ReconcilePathsAsync(basePath, new[] { resolved }).ConfigureAwait(false)
+                            : await scanner.ScanFileAsync(resolved).ConfigureAwait(false);
 
                         var handle = ToHandle(System.IO.Path.GetFullPath(resolved), basePath);
                         if (result.NodesCreated == 0)

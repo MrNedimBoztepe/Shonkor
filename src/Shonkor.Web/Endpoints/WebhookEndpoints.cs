@@ -202,7 +202,7 @@ public static class WebhookEndpoints
 
         // POST /api/webhooks/github/push
         // Triggered by GitHub when code is pushed.
-        app.MapPost("/api/webhooks/github/push", async (HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, ILoggerFactory loggerFactory, CancellationToken ct) =>
+        app.MapPost("/api/webhooks/github/push", async (HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, SemanticCompilationCache compilationCache, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
             try
             {
@@ -252,7 +252,7 @@ public static class WebhookEndpoints
                         activeParsers.AddRange(pluginLoad.Parsers);
 
                         var scanner = new GraphIndexScanner(storage, activeParsers, webhookLogger,
-                            semanticCsharp: EndpointHelpers.UseSemanticCSharp(project, config));
+                            semanticCsharp: EndpointHelpers.UseSemanticCSharp(project, config), compilationCache: compilationCache);
                         var projectConfig = pm.GetProjectConfig(project.Name);
 
                         GraphIndexScanner.IndexResult result;

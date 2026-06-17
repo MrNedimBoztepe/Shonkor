@@ -486,7 +486,8 @@ public static class Program
                 new MarkdownHierarchyParser(),
                 new GraphQLParser()
             };
-            var server = new McpRequestHandler(pm, synthesizer, contextProjectName, fileParsers: mcpParsers);
+            var server = new McpRequestHandler(pm, synthesizer, contextProjectName, fileParsers: mcpParsers,
+                compilationCache: new SemanticCompilationCache());
 
             await server.StartAsync().ConfigureAwait(false);
             return 0;

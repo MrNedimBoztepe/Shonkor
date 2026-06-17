@@ -21,7 +21,7 @@ The current graph is **type/reference-level**: the syntactic Roslyn parser emits
 3. ✅ **Storage/model** — `CALLS` is just a relationship (no schema change). Single-file story solved by drift P3 (incremental semantic relink on reconcile batches).
 4. ✅ **MCP tool** — `call_hierarchy(symbol, direction=callers|callees, depth)` traversing `CALLS`, reusing the `dependency_tree` indented-walk with cycle marking.
 5. ✅ **Tests** — `CallHierarchy_ResolvesCallersAndCallees_OverCallsEdges` (tool), plus the linker/spike CALLS tests; an **extension-method** regression (`ExtensionMethod_CallsEdge_ResolvesToUnreducedArity`).
-6. ⏳ **Perf** — the compilation is built per scan/reconcile batch (bounded); a cached per-project compilation for the interactive loop is the remaining `task::e8ce74ff` / drift follow-up.
+6. ✅ **Perf** — a singleton `SemanticCompilationCache` holds the per-directory compilation and swaps only the edited tree, so incremental reconciles and the semantic `reindex_file` reuse it instead of rebuilding (an O(repo) parse) per edit.
 7. ✅ **Docs** — tool reference (README, llm_integration) + arc42 8.6.
 
 ## Resolved questions
