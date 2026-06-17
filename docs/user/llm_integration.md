@@ -93,6 +93,7 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 | `outline` | A file's type/member structure as an indented `CONTAINS` tree | See what's in a file without reading it |
 | `get_subgraph` | N-hop traversal around seed nodes | Compact `NODES`/`EDGES` text; `verbose: true` for JSON; `maxChars` budget |
 | `generate_capsule` | Markdown capsule with Mermaid + code | `maxChars` caps to a token budget |
+| `architecture` | Module building-block view + Mermaid cross-module dependency diagram | For **arc42 docs**/onboarding: types per module (key ones first), aggregated module edges |
 
 **Analyze — impact & relationships**
 | Tool | Purpose | Note |
