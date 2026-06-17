@@ -90,6 +90,45 @@ public static class WebhookEndpoints
         return true;
     }
 
+    /// <summary>
+    /// Extracts the distinct set of changed file paths (added/modified/removed) from a GitHub push payload's
+    /// <c>commits[]</c>. Returns an empty list when the payload has none (the caller then falls back to a full
+    /// scan). Malformed payloads yield an empty list rather than throwing.
+    /// </summary>
+    private static List<string> ExtractChangedFiles(byte[] body)
+    {
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (!document.RootElement.TryGetProperty("commits", out var commits) || commits.ValueKind != JsonValueKind.Array)
+            {
+                return new List<string>();
+            }
+
+            foreach (var commit in commits.EnumerateArray())
+            {
+                foreach (var field in new[] { "added", "modified", "removed" })
+                {
+                    if (commit.TryGetProperty(field, out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var path in arr.EnumerateArray())
+                        {
+                            var value = path.GetString();
+                            if (!string.IsNullOrWhiteSpace(value)) files.Add(value);
+                        }
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Not a parseable push payload — fall back to a full scan.
+        }
+
+        return files.ToList();
+    }
+
     public static void MapWebhookEndpoints(this WebApplication app)
     {
         // POST /api/webhooks/github/install
@@ -167,7 +206,7 @@ public static class WebhookEndpoints
         {
             try
             {
-                var (ok, _) = await ReadAndVerifyAsync(context, config, ct);
+                var (ok, body) = await ReadAndVerifyAsync(context, config, ct);
                 if (!ok)
                 {
                     return Results.Unauthorized();
@@ -183,11 +222,14 @@ public static class WebhookEndpoints
                     return Results.BadRequest("Project not configured.");
                 }
 
-                // In a real SaaS, we would parse the GitHub Webhook Payload here, 
-                // execute `git pull` or clone the repo into a temporary tenant directory.
-                // For this migration phase, we simulate the webhook by pulling the local repo 
-                // and then running the GraphIndexScanner.
-                
+                // Drift Layer 4: if the push payload names the changed files, reconcile only those (surgical,
+                // via ScanFileAsync with scoped relink) instead of hashing the whole tree.
+                var changedFiles = ExtractChangedFiles(body);
+
+                // In a real SaaS the working tree would be updated (git pull / clone) before this runs.
+                // We reconcile the named changed files against the local tree; if the payload lists none,
+                // we fall back to a full incremental scan.
+
                 // Skip if a scan for this project is already in progress (avoids overlapping scans).
                 if (!pm.TryBeginScan(project.Name))
                 {
@@ -213,8 +255,17 @@ public static class WebhookEndpoints
                             semanticCsharp: config.GetValue<bool>("Indexing:SemanticCSharp"));
                         var projectConfig = pm.GetProjectConfig(project.Name);
 
-                        webhookLogger.LogInformation("Starting background incremental index for push event on project: {Project}", project.Name);
-                        var result = await scanner.ScanDirectoryAsync(project.Path, projectConfig.ExcludePatterns, CancellationToken.None);
+                        GraphIndexScanner.IndexResult result;
+                        if (changedFiles.Count > 0)
+                        {
+                            webhookLogger.LogInformation("Push names {Count} changed file(s); reconciling them for project: {Project}", changedFiles.Count, project.Name);
+                            result = await scanner.ReconcilePathsAsync(project.Path, changedFiles, CancellationToken.None);
+                        }
+                        else
+                        {
+                            webhookLogger.LogInformation("Starting background incremental index for push event on project: {Project}", project.Name);
+                            result = await scanner.ScanDirectoryAsync(project.Path, projectConfig.ExcludePatterns, CancellationToken.None);
+                        }
                         webhookLogger.LogInformation("Index complete: {Files} files scanned, {Nodes} nodes created/updated.", result.FilesScanned, result.NodesCreated);
                     }
                     catch (Exception ex)
