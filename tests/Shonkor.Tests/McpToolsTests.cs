@@ -189,6 +189,51 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task Tools_AnnotateStaleness_WhenFileEditedSinceIndexing()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_stale_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var dbPath = Path.Combine(ws, "g.db");
+        var file = Path.Combine(ws, "Foo.cs");
+        try
+        {
+            await File.WriteAllTextAsync(file, "namespace N { public class Foo { } }");
+            using (var storage = new SqliteGraphStorageProvider(dbPath))
+            {
+                await storage.InitializeAsync();
+                var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+                await scanner.ScanDirectoryAsync(ws, Array.Empty<string>());
+            }
+
+            var registry = new
+            {
+                Organizations = Array.Empty<object>(),
+                Users = Array.Empty<object>(),
+                Projects = new[] { new { Name = "P", Path = ws, DatabasePath = dbPath, OrganizationId = "", RepositoryUrl = "", ApiKey = "" } },
+                ActiveProjectName = "P"
+            };
+            File.WriteAllText(Path.Combine(ws, "projects.json"), JsonSerializer.Serialize(registry));
+
+            // fileParsers enabled -> the handler can hash the file and detect staleness.
+            var handler = new McpRequestHandler(new ProjectManager(ws), new ContextCapsuleSynthesizer(), "P",
+                lockToContextProject: true, fileParsers: new IFileParser[] { new RoslynAstParser() });
+
+            var fresh = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("impact_of", new { symbol = "Foo" })));
+            Assert.DoesNotContain("stale", fresh, StringComparison.OrdinalIgnoreCase);
+
+            // Edit the file on disk WITHOUT reindexing -> analysis must warn it may be stale.
+            await File.WriteAllTextAsync(file, "namespace N { public class Foo { public void Added() { } } }");
+            var stale = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("impact_of", new { symbol = "Foo" })));
+            Assert.Contains("EDITED since indexing", stale);
+        }
+        finally
+        {
+            // Best-effort cleanup: the project's SQLite db may still be open (like SetupAsync's temp dirs).
+            try { if (Directory.Exists(ws)) Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Orient_ReturnsGraphSize_ToolPalette_AndEditLoop()
     {
         var (pm, synth, _) = await SetupAsync();
