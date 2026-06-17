@@ -103,7 +103,7 @@ Shonkor is primarily local but supports a multi-tenant/SaaS mode:
 * **Project from working directory**: The MCP server derives the active project from its working directory (`FindProjectByPath`), not from the web-mutable `ActiveProjectName`. This decouples the dashboard and the AI context.
 * **Lean outputs**: `locate` and `search_graph` output compact text by default (`name -> file:line`) instead of JSON; `get_subgraph` outputs a compact `NODES`/`EDGES` block. `verbose: true` switches to full JSON. This reduces the token consumption of shallow lookups by ~90%.
 * **Reusable handles**: file-path node ids are emitted as short `@/<relative>` handles, which round-trip straight back as seeds/paths — cutting token cost and avoiding brittle absolute ids.
-* **Full toolset**: beyond find/read, the server exposes analysis (`impact_of`, `depends_on`, `find_usages`, `find_path`, `implementations_of`, `verify_exists`), the agentic **edit loop** (`get_source`, `reindex_file`, `edit_plan`, `related_tests`), and session memory (`get_open_threads`, `record_*`). See the [LLM Integration Manual](../../user/llm_integration.md) for the full reference.
+* **Full toolset**: beyond find/read, the server exposes analysis (`impact_of`, `depends_on`, `dependency_tree`, `call_hierarchy` (method-level callers/callees over `CALLS`, semantic mode), `find_usages`, `find_path`, `implementations_of`, `verify_exists`), the agentic **edit loop** (`get_source`, `reindex_file`, `edit_plan`, `related_tests`), and session memory (`get_open_threads`, `record_*`). See the [LLM Integration Manual](../../user/llm_integration.md) for the full reference.
 
 ---
 

@@ -44,7 +44,9 @@ public class McpToolsTests
                 // Tier-3 fixtures (unconnected): a file with a class + method, for signature/outline.
                 new GraphNode { Id = Path.Combine(ws, "Calc.cs"), Name = "Calc.cs", Type = "File", FilePath = Path.Combine(ws, "Calc.cs") },
                 new GraphNode { Id = Path.Combine(ws, "Calc.cs") + "::Calc", Name = "Calc", Type = "Class", FilePath = Path.Combine(ws, "Calc.cs"), StartLine = 1, Content = "class Calc" },
-                new GraphNode { Id = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Name = "Add", Type = "Method", FilePath = Path.Combine(ws, "Calc.cs"), StartLine = 3, Content = "int Add(int a, int b) => a + b;", Properties = new() { ["returnType"] = "int", ["modifiers"] = "public", ["parameters"] = "int a, int b" } }
+                new GraphNode { Id = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Name = "Add", Type = "Method", FilePath = Path.Combine(ws, "Calc.cs"), StartLine = 3, Content = "int Add(int a, int b) => a + b;", Properties = new() { ["returnType"] = "int", ["modifiers"] = "public", ["parameters"] = "int a, int b" } },
+                // call_hierarchy fixture: Caller --calls--> Add.
+                new GraphNode { Id = Path.Combine(ws, "Calc.cs") + "::Calc::Caller", Name = "Caller", Type = "Method", FilePath = Path.Combine(ws, "Calc.cs"), StartLine = 5, Content = "void Caller() => Add(1, 2);" }
             });
             await storage.UpsertEdgesAsync(new[]
             {
@@ -55,7 +57,9 @@ public class McpToolsTests
                 new GraphEdge { SourceId = Path.Combine(ws, "WidgetTests.cs") + "::WidgetTests", TargetId = widgetId, Relationship = "REFERENCES_TYPE" },
                 // Calc.cs CONTAINS Calc CONTAINS Add (for outline).
                 new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs"), TargetId = Path.Combine(ws, "Calc.cs") + "::Calc", Relationship = "CONTAINS" },
-                new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs") + "::Calc", TargetId = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Relationship = "CONTAINS" }
+                new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs") + "::Calc", TargetId = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Relationship = "CONTAINS" },
+                new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs") + "::Calc", TargetId = Path.Combine(ws, "Calc.cs") + "::Calc::Caller", Relationship = "CONTAINS" },
+                new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs") + "::Calc::Caller", TargetId = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Relationship = "CALLS" }
             });
         }
 
@@ -91,6 +95,30 @@ public class McpToolsTests
         Assert.Contains("Gadget", text);             // the dependent is listed
         Assert.Contains("REFERENCES_TYPE", text);    // grouped by relation
         Assert.Contains("Depends on Widget.", text); // the dependent's AI summary is included
+    }
+
+    [Fact]
+    public async Task CallHierarchy_ResolvesCallersAndCallees_OverCallsEdges()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // callers of Add: Caller calls it.
+        var callers = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("call_hierarchy", new { symbol = "Add", direction = "callers" })));
+        Assert.Contains("Caller", callers);
+        Assert.Contains("<--calls--", callers);
+
+        // callees of Caller: it calls Add.
+        var callees = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("call_hierarchy", new { symbol = "Caller", direction = "callees" })));
+        Assert.Contains("Add", callees);
+        Assert.Contains("--calls-->", callees);
+
+        // A method with no callers reports the empty hint (and mentions semantic indexing).
+        var none = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("call_hierarchy", new { symbol = "Caller", direction = "callers" })));
+        Assert.Contains("no callers", none);
     }
 
     [Fact]

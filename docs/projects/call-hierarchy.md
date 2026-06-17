@@ -1,6 +1,6 @@
 # Project: True `call_hierarchy` (semantic CALLS edges)
 
-**Status:** Planned · **Owner:** TBD · **Tracked in Shonkor (Brain graph):** `milestone::253712aa` (+ `decision::2ef4c302`, 7 tasks, 2 questions — all queryable via the `get_open_threads` MCP tool)
+**Status:** ✅ SHIPPED. The `CALLS`-emitting indexer (semantic core) and incremental maintenance (drift P3) were built first; this project added the `call_hierarchy` MCP tool on top. · **Tracked in Shonkor (Brain graph):** `milestone::253712aa`
 
 ## Goal
 Add a method-level `call_hierarchy` MCP tool that answers **"who calls method X?"** (callers) and **"what does X call?"** (callees) across files, to a configurable depth. This requires the indexer to emit **`CALLS`** edges (caller method → callee method).
@@ -16,19 +16,18 @@ The current graph is **type/reference-level**: the syntactic Roslyn parser emits
 - **B) Heuristic name-matching (fallback).** Match invoked names syntactically against indexed method nodes by name. Fast, no compilation, but ambiguous (overloads, same-named methods) → false edges. Use only where A can't resolve.
 
 ## Work breakdown
-1. **Spike** — build a `CSharpCompilation` over a project, resolve a sample `InvocationExpression` to its `IMethodSymbol`, and map that symbol back to a Shonkor method node id. Validate the id round-trip.
-2. **Indexer** — add a `SemanticCallLinker` post-scan pass emitting `CALLS` edges (caller → callee). Config-gated (compilation is expensive).
-3. **Storage/model** — `CALLS` is just a relationship; no schema change. Decide the single-file `reindex_file` story (calls span files; like cross-tech, treat as a whole-graph concern recomputed on full scan).
-4. **MCP tool** — `call_hierarchy(symbol, direction=callers|callees, depth)` traversing `CALLS` (reuse the `dependency_tree` traversal restricted to `CALLS`). Optionally fold `CALLS` into `impact_of` / `find_usages`.
-5. **Tests** — unit (compilation→symbol→edge), integration (small project, callers/callees resolved), MCP tool output.
-6. **Perf** — measure compilation cost on a large repo; cache the compilation; gate behind config; document.
-7. **Docs** — tool reference + a concept section; remove the `dependency_tree` "no call edges" caveat once shipped.
+1. ✅ **Spike** — `SemanticCsharpSpikeTests` (compilation → symbol → node id round-trip).
+2. ✅ **Indexer** — `SemanticCsharpLinker` emits `CALLS` (caller → callee), config-gated by `Indexing:SemanticCSharp`.
+3. ✅ **Storage/model** — `CALLS` is just a relationship (no schema change). Single-file story solved by drift P3 (incremental semantic relink on reconcile batches).
+4. ✅ **MCP tool** — `call_hierarchy(symbol, direction=callers|callees, depth)` traversing `CALLS`, reusing the `dependency_tree` indented-walk with cycle marking.
+5. ✅ **Tests** — `CallHierarchy_ResolvesCallersAndCallees_OverCallsEdges` (tool), plus the linker/spike CALLS tests; an **extension-method** regression (`ExtensionMethod_CallsEdge_ResolvesToUnreducedArity`).
+6. ⏳ **Perf** — the compilation is built per scan/reconcile batch (bounded); a cached per-project compilation for the interactive loop is the remaining `task::e8ce74ff` / drift follow-up.
+7. ✅ **Docs** — tool reference (README, llm_integration) + arc42 8.6.
 
-## Open questions / risks
-- **Metadata references**: a `CSharpCompilation` needs the project's referenced assemblies. How to obtain them without a full MSBuild build? (Best-effort against the running .NET ref assemblies + restore output, or require a build.)
-- **Performance** on large monorepos — gate + cache the compilation.
-- **Incremental reindex**: editing one file changes callers/callees in *other* files; like cross-tech links, `CALLS` is a whole-graph concern that single-file `reindex_file` can't fully maintain.
-- **Language scope**: C# first; JS/PHP call graphs are separate efforts.
+## Resolved questions
+- **Metadata references** — solved via the runtime ref-assembly set (R1, TPA list); no MSBuild build needed.
+- **Incremental reindex** — solved by drift P3 (reconcile batches relink the changed files + referencers semantically).
+- **Extension methods** — a reduced extension-method call symbol drops the `this` parameter; `RoslynSemantics.ToNodeId` unreduces (`ReducedFrom`) so the arity matches the parser's node id (caught live during the first FPM call_hierarchy query).
 
-## Acceptance
-`call_hierarchy("FindPathAsync", direction="callers")` returns the methods that call it across files, to a configurable depth, verified against a known sample — with zero false edges on the sample set.
+## Acceptance — met
+`call_hierarchy` resolves callers/callees across files to a configurable depth; validated live on FPM (e.g. `ConfigureServices` → its real registration calls), with extension-method calls resolving to the correct method node.

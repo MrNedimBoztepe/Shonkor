@@ -94,7 +94,8 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 |------|---------|------|
 | `impact_of` | What references a symbol (incoming) — *"what breaks if I change it?"* | Grouped by relation, with AI summaries |
 | `depends_on` | What a symbol itself uses (outgoing) — its footprint | Inverse of `impact_of` |
-| `dependency_tree` | Transitive reference tree, indented to a depth, `uses` / `used_by` | Type/reference-level (no method-call edges); cycles marked |
+| `dependency_tree` | Transitive reference tree, indented to a depth, `uses` / `used_by` | Type/reference-level; cycles marked |
+| `call_hierarchy` | Method-level **callers** / **callees**, indented to a depth, over `CALLS` | Needs semantic indexing (`Indexing:SemanticCSharp`); recursion marked |
 | `find_usages` | Call/reference sites **with a code snippet** at each (graph-aware grep) | `relation  name  file:line  ⟶ <usage line>` |
 | `find_path` | Shortest connection chain between two symbols | `A --REL--> B <--REL-- C`, real edge directions |
 | `implementations_of` | Types that implement an interface / extend a base type | `IMPLEMENTS`/`EXTENDS`, with `file:line` + summaries |

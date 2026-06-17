@@ -52,6 +52,11 @@ public static class RoslynSemantics
     {
         if (symbol is null) return null;
 
+        // An extension method invoked with member syntax (`a.Foo()`) resolves to the REDUCED symbol, whose
+        // Parameters exclude the `this` parameter. The syntactic parser, however, counted `this` in the
+        // method's arity. Use the original (unreduced) method so the arity — and thus the node id — match.
+        if (symbol is IMethodSymbol { ReducedFrom: { } original }) symbol = original;
+
         var file = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree.FilePath;
         if (string.IsNullOrEmpty(file)) return null; // external / metadata-only symbol
 
