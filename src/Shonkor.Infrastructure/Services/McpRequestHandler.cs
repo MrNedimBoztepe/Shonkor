@@ -222,6 +222,16 @@ public sealed class McpRequestHandler
     /// <c>relation\tname\thandle  — summary</c>. <paramref name="emptyMessage"/> is a format string with
     /// <c>{0}</c>=name and <c>{1}</c>=type.
     /// </summary>
+    /// <summary>
+    /// Containment/grouping edges that are structure, not semantic impact or dependency: a type's parent
+    /// file, a method's parent type, or a node's Helix module. Excluded from impact_of/depends_on/find_usages
+    /// so a method's real impact (its CALLS / REFERENCES_TYPE) isn't drowned by its enclosing type.
+    /// </summary>
+    private static readonly HashSet<string> StructuralRelationships = new(StringComparer.Ordinal)
+    {
+        "CONTAINS", "BELONGS_TO_MODULE"
+    };
+
     private async Task<string> EdgeReportAsync(
         IGraphStorageProvider storage, string? projectName, string symbol, bool incoming, string verb, string emptyMessage)
     {
@@ -232,9 +242,11 @@ public sealed class McpRequestHandler
         // Fetch only the symbol's own edges (+ their endpoint nodes), not its whole 1-hop neighbourhood.
         var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
         // incoming: edges POINTING AT def (its dependents); outgoing: edges ORIGINATING at def (its dependencies).
+        // Structural containment edges are filtered out — they're not impact/dependency.
         var incident = edges
-            .Where(e => incoming ? e.TargetId == def.Id && e.SourceId != def.Id
-                                 : e.SourceId == def.Id && e.TargetId != def.Id)
+            .Where(e => !StructuralRelationships.Contains(e.Relationship)
+                        && (incoming ? e.TargetId == def.Id && e.SourceId != def.Id
+                                     : e.SourceId == def.Id && e.TargetId != def.Id))
             .ToList();
 
         if (incident.Count == 0) return string.Format(emptyMessage, def.Name, def.Type);
@@ -487,7 +499,7 @@ public sealed class McpRequestHandler
                         new
                         {
                             name = "impact_of",
-                            description = "Impact analysis: list the nodes that reference a given symbol (incoming REFERENCES_TYPE/IMPLEMENTS/CALLS edges) — i.e. what would be affected if you change it. Returns 'relation  name  handle  — summary' per dependent, or states that nothing references it. The most token-efficient way to answer 'what breaks if I change X?'.",
+                            description = "Impact analysis: list the nodes that reference a given symbol (incoming REFERENCES_TYPE/IMPLEMENTS/EXTENDS/CALLS edges) — i.e. what would be affected if you change it. For a METHOD this is its callers (incoming CALLS), so impact is precise at the method level (semantic indexing required for CALLS). Structural containment (the enclosing type/file) is excluded. Returns 'relation  name  handle  — summary' per dependent, or states that nothing references it. The most token-efficient way to answer 'what breaks if I change X?'.",
                             inputSchema = new
                             {
                                 type = "object",
@@ -1166,7 +1178,9 @@ public sealed class McpRequestHandler
                         }
 
                         var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
-                        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id).ToList();
+                        // Real usages only — exclude structural containment (e.g. the enclosing type/file).
+                        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id
+                            && !StructuralRelationships.Contains(e.Relationship)).ToList();
                         if (incoming.Count == 0)
                         {
                             return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found in the graph.");

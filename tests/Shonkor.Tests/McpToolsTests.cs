@@ -122,6 +122,25 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task ImpactOf_OnMethod_ShowsCallers_NotStructuralContainment()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // Add is contained by Calc (CONTAINS) and called by Caller (CALLS). Method-level impact = the caller,
+        // not the enclosing type: the structural CONTAINS edge is filtered out.
+        var impact = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("impact_of", new { symbol = "Add" })));
+        Assert.Contains("CALLS", impact);
+        Assert.Contains("Caller", impact);
+        Assert.DoesNotContain("CONTAINS", impact);
+
+        // find_usages likewise lists the caller, not the enclosing type.
+        var usages = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("find_usages", new { symbol = "Add" })));
+        Assert.Contains("Caller", usages);
+        Assert.DoesNotContain("CONTAINS", usages);
+    }
+
+    [Fact]
     public async Task ImpactOf_NoDependents_ReportsSafe()
     {
         var (pm, synth, _) = await SetupAsync();
