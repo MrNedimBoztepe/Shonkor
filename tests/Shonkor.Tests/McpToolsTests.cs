@@ -122,6 +122,46 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task ImpactOf_OnMethod_ShowsCallers_NotStructuralContainment()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // Add is contained by Calc (CONTAINS) and called by Caller (CALLS). Method-level impact = the caller,
+        // not the enclosing type: the structural CONTAINS edge is filtered out.
+        var impact = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("impact_of", new { symbol = "Add" })));
+        Assert.Contains("CALLS", impact);
+        Assert.Contains("Caller", impact);
+        Assert.DoesNotContain("CONTAINS", impact);
+
+        var usages = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("find_usages", new { symbol = "Add" })));
+        Assert.Contains("Caller", usages);
+        Assert.DoesNotContain("CONTAINS", usages);
+    }
+
+    [Fact]
+    public async Task BlastRadius_ListsTransitiveImpact_FlagsTests()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // Widget is referenced by Gadget and by WidgetTests (a test). Blast radius shows both, flags the
+        // test, reports a test count, and excludes structural containment.
+        var blast = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("blast_radius", new { symbol = "Widget" })));
+        Assert.Contains("Gadget", blast);
+        Assert.Contains("WidgetTests", blast);
+        Assert.Contains("REFERENCES_TYPE", blast);
+        Assert.Contains("[test]", blast);
+        Assert.Contains("test(s)", blast);
+        Assert.DoesNotContain("CONTAINS", blast);
+
+        // For a method, the radius is its callers (CALLS).
+        var methodBlast = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("blast_radius", new { symbol = "Add" })));
+        Assert.Contains("Caller", methodBlast);
+        Assert.Contains("CALLS", methodBlast);
+    }
+
+    [Fact]
     public async Task ImpactOf_NoDependents_ReportsSafe()
     {
         var (pm, synth, _) = await SetupAsync();
