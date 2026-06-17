@@ -444,6 +444,81 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task ReconcilePaths_Semantic_RefreshesCallsEdge_WithoutFullScan()
+    {
+        // Drift P3 (incremental semantic relink): editing a file to add a call refreshes its CALLS edge via
+        // a single per-batch compilation, without a whole-graph rescan.
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_semreconcile_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var aFile = Path.Combine(dir, "Svc.cs");
+        try
+        {
+            await File.WriteAllTextAsync(aFile, "namespace N { public class Svc { public void Run() { } public void Helper() { } } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() }, logger: null, semanticCsharp: true);
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            var helperId = Path.GetFullPath(aFile) + "::Svc::Helper#0";
+            var runId = Path.GetFullPath(aFile) + "::Svc::Run#0";
+
+            // Baseline: Run does not call Helper yet.
+            var (e0, _) = await storage.GetIncidentEdgesAsync(helperId);
+            Assert.DoesNotContain(e0, e => e.Relationship == "CALLS");
+
+            // Edit: Run now calls Helper. Reconcile only this file.
+            await File.WriteAllTextAsync(aFile, "namespace N { public class Svc { public void Run() { Helper(); } public void Helper() { } } }");
+            await scanner.ReconcilePathsAsync(dir, new[] { "Svc.cs" });
+
+            var (e1, _) = await storage.GetIncidentEdgesAsync(helperId);
+            Assert.Contains(e1, e => e.SourceId == runId && e.Relationship == "CALLS");
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReconcilePaths_Semantic_RemovesDanglingCallerEdges_OnTypeRename()
+    {
+        // Drift P3: renaming a type in A (reindexing ONLY A) refreshes the referencer B's semantic edges too,
+        // removing B's now-dangling REFERENCES_TYPE/CALLS into the old type — via the reverse index.
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_semrename_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var aFile = Path.Combine(dir, "Widget.cs");
+        try
+        {
+            await File.WriteAllTextAsync(aFile, "namespace N { public class Widget { public void Do() { } } }");
+            await File.WriteAllTextAsync(Path.Combine(dir, "User.cs"), "namespace N { public class User { public void Use() { new Widget().Do(); } } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() }, logger: null, semanticCsharp: true);
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::User";
+
+            // Baseline: User references/calls into Widget.
+            var (e0, _) = await storage.GetIncidentEdgesAsync(userId);
+            Assert.Contains(e0, e => e.SourceId == userId && (e.Relationship == "REFERENCES_TYPE" || e.Relationship == "CALLS"));
+
+            // Rename Widget -> Gadget in A, reconcile ONLY A.
+            await File.WriteAllTextAsync(aFile, "namespace N { public class Gadget { public void Do() { } } }");
+            await scanner.ReconcilePathsAsync(dir, new[] { "Widget.cs" });
+
+            // User's edges into the now-gone Widget are cleared (User's source still says Widget -> unresolved).
+            var (e1, _) = await storage.GetIncidentEdgesAsync(userId);
+            Assert.DoesNotContain(e1, e => e.SourceId == userId && (e.Relationship == "REFERENCES_TYPE" || e.Relationship == "CALLS"));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ReconcilePaths_HandlesAddModifyDelete_Surgically()
     {
         // Drift Layer 4: given an explicit changed-file set, reconcile re-indexes only those (add/modify/
