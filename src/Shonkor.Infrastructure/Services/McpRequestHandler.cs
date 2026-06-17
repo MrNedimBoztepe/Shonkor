@@ -83,6 +83,20 @@ public sealed class McpRequestHandler
         }
     }
 
+    /// <summary>
+    /// Whether the EFFECTIVE project for this call (resolved via <see cref="ResolveProjectName"/>, not the
+    /// raw arg — which is null when the project comes from the relay header) opts into semantic indexing,
+    /// and a compilation cache is wired. Drives the cached semantic relink / semantic compile in
+    /// reindex_file, check_edit and review.
+    /// </summary>
+    private bool IsSemanticProject(string? projectName)
+    {
+        if (_compilationCache is null) return false;
+        var name = ResolveProjectName(projectName) ?? _projectManager.GetActiveProjectName();
+        return _projectManager.GetProjects()
+            .FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.SemanticCSharp == true;
+    }
+
     /// <summary>How many candidate hits the symbol-oriented tools pull before applying their selection heuristic.</summary>
     private const int SymbolSearchLimit = 8;
 
@@ -1341,9 +1355,7 @@ public sealed class McpRequestHandler
                         // When the project opts into semantic indexing, route through the cached reconcile so
                         // CALLS / exact REFERENCES_TYPE refresh incrementally (swap one tree) — not just the
                         // fast name-mode structure. Falls back to the plain single-file path otherwise.
-                        var semantic = _compilationCache is not null
-                            && _projectManager.GetProjects()
-                                .FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase))?.SemanticCSharp == true;
+                        var semantic = IsSemanticProject(projectName);
 
                         var scanner = new GraphIndexScanner(storage, _fileParsers, semanticCsharp: semantic, compilationCache: _compilationCache);
                         var result = semantic
@@ -1394,9 +1406,7 @@ public sealed class McpRequestHandler
                         // Semantic checks only for a semantic project (and when the cache is wired); otherwise
                         // syntax-only, which is always reliable and the most common edit breakage.
                         Microsoft.CodeAnalysis.CSharp.CSharpCompilation? compilation = null;
-                        var semantic = _compilationCache is not null
-                            && _projectManager.GetProjects()
-                                .FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase))?.SemanticCSharp == true;
+                        var semantic = IsSemanticProject(projectName);
                         if (semantic)
                         {
                             compilation = await _compilationCache!.ApplyEditsAsync(basePath, new[] { resolved }).ConfigureAwait(false);
@@ -1705,8 +1715,7 @@ public sealed class McpRequestHandler
                         var impactTypes = new HashSet<string>(StringComparer.Ordinal)
                         { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Constructor", "Property" };
                         var semanticImpact = new HashSet<string>(StringComparer.Ordinal) { "REFERENCES_TYPE", "IMPLEMENTS", "EXTENDS", "CALLS" };
-                        var semanticProject = _compilationCache is not null
-                            && _projectManager.GetProjects().FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase))?.SemanticCSharp == true;
+                        var semanticProject = IsSemanticProject(projectName);
 
                         var compileLines = new List<string>();
                         var changedDefs = new List<GraphNode>();
