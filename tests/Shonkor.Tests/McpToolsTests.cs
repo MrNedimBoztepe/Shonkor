@@ -189,6 +189,52 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task Architecture_ListsModules_AndCrossModuleDependencyDiagram()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_arch_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var dbPath = Path.Combine(ws, "g.db");
+        try
+        {
+            var coreId = Path.Combine(ws, "src", "Core", "A.cs") + "::CoreType";
+            var infraId = Path.Combine(ws, "src", "Infra", "B.cs") + "::InfraType";
+            using (var storage = new SqliteGraphStorageProvider(dbPath))
+            {
+                await storage.InitializeAsync();
+                await storage.UpsertNodesAsync(new[]
+                {
+                    new GraphNode { Id = coreId, Name = "CoreType", Type = "Class", FilePath = Path.Combine(ws, "src", "Core", "A.cs"), StartLine = 1 },
+                    new GraphNode { Id = infraId, Name = "InfraType", Type = "Class", FilePath = Path.Combine(ws, "src", "Infra", "B.cs"), StartLine = 1 }
+                });
+                // Infra depends on Core.
+                await storage.UpsertEdgesAsync(new[] { new GraphEdge { SourceId = infraId, TargetId = coreId, Relationship = "REFERENCES_TYPE" } });
+            }
+
+            var registry = new
+            {
+                Organizations = Array.Empty<object>(),
+                Users = Array.Empty<object>(),
+                Projects = new[] { new { Name = "P", Path = ws, DatabasePath = dbPath, OrganizationId = "", RepositoryUrl = "", ApiKey = "" } },
+                ActiveProjectName = "P"
+            };
+            File.WriteAllText(Path.Combine(ws, "projects.json"), JsonSerializer.Serialize(registry));
+            var handler = new McpRequestHandler(new ProjectManager(ws), new ContextCapsuleSynthesizer(), "P", lockToContextProject: true);
+
+            var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("architecture", new { })));
+
+            Assert.Contains("Core", text);
+            Assert.Contains("Infra", text);
+            Assert.Contains("graph LR", text);            // Mermaid module diagram
+            Assert.Contains("m_Infra -->", text);         // Infra -> Core cross-module edge
+            Assert.Contains("m_Core", text);
+        }
+        finally
+        {
+            try { if (Directory.Exists(ws)) Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Tools_AnnotateStaleness_WhenFileEditedSinceIndexing()
     {
         var ws = Path.Combine(Path.GetTempPath(), $"shonkor_stale_{Guid.NewGuid():N}");

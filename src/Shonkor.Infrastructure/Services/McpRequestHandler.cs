@@ -876,6 +876,19 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
+                            name = "architecture",
+                            description = "Architecture overview for DOCUMENTATION (arc42 building-block view) and onboarding: derives modules from the source layout, lists each module's types (key ones first, by how many things reference them), and renders a Mermaid diagram of the cross-module dependencies (REFERENCES_TYPE/IMPLEMENTS/EXTENDS/CALLS aggregated to module level). One call → the structural skeleton to write up; the prose/rationale is yours to add.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                }
+                            }
+                        },
+                        new
+                        {
                             name = "get_stats",
                             description = "Get overall database statistics, including total node and edge counts grouped by type.",
                             inputSchema = new
@@ -2084,6 +2097,81 @@ OPEN THREADS: {openThreads} (call get_open_threads to resume prior work).";
                         }
 
                         return SendToolResponse(id, markdown);
+                    }
+
+                case "architecture":
+                    {
+                        var basePath = GetProjectBasePath(projectName);
+                        var defTypes = new[] { "Class", "Interface", "Record", "Struct", "Enum" };
+                        var defs = await storage.GetNodesByTypesAsync(defTypes).ConfigureAwait(false);
+                        if (defs.Count == 0)
+                        {
+                            return SendToolResponse(id, "No types in the graph to describe (index the project first).");
+                        }
+
+                        // Derive a module name from each type's path: the segment after 'src/' (e.g. a project
+                        // like 'Shonkor.Core'), else the first directory under the project root.
+                        string? ModuleOf(GraphNode n)
+                        {
+                            if (string.IsNullOrEmpty(n.FilePath)) return null;
+                            var rel = Shorten(n.FilePath, basePath);
+                            var segs = rel.Split('/', '\\').Where(s => s.Length > 0).ToArray();
+                            if (segs.Length == 0) return null;
+                            if (segs.Length > 1 && segs[0].Equals("src", StringComparison.OrdinalIgnoreCase)) return segs[1];
+                            return segs.Length > 1 ? segs[0] : "(root)";
+                        }
+
+                        var moduleOfId = new Dictionary<string, string>(StringComparer.Ordinal);
+                        var byModule = new Dictionary<string, List<GraphNode>>(StringComparer.Ordinal);
+                        foreach (var n in defs)
+                        {
+                            var m = ModuleOf(n);
+                            if (m is null) continue;
+                            moduleOfId[n.Id] = m;
+                            (byModule.TryGetValue(m, out var list) ? list : byModule[m] = new List<GraphNode>()).Add(n);
+                        }
+
+                        // One pass over types: count in-degree (how referenced each type is) and aggregate
+                        // cross-module dependency edges. Bounded to the type count (a documentation tool, not a hot path).
+                        const int maxTypes = 3000;
+                        var semantic = new HashSet<string>(StringComparer.Ordinal) { "REFERENCES_TYPE", "IMPLEMENTS", "EXTENDS", "CALLS" };
+                        var inDegree = new Dictionary<string, int>(StringComparer.Ordinal);
+                        var moduleDeps = new Dictionary<(string From, string To), int>();
+                        var processed = 0;
+                        foreach (var n in defs)
+                        {
+                            if (!moduleOfId.TryGetValue(n.Id, out var mFrom)) continue;
+                            if (processed++ >= maxTypes) break;
+                            var (edges, _) = await storage.GetIncidentEdgesAsync(n.Id).ConfigureAwait(false);
+                            foreach (var e in edges)
+                            {
+                                if (!semantic.Contains(e.Relationship)) continue;
+                                if (e.TargetId == n.Id && e.SourceId != n.Id)
+                                    inDegree[n.Id] = inDegree.GetValueOrDefault(n.Id) + 1;
+                                if (e.SourceId == n.Id && moduleOfId.TryGetValue(e.TargetId, out var mTo) && mTo != mFrom)
+                                    moduleDeps[(mFrom, mTo)] = moduleDeps.GetValueOrDefault((mFrom, mTo)) + 1;
+                            }
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"Architecture of '{projectName ?? "(active)"}' — {byModule.Count} module(s), {defs.Count} type(s).\n");
+                        sb.Append("\nBUILDING BLOCKS (module: types, most-referenced first):\n");
+                        foreach (var kv in byModule.OrderByDescending(kv => kv.Value.Count))
+                        {
+                            var key = kv.Value.OrderByDescending(t => inDegree.GetValueOrDefault(t.Id)).ThenBy(t => t.Name, StringComparer.Ordinal);
+                            var names = string.Join(", ", key.Take(6).Select(t => $"{t.Name}{(inDegree.GetValueOrDefault(t.Id) is int r and > 0 ? $"({r})" : "")}"));
+                            sb.Append($"  {kv.Key} ({kv.Value.Count}): {names}\n");
+                        }
+
+                        sb.Append("\nMODULE DEPENDENCIES (Mermaid):\n```mermaid\ngraph LR\n");
+                        static string Mid(string m) => "m_" + new string(m.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+                        foreach (var m in byModule.Keys.OrderBy(x => x, StringComparer.Ordinal))
+                            sb.Append($"  {Mid(m)}[\"{m}\"]\n");
+                        foreach (var d in moduleDeps.OrderByDescending(d => d.Value))
+                            sb.Append($"  {Mid(d.Key.From)} -->|{d.Value}| {Mid(d.Key.To)}\n");
+                        sb.Append("```\n(Edge labels = number of cross-module type/call references. Prose/rationale is yours to add — this is the structural skeleton for arc42 ch. 5.)");
+
+                        return SendToolResponse(id, sb.ToString());
                     }
 
                 case "get_stats":
