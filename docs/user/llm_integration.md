@@ -107,6 +107,7 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 | `edit_plan` | A concrete edit checklist: the definition + every reference site as `[ ] file:line  name  (relation)` | Ends with the verify steps |
 | `related_tests` | The tests that reference a symbol — what to run after changing it | Test-file heuristic (xUnit/NUnit/Go/Python/JS) |
 | `reindex_file` | Re-index a single file after you edit it, so the graph matches the working tree | Local only (stdio CLI / dev relay); disabled in SaaS; preserves incoming references; relinks the file's `REFERENCES_TYPE` edges |
+| `check_edit` | Compile-check a C# file after editing — **syntax** errors (always reliable) + **semantic** errors (semantic project) | Self-contained (no `dotnet build`); external-package "type not found" noise suppressed; local only |
 | `is_fresh` | Is one file's graph still in sync with disk? | `Fresh`/`Stale`/`Untracked`/`Deleted` (SHA256 vs stored); local only |
 | `stale_files` | Project-wide drift report before trusting graph-wide analysis | Lists `Changed`/`New`/`Deleted`; empty = graph matches the tree; local only |
 
@@ -123,9 +124,10 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 1. `edit_plan` with `symbol: "Bar"` → a ready-to-work checklist: the definition plus every reference site as `[ ] file:line  name  (relation)`.
 2. `get_source` with `symbol: "Bar"` → the exact body to edit (`file:start-end`), no need to read the whole file.
 3. *Make the edits in the working tree.*
-4. `reindex_file` for each changed path → refresh just those files so the graph matches the edit.
-5. `find_usages` / `verify_exists` again → confirm the change landed and nothing dangles.
-6. `related_tests` with `symbol: "Bar"` → exactly which tests to run.
+4. `check_edit` for each changed C# file → confirm the edit compiles (syntax + semantic errors) before moving on.
+5. `reindex_file` for each changed path → refresh just those files so the graph matches the edit.
+6. `find_usages` / `verify_exists` again → confirm the change landed and nothing dangles.
+7. `related_tests` with `symbol: "Bar"` → exactly which tests to run.
 
 This closes the loop — precise read, see the impact, edit, refresh, re-check — far more token-efficient and reliable than repeatedly searching and reading whole files, because the structure and dependency edges live in the graph.
 

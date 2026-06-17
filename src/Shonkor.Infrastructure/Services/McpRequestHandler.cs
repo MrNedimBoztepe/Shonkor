@@ -574,6 +574,21 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
+                            name = "check_edit",
+                            description = "Compile-check a C# file after you edit it: returns the Roslyn SYNTAX errors (always reliable — catches the most common edit breakage like a missing brace/semicolon) and, for a semantic project, SEMANTIC errors scoped to that file. Run it right after editing to confirm the change compiles, BEFORE moving on — your edit validator. Self-contained (no `dotnet build`). Semantic checks resolve in-codebase symbols only (no NuGet refs), so 'type/namespace not found' noise from external packages is suppressed. Accepts an absolute/project-relative path or an '@/' handle. Local only (needs filesystem access).",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    path = new { type = "string", description = "C# file to check: absolute, project-relative, or an '@/<relative>' handle." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "path" }
+                            }
+                        },
+                        new
+                        {
                             name = "is_fresh",
                             description = "Anti-drift check for ONE file: does the graph still match the file on disk? Returns Fresh (in sync), Stale (edited since indexing — run reindex_file), Untracked (on disk but never indexed), or Deleted (indexed but gone from disk). Use before trusting analysis for a file you may have just changed.",
                             inputSchema = new
@@ -1240,6 +1255,53 @@ public sealed class McpRequestHandler
                         }
                         return SendToolResponse(id,
                             $"Reindexed {handle}: {result.NodesCreated} node(s), {result.EdgesCreated} edge(s) in {result.Duration.TotalMilliseconds:F0} ms. (REFERENCES_TYPE relinked for this file; other cross-tech links refresh on a full scan.)");
+                    }
+
+                case "check_edit":
+                    {
+                        var rawPath = args?["path"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(rawPath))
+                        {
+                            return SendError(id, -32602, "Parameter 'path' is required");
+                        }
+                        if (_fileParsers == null)
+                        {
+                            return SendToolResponse(id,
+                                "check_edit is unavailable here (no filesystem access). Run via the local MCP server in the project directory.");
+                        }
+
+                        var basePath = GetProjectBasePath(projectName);
+                        var resolved = FromHandle(rawPath, basePath);
+                        if (!System.IO.Path.IsPathRooted(resolved))
+                        {
+                            resolved = System.IO.Path.Combine(basePath, resolved);
+                        }
+                        resolved = System.IO.Path.GetFullPath(resolved);
+
+                        if (!resolved.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return SendToolResponse(id, "check_edit currently supports C# (.cs) files only.");
+                        }
+                        if (!System.IO.File.Exists(resolved))
+                        {
+                            return SendToolResponse(id, $"File not found on disk: {ToHandle(resolved, basePath)}.");
+                        }
+
+                        var content = await System.IO.File.ReadAllTextAsync(resolved).ConfigureAwait(false);
+
+                        // Semantic checks only for a semantic project (and when the cache is wired); otherwise
+                        // syntax-only, which is always reliable and the most common edit breakage.
+                        Microsoft.CodeAnalysis.CSharp.CSharpCompilation? compilation = null;
+                        var semantic = _compilationCache is not null
+                            && _projectManager.GetProjects()
+                                .FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase))?.SemanticCSharp == true;
+                        if (semantic)
+                        {
+                            compilation = await _compilationCache!.ApplyEditsAsync(basePath, new[] { resolved }).ConfigureAwait(false);
+                        }
+
+                        var report = CSharpDiagnostics.Report(resolved, content, compilation);
+                        return SendToolResponse(id, report);
                     }
 
                 case "is_fresh":
