@@ -663,6 +663,22 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
+                            name = "rename_plan",
+                            description = "A SAFE rename checklist: the declaration site plus every reference site to update, resolved from the GRAPH's exact edges — so for an overloaded method only callers of THIS overload are listed (a text find/replace can't tell overloads apart). Warns when other symbols share the name (which a text replace would wrongly hit). Use before renaming a symbol across files.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The current name of the symbol to rename. 'query' is accepted as an alias." },
+                                    new_name = new { type = "string", description = "The intended new name (shown in the plan; no edits are made)." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
                             name = "signature",
                             description = "Return ONLY a symbol's signature (modifiers, return type, parameters) plus its location — no body. The cheapest way to learn how to call something.",
                             inputSchema = new
@@ -1544,6 +1560,70 @@ public sealed class McpRequestHandler
                             }
                         }
                         sb.Append("After editing: reindex_file each changed path, then find_usages / related_tests to confirm.");
+                        return SendToolResponse(id, sb.ToString());
+                    }
+
+                case "rename_plan":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var newName = args?["new_name"]?.ToString();
+                        var basePath = GetProjectBasePath(projectName);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        // How many OTHER symbols share this name? A text find/replace would wrongly hit them;
+                        // this plan uses the graph's exact edges, which point only at this node.
+                        var sameNamed = (await storage.SearchAsync(symbol, SymbolSearchLimit).ConfigureAwait(false))
+                            .Count(h => IsExactNameMatch(h.Node, symbol) && h.Node.Id != def.Id);
+
+                        var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
+                        // Real reference sites only (exclude structural containment — the parent type isn't a rename site).
+                        var sites = edges
+                            .Where(e => e.TargetId == def.Id && e.SourceId != def.Id && !StructuralRelationships.Contains(e.Relationship))
+                            .ToList();
+
+                        var defLoc = Shorten(string.IsNullOrEmpty(def.FilePath) ? def.Id : def.FilePath, basePath);
+                        if (def.StartLine is int dl) defLoc += $":{dl}";
+
+                        var arrow = string.IsNullOrWhiteSpace(newName) ? "" : $" → '{newName}'";
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"Rename plan — '{def.Name}' ({def.Type}){arrow}\n");
+                        sb.Append($"[ ] 0. {defLoc}\t(declaration — rename here)\n");
+
+                        if (sites.Count == 0)
+                        {
+                            sb.Append("No reference sites in the graph — only the declaration needs renaming.\n");
+                        }
+                        else
+                        {
+                            var precise = sites.Any(e => e.Relationship == "CALLS")
+                                ? " (overload-precise: only callers of THIS overload)"
+                                : "";
+                            sb.Append($"Update {sites.Count} reference site(s){precise}:\n");
+                            var i = 1;
+                            foreach (var e in sites.OrderBy(e => e.Relationship))
+                            {
+                                var user = neighbours.GetValueOrDefault(e.SourceId);
+                                var userName = user?.Name ?? e.SourceId;
+                                var loc = Shorten(user != null && !string.IsNullOrEmpty(user.FilePath) ? user.FilePath : e.SourceId, basePath);
+                                if (user?.StartLine is int ul) loc += $":{ul}";
+                                sb.Append($"[ ] {i++}. {loc}\t{userName}\t({e.Relationship})\n");
+                            }
+                        }
+
+                        if (sameNamed > 0)
+                        {
+                            sb.Append($"⚠ {sameNamed} other symbol(s) are also named '{def.Name}' — a text find/replace would wrongly rename them; this plan targets only the exact node's edges.\n");
+                        }
+                        sb.Append("After editing: check_edit + reindex_file each changed file, then related_tests to confirm.");
                         return SendToolResponse(id, sb.ToString());
                     }
 

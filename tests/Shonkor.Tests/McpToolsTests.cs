@@ -168,6 +168,27 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task RenamePlan_ListsDeclarationAndCallerSites_OverloadPrecise()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // Add is called by Caller (CALLS) and contained by Calc (CONTAINS). The rename plan lists the
+        // declaration + the caller site, notes overload precision, shows the new name, and excludes the
+        // structural CONTAINS edge (the parent type isn't a rename site).
+        var plan = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("rename_plan", new { symbol = "Add", new_name = "Sum" })));
+
+        Assert.Contains("Rename plan", plan);
+        Assert.Contains("'Sum'", plan);            // new name shown
+        Assert.Contains("declaration", plan);
+        Assert.Contains("CALLS", plan);
+        Assert.Contains("Caller", plan);
+        Assert.Contains("overload-precise", plan);
+        Assert.DoesNotContain("CONTAINS", plan);
+    }
+
+    [Fact]
     public async Task Orient_ReturnsGraphSize_ToolPalette_AndEditLoop()
     {
         var (pm, synth, _) = await SetupAsync();
