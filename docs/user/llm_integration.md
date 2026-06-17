@@ -106,7 +106,7 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 | Tool | Purpose | Note |
 |------|---------|------|
 | `edit_plan` | A concrete edit checklist: the definition + every reference site as `[ ] file:line  name  (relation)` | Ends with the verify steps |
-| `related_tests` | The tests that reference a symbol — what to run after changing it | Test-file heuristic (xUnit/NUnit/Go/Python/JS) |
+| `related_tests` | The tests that exercise a symbol **transitively** (via the call/reference graph) — exactly what to run after changing it | Ranked `[direct]`/`[via N hops]`; test-file heuristic (xUnit/NUnit/Go/Python/JS); method-level needs semantic CALLS |
 | `reindex_file` | Re-index a single file after you edit it, so the graph matches the working tree | Local only (stdio CLI / dev relay); disabled in SaaS; preserves incoming references; relinks the file's `REFERENCES_TYPE` edges |
 | `check_edit` | Compile-check a C# file after editing — **syntax** errors (always reliable) + **semantic** errors (semantic project) | Self-contained (no `dotnet build`); external-package "type not found" noise suppressed; local only |
 | `is_fresh` | Is one file's graph still in sync with disk? | `Fresh`/`Stale`/`Untracked`/`Deleted` (SHA256 vs stored); local only |

@@ -46,7 +46,10 @@ public class McpToolsTests
                 new GraphNode { Id = Path.Combine(ws, "Calc.cs") + "::Calc", Name = "Calc", Type = "Class", FilePath = Path.Combine(ws, "Calc.cs"), StartLine = 1, Content = "class Calc" },
                 new GraphNode { Id = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Name = "Add", Type = "Method", FilePath = Path.Combine(ws, "Calc.cs"), StartLine = 3, Content = "int Add(int a, int b) => a + b;", Properties = new() { ["returnType"] = "int", ["modifiers"] = "public", ["parameters"] = "int a, int b" } },
                 // call_hierarchy fixture: Caller --calls--> Add.
-                new GraphNode { Id = Path.Combine(ws, "Calc.cs") + "::Calc::Caller", Name = "Caller", Type = "Method", FilePath = Path.Combine(ws, "Calc.cs"), StartLine = 5, Content = "void Caller() => Add(1, 2);" }
+                new GraphNode { Id = Path.Combine(ws, "Calc.cs") + "::Calc::Caller", Name = "Caller", Type = "Method", FilePath = Path.Combine(ws, "Calc.cs"), StartLine = 5, Content = "void Caller() => Add(1, 2);" },
+                // Transitive-test fixture: ConsumerTests (a test) -> Consumer -> Widget (Widget reached at 2 hops).
+                new GraphNode { Id = Path.Combine(ws, "Consumer.cs") + "::Consumer", Name = "Consumer", Type = "Class", FilePath = Path.Combine(ws, "Consumer.cs"), StartLine = 1, Content = "class Consumer { Widget w; }" },
+                new GraphNode { Id = Path.Combine(ws, "ConsumerTests.cs") + "::ConsumerTests", Name = "ConsumerTests", Type = "Class", FilePath = Path.Combine(ws, "ConsumerTests.cs"), StartLine = 1, Content = "class ConsumerTests { Consumer sut; }" }
             });
             await storage.UpsertEdgesAsync(new[]
             {
@@ -59,7 +62,10 @@ public class McpToolsTests
                 new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs"), TargetId = Path.Combine(ws, "Calc.cs") + "::Calc", Relationship = "CONTAINS" },
                 new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs") + "::Calc", TargetId = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Relationship = "CONTAINS" },
                 new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs") + "::Calc", TargetId = Path.Combine(ws, "Calc.cs") + "::Calc::Caller", Relationship = "CONTAINS" },
-                new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs") + "::Calc::Caller", TargetId = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Relationship = "CALLS" }
+                new GraphEdge { SourceId = Path.Combine(ws, "Calc.cs") + "::Calc::Caller", TargetId = Path.Combine(ws, "Calc.cs") + "::Calc::Add", Relationship = "CALLS" },
+                // ConsumerTests -> Consumer -> Widget: a test reaching Widget transitively (2 hops).
+                new GraphEdge { SourceId = Path.Combine(ws, "Consumer.cs") + "::Consumer", TargetId = widgetId, Relationship = "REFERENCES_TYPE" },
+                new GraphEdge { SourceId = Path.Combine(ws, "ConsumerTests.cs") + "::ConsumerTests", TargetId = Path.Combine(ws, "Consumer.cs") + "::Consumer", Relationship = "REFERENCES_TYPE" }
             });
         }
 
@@ -159,6 +165,20 @@ public class McpToolsTests
         var methodBlast = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("blast_radius", new { symbol = "Add" })));
         Assert.Contains("Caller", methodBlast);
         Assert.Contains("CALLS", methodBlast);
+    }
+
+    [Fact]
+    public async Task RelatedTests_FindsTransitiveCoverage_RankedByHops()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // WidgetTests references Widget directly; ConsumerTests reaches Widget via Consumer (2 hops).
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("related_tests", new { symbol = "Widget", depth = 3 })));
+        Assert.Contains("WidgetTests", text);
+        Assert.Contains("direct", text);
+        Assert.Contains("ConsumerTests", text);
+        Assert.Contains("via 2 hops", text);
     }
 
     [Fact]
