@@ -633,13 +633,14 @@ public sealed class McpRequestHandler
                         new
                         {
                             name = "related_tests",
-                            description = "List the tests that reference a symbol — i.e. what you should run after changing it. Returns 'testName  file:line' for each referencing node in a test file (xUnit/NUnit/Go/Python/JS conventions). States plainly when nothing covers it.",
+                            description = "Precise test impact: the tests that exercise a symbol TRANSITIVELY (a test that calls A which calls the changed method is found too), via the call/reference graph — i.e. exactly what to run after changing it. Returns 'testName  file:line  [direct|via N hops]', ranked closest-first (xUnit/NUnit/Go/Python/JS conventions). Method-level transitivity needs semantic indexing (CALLS). States plainly when nothing covers it.",
                             inputSchema = new
                             {
                                 type = "object",
                                 properties = new
                                 {
                                     symbol = new { type = "string", description = "The type/method/symbol name to find tests for. 'query' is accepted as an alias." },
+                                    depth = new { type = "integer", description = "How many hops of transitive coverage to follow (default 3, max 6)." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "symbol" }
@@ -1440,27 +1441,51 @@ public sealed class McpRequestHandler
                             return SendToolResponse(id, $"No definition found for '{symbol}'.");
                         }
 
-                        var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
-                        var tests = edges
-                            .Where(e => e.TargetId == def.Id && e.SourceId != def.Id)
-                            .Select(e => neighbours.GetValueOrDefault(e.SourceId))
-                            .Where(n => n != null && LooksLikeTest(n!.FilePath))
-                            .DistinctBy(n => n!.Id)
-                            .ToList();
+                        var depth = Math.Clamp(ReadInt(args?["depth"], 3), 1, 6);
+
+                        // Transitive test impact: BFS over INCOMING impact edges (a test that calls A which
+                        // calls the changed method covers it indirectly). Traverse THROUGH every node, but
+                        // collect only test-file nodes, recording the shortest hop distance to each.
+                        const int maxVisit = 600;
+                        var tests = new Dictionary<string, (int Depth, GraphNode Node)>(StringComparer.Ordinal);
+                        var visited = new HashSet<string>(StringComparer.Ordinal) { def.Id };
+                        var frontier = new List<string> { def.Id };
+
+                        for (var d = 1; d <= depth && frontier.Count > 0 && visited.Count < maxVisit; d++)
+                        {
+                            var next = new List<string>();
+                            foreach (var nodeId in frontier)
+                            {
+                                var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
+                                foreach (var e in edges)
+                                {
+                                    if (e.TargetId != nodeId || e.SourceId == nodeId) continue;       // incoming only
+                                    if (StructuralRelationships.Contains(e.Relationship)) continue;    // skip containment
+                                    if (!visited.Add(e.SourceId)) continue;
+                                    next.Add(e.SourceId);                                              // keep traversing transitively
+                                    var n = neighbours.GetValueOrDefault(e.SourceId);
+                                    if (n != null && LooksLikeTest(n.FilePath)) tests[e.SourceId] = (d, n);
+                                    if (visited.Count >= maxVisit) break;
+                                }
+                                if (visited.Count >= maxVisit) break;
+                            }
+                            frontier = next;
+                        }
 
                         if (tests.Count == 0)
                         {
                             return SendToolResponse(id,
-                                $"No tests in the graph reference '{def.Name}' directly — the change may be untested, or covered only indirectly.");
+                                $"No tests in the graph reach '{def.Name}' within {depth} hop(s) — the change may be untested (or covered only beyond depth {depth} / via edges not in the graph).");
                         }
 
                         var sb = new System.Text.StringBuilder();
-                        sb.Append($"{tests.Count} test(s) likely covering '{def.Name}' (run these after changing it):\n");
-                        foreach (var t in tests)
+                        sb.Append($"{tests.Count} test(s) covering '{def.Name}' transitively (run these after changing it):\n");
+                        foreach (var t in tests.Values.OrderBy(t => t.Depth).ThenBy(t => t.Node.Name, StringComparer.Ordinal))
                         {
-                            var loc = Shorten(string.IsNullOrEmpty(t!.FilePath) ? t.Id : t.FilePath, basePath);
-                            if (t.StartLine is int line) loc += $":{line}";
-                            sb.Append($"{t.Name}\t{loc}\n");
+                            var loc = Shorten(string.IsNullOrEmpty(t.Node.FilePath) ? t.Node.Id : t.Node.FilePath, basePath);
+                            if (t.Node.StartLine is int line) loc += $":{line}";
+                            var via = t.Depth == 1 ? "direct" : $"via {t.Depth} hops";
+                            sb.Append($"{t.Node.Name}\t{loc}\t[{via}]\n");
                         }
                         return SendToolResponse(id, sb.ToString().TrimEnd());
                     }
