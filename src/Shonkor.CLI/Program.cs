@@ -44,6 +44,10 @@ public static class Program
             case "mcp-proxy":
                 return await McpProxyClient.RunAsync(args);
 
+            case "agents":
+                HandleAgents();
+                return 0;
+
             default:
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine($"Unknown command: '{args[0]}'");
@@ -92,6 +96,10 @@ public static class Program
         Console.Write("  mcp-proxy ");
         Console.ResetColor();
         Console.WriteLine("Proxy MCP JSON-RPC traffic over HTTP to a Shonkor SaaS remote backend.");
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.Write("  agents  ");
+        Console.ResetColor();
+        Console.WriteLine("Print an AGENTS.md/CLAUDE.md snippet teaching AI assistants to use the graph (e.g. shonkor agents >> AGENTS.md).");
         Console.WriteLine();
 
         Console.WriteLine("Command Details & Options:");
@@ -130,6 +138,26 @@ public static class Program
         Console.WriteLine("    -u, --url <url>          The remote Shonkor Web API endpoint for MCP relay (default: http://localhost:5000/api/mcp/relay)");
         Console.WriteLine("    -p, --project <name>     Target project on the remote server (optional, usually provided by env var SHONKOR_PROJECT)");
         Console.WriteLine(@"==========================================================================");
+    }
+
+    /// <summary>
+    /// Prints a ready-to-paste AGENTS.md / CLAUDE.md section so an AI assistant reflexively uses the
+    /// Shonkor graph (and its edit-validation loop) instead of grepping. Written to stdout — the user
+    /// decides where to put it (e.g. `shonkor agents >> AGENTS.md`).
+    /// </summary>
+    private static void HandleAgents()
+    {
+        Console.WriteLine(
+@"## Shonkor code graph (MCP)
+
+This project is indexed by **Shonkor** — a precise, self-contained code graph exposed via the `shonkor` MCP server. Prefer its tools over grepping or reading whole files: they are deterministic, token-cheap, and stay in sync with the working tree.
+
+- **Start each session** with `orient` — it shows the graph, the tool palette, and the workflow.
+- **Find:** `locate`, `search_graph`, `search_semantic`. **Read precisely:** `signature`, `get_source`, `outline` (no need to read whole files).
+- **Before changing code:** `blast_radius` / `impact_of` (what could break?), `call_hierarchy` (callers/callees), `depends_on` (footprint).
+- **After editing a C# file:** `check_edit` (does it compile? — Roslyn, no build) → `reindex_file` (refresh the graph) → run exactly the tests `related_tests` names.
+- **Never claim a symbol exists** without `verify_exists`. Check freshness with `is_fresh` / `stale_files` when in doubt.
+");
     }
 
     private static void HandleInit()

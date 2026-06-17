@@ -21,6 +21,7 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 * **100% Offline & Self-Contained**: Local SQLite database (`shonkor.db`) with FTS5 full-text search and recursive CTE subgraph queries. No external API dependencies.
 * **Token-Optimized Context Capsule Synthesizer**: Generates prompt-ready Markdown files including automatic **Mermaid.js** architecture diagrams.
 * **MCP Server (Model Context Protocol)**: Provides the graph directly to AI assistants like **Claude** and **Antigravity** with a token-efficient toolset that closes the agentic edit loop:
+  * **Start here**: `orient` (one-call session bootstrap — graph size, tool palette, the edit loop). Run `shonkor agents` to print an AGENTS.md/CLAUDE.md snippet so assistants reach for the graph reflexively.
   * **Find**: `search_graph` (FTS5), `search_semantic` (vector/meaning), `locate`.
   * **Read**: `signature` (signature only), `get_source` (exact symbol body + `file:start-end`), `outline` (file structure), `get_subgraph`, `generate_capsule`.
   * **Analyze**: `impact_of` (who references it), `depends_on` (what it uses), `dependency_tree` (transitive reference tree), `call_hierarchy` (method-level callers/callees over `CALLS`; semantic mode), `blast_radius` (transitive ranked impact of a change, with affected tests flagged), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).

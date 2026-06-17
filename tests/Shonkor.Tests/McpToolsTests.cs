@@ -168,6 +168,22 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task Orient_ReturnsGraphSize_ToolPalette_AndEditLoop()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("orient", new { })));
+
+        Assert.Contains("START HERE", text);
+        Assert.Contains("nodes", text);                 // live graph size
+        Assert.Contains("blast_radius", text);          // impact palette
+        Assert.Contains("check_edit", text);            // edit loop
+        Assert.Contains("related_tests", text);
+        Assert.Contains("OPEN THREADS", text);          // composes the thread count
+    }
+
+    [Fact]
     public async Task RelatedTests_FindsTransitiveCoverage_RankedByHops()
     {
         var (pm, synth, _) = await SetupAsync();
