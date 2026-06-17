@@ -21,7 +21,7 @@ public static class IndexEndpoints
     public static void MapIndexEndpoints(this WebApplication app)
     {
         // POST /api/index - scan and (re)index a project's directory into the graph.
-        app.MapPost("/api/index", async (IndexRequest? request, HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, ILoggerFactory loggerFactory, CancellationToken ct) =>
+        app.MapPost("/api/index", async (IndexRequest? request, HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, SemanticCompilationCache compilationCache, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
             try
             {
@@ -62,7 +62,7 @@ public static class IndexEndpoints
 
                     var storage = await pm.GetStorageProviderAsync(project.Name, ct);
                     var scanner = new GraphIndexScanner(storage, activeParsers, loggerFactory.CreateLogger("Shonkor.Index"),
-                        semanticCsharp: UseSemanticCSharp(project, config));
+                        semanticCsharp: UseSemanticCSharp(project, config), compilationCache: compilationCache);
 
                     var result = await scanner.ScanDirectoryAsync(targetDir, exclusions, ct);
                     var stats = await storage.GetStatisticsAsync(ct);

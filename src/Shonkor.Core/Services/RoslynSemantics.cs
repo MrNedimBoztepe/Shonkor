@@ -25,6 +25,13 @@ public static class RoslynSemantics
         ArgumentNullException.ThrowIfNull(files);
 
         var trees = files.Select(f => CSharpSyntaxTree.ParseText(f.Code, path: f.Path));
+        return BuildCompilationFromTrees(trees);
+    }
+
+    /// <summary>Builds a compilation from already-parsed syntax trees (used by the incremental compilation cache).</summary>
+    public static CSharpCompilation BuildCompilationFromTrees(IEnumerable<SyntaxTree> trees)
+    {
+        ArgumentNullException.ThrowIfNull(trees);
         return CSharpCompilation.Create(
             "ShonkorSemantic",
             trees,

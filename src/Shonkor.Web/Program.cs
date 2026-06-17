@@ -46,6 +46,10 @@ builder.Services.AddSingleton<IEnumerable<IFileParser>>(_ => new List<IFileParse
 
 builder.Services.AddSingleton<ContextCapsuleSynthesizer>();
 
+// Shared per-directory Roslyn compilation cache: makes incremental semantic relinks (reconcile +
+// semantic reindex_file) reuse the compilation (swap one tree) instead of rebuilding it per edit.
+builder.Services.AddSingleton<SemanticCompilationCache>();
+
 // Semantic enrichment backend (Ollama) + the background worker that drives it.
 builder.Services.AddHttpClient<ISemanticAnalyzer, OllamaSemanticAnalyzer>();
 builder.Services.AddHttpClient<IEmbeddingService, OllamaEmbeddingService>();

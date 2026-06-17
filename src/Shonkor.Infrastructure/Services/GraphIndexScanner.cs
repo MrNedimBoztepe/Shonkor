@@ -34,8 +34,9 @@ public sealed class GraphIndexScanner
     /// server (e.g. via <c>reindex_file</c>).
     /// </param>
     private readonly bool _semanticCsharp;
+    private readonly SemanticCompilationCache? _compilationCache;
 
-    public GraphIndexScanner(IGraphStorageProvider storage, IEnumerable<IFileParser> parsers, ILogger? logger = null, bool semanticCsharp = false)
+    public GraphIndexScanner(IGraphStorageProvider storage, IEnumerable<IFileParser> parsers, ILogger? logger = null, bool semanticCsharp = false, SemanticCompilationCache? compilationCache = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(parsers);
@@ -44,6 +45,7 @@ public sealed class GraphIndexScanner
         _parsers = parsers.ToList();
         _logger = logger;
         _semanticCsharp = semanticCsharp;
+        _compilationCache = compilationCache;
     }
 
     /// <summary>Routes a scan diagnostic to the logger, or to stderr — never stdout (see ctor remarks).</summary>
@@ -221,6 +223,9 @@ public sealed class GraphIndexScanner
         {
             cancellationToken.ThrowIfCancellationRequested();
             await SemanticCsharpLinker.EstablishSemanticEdgesAsync(_storage, directoryPath, cancellationToken).ConfigureAwait(false);
+            // A full scan re-read the whole tree; drop any cached compilation so the next incremental
+            // reconcile rebuilds from the current sources rather than swapping onto a stale base.
+            _compilationCache?.Invalidate(directoryPath);
         }
 
         // 6. Stamp the graph with the current node-id scheme — the whole tree was just (re)built under it,
@@ -452,7 +457,11 @@ public sealed class GraphIndexScanner
                 relinkSet.Add(referencer);
         }
 
-        var compilation = await SemanticCsharpLinker.BuildCompilationForDirectoryAsync(rootDirectory, cancellationToken).ConfigureAwait(false);
+        // Reuse the cached compilation when available (swap only the changed trees) instead of rebuilding
+        // it (an O(repo) parse) every reconcile; falls back to a fresh build when there's no cache.
+        var compilation = _compilationCache is not null
+            ? await _compilationCache.ApplyEditsAsync(rootDirectory, changedFullPaths, cancellationToken).ConfigureAwait(false)
+            : await SemanticCsharpLinker.BuildCompilationForDirectoryAsync(rootDirectory, cancellationToken).ConfigureAwait(false);
         if (compilation is null) return;
 
         await SemanticCsharpLinker.RelinkFilesAsync(_storage, compilation, relinkSet, cancellationToken).ConfigureAwait(false);

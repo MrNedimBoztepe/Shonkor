@@ -32,17 +32,20 @@ public sealed class DriftReconciliationService : BackgroundService
     private readonly IEnumerable<IFileParser> _parsers;
     private readonly IConfiguration _configuration;
     private readonly ILogger<DriftReconciliationService> _logger;
+    private readonly SemanticCompilationCache _compilationCache;
     private readonly TimeSpan _interval;
 
     public DriftReconciliationService(
         ProjectManager projectManager,
         IEnumerable<IFileParser> parsers,
         IConfiguration configuration,
+        SemanticCompilationCache compilationCache,
         ILogger<DriftReconciliationService> logger)
     {
         _projectManager = projectManager;
         _parsers = parsers;
         _configuration = configuration;
+        _compilationCache = compilationCache;
         _logger = logger;
         _interval = TimeSpan.FromSeconds(Math.Max(0, configuration.GetValue<int?>("Drift:ReconcileIntervalSeconds") ?? 0));
     }
@@ -114,7 +117,7 @@ public sealed class DriftReconciliationService : BackgroundService
                     : PluginLoadResult.Empty;
                 activeParsers.AddRange(pluginLoad.Parsers);
 
-                var scanner = new GraphIndexScanner(storage, activeParsers, _logger, semanticCsharp);
+                var scanner = new GraphIndexScanner(storage, activeParsers, _logger, semanticCsharp, _compilationCache);
                 var projectConfig = _projectManager.GetProjectConfig(project.Name);
 
                 var result = await scanner.ReconcileDriftAsync(project.Path, projectConfig.ExcludePatterns, cancellationToken).ConfigureAwait(false);

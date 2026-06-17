@@ -58,12 +58,16 @@ public static class McpEndpoints
             // In SaaS the tenant's files aren't on this server; running it there would wrongly clear the
             // file's graph. So a tenant-locked session gets null parsers and reindex_file stays disabled.
             var fileParsers = isTenantLocked ? null : context.RequestServices.GetService<IEnumerable<IFileParser>>();
+            // Shared compilation cache (singleton) so a semantic-project reindex_file refreshes CALLS
+            // incrementally. Only for trusted-local sessions, alongside the file parsers it depends on.
+            var compilationCache = isTenantLocked ? null : context.RequestServices.GetService<SemanticCompilationCache>();
 
             // lockToContextProject prevents the per-tool projectName argument from escaping the
             // authenticated tenant. Only enabled when the request was key-authenticated.
             // The embedding backend (Ollama) is wired here so search_semantic works over the HTTP relay.
             var handler = new McpRequestHandler(projectManager, synthesizer, projectName,
-                lockToContextProject: isTenantLocked, embeddingService: embeddingService, fileParsers: fileParsers);
+                lockToContextProject: isTenantLocked, embeddingService: embeddingService, fileParsers: fileParsers,
+                compilationCache: compilationCache);
 
             using var reader = new StreamReader(context.Request.Body);
             var body = await reader.ReadToEndAsync();
