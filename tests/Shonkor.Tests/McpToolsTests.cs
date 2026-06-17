@@ -189,6 +189,26 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task Review_BriefsCompile_Impact_AndTests_ForChangedFiles()
+    {
+        var (pm, synth, ws) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // "Change" Widget.cs: the review aggregates its impact (Gadget/Consumer reference Widget) and the
+        // tests reaching it (WidgetTests direct, ConsumerTests via 2 hops).
+        var review = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("review", new { paths = new[] { Path.Combine(ws, "Widget.cs") } })));
+
+        Assert.Contains("Review of 1 changed file", review);
+        Assert.Contains("COMPILE:", review);
+        Assert.Contains("IMPACT:", review);
+        Assert.Contains("TESTS TO RUN", review);
+        Assert.Contains("WidgetTests", review);
+        Assert.Contains("ConsumerTests", review);
+        Assert.Contains("RISK:", review);
+    }
+
+    [Fact]
     public async Task Architecture_ListsModules_AndCrossModuleDependencyDiagram()
     {
         var ws = Path.Combine(Path.GetTempPath(), $"shonkor_arch_{Guid.NewGuid():N}");

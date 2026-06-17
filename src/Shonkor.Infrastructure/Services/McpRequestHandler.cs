@@ -706,6 +706,22 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
+                            name = "review",
+                            description = "Code-review briefing for a set of changed C# files (a diff): per file it COMPILE-checks the current content (syntax + semantic), then aggregates the transitive IMPACT of the changed types/methods (who outside the change references/calls them), the TESTS to run (transitively), and the top RISKS. One call → a deterministic 'what does this change affect and break?' review. Local filesystem only for the compile step.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    paths = new { type = "array", items = new { type = "string" }, description = "The changed files (absolute, project-relative, or '@/' handles). 'path' is accepted for a single file." },
+                                    path = new { type = "string", description = "A single changed file (alternative to 'paths')." },
+                                    depth = new { type = "integer", description = "Transitive impact depth (default 3, max 6)." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                }
+                            }
+                        },
+                        new
+                        {
                             name = "signature",
                             description = "Return ONLY a symbol's signature (modifiers, return type, parameters) plus its location — no body. The cheapest way to learn how to call something.",
                             inputSchema = new
@@ -1665,6 +1681,109 @@ public sealed class McpRequestHandler
                         }
                         sb.Append("After editing: check_edit + reindex_file each changed file, then related_tests to confirm.");
                         return SendToolResponse(id, sb.ToString() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
+                    }
+
+                case "review":
+                    {
+                        var basePath = GetProjectBasePath(projectName);
+                        var rawPaths = (args?["paths"] as JsonArray)?.Select(x => x?.ToString()).Where(s => !string.IsNullOrWhiteSpace(s)).ToList()
+                                       ?? new List<string?>();
+                        var single = args?["path"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(single)) rawPaths.Add(single);
+                        if (rawPaths.Count == 0)
+                        {
+                            return SendError(id, -32602, "Provide the changed files via 'paths' (array) or 'path'.");
+                        }
+
+                        var fullPaths = rawPaths
+                            .Select(p => { var r = FromHandle(p!, basePath); return System.IO.Path.IsPathRooted(r) ? System.IO.Path.GetFullPath(r) : System.IO.Path.GetFullPath(System.IO.Path.Combine(basePath, r)); })
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                        var changedFiles = new HashSet<string>(fullPaths, StringComparer.OrdinalIgnoreCase);
+                        var depth = Math.Clamp(ReadInt(args?["depth"], 3), 1, 6);
+
+                        var impactTypes = new HashSet<string>(StringComparer.Ordinal)
+                        { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Constructor", "Property" };
+                        var semanticImpact = new HashSet<string>(StringComparer.Ordinal) { "REFERENCES_TYPE", "IMPLEMENTS", "EXTENDS", "CALLS" };
+                        var semanticProject = _compilationCache is not null
+                            && _projectManager.GetProjects().FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase))?.SemanticCSharp == true;
+
+                        var compileLines = new List<string>();
+                        var changedDefs = new List<GraphNode>();
+                        var compileErrorFiles = 0;
+                        foreach (var full in fullPaths)
+                        {
+                            foreach (var n in await storage.GetNodesByFilePathAsync(full).ConfigureAwait(false))
+                                if (impactTypes.Contains(n.Type)) changedDefs.Add(n);
+
+                            var rel = Shorten(full, basePath);
+                            if (_fileParsers != null && full.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(full))
+                            {
+                                var content = await System.IO.File.ReadAllTextAsync(full).ConfigureAwait(false);
+                                Microsoft.CodeAnalysis.CSharp.CSharpCompilation? comp = semanticProject
+                                    ? await _compilationCache!.ApplyEditsAsync(basePath, new[] { full }).ConfigureAwait(false)
+                                    : null;
+                                var firstLine = CSharpDiagnostics.Report(full, content, comp).Split('\n')[0];
+                                if (!firstLine.StartsWith("OK", StringComparison.Ordinal)) compileErrorFiles++;
+                                compileLines.Add($"  {rel}: {firstLine}");
+                            }
+                            else
+                            {
+                                compileLines.Add($"  {rel}: (not compile-checked)");
+                            }
+                        }
+
+                        // Transitive impact seeded from ALL changed definitions; skip nodes inside the change itself.
+                        const int maxVisit = 800;
+                        var affected = new Dictionary<string, GraphNode?>(StringComparer.Ordinal);
+                        var tests = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
+                        var visited = new HashSet<string>(changedDefs.Select(d => d.Id), StringComparer.Ordinal);
+                        var frontier = changedDefs.Select(d => d.Id).ToList();
+                        for (var d = 1; d <= depth && frontier.Count > 0 && visited.Count < maxVisit; d++)
+                        {
+                            var next = new List<string>();
+                            foreach (var nodeId in frontier)
+                            {
+                                var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
+                                foreach (var e in edges)
+                                {
+                                    if (e.TargetId != nodeId || e.SourceId == nodeId) continue;
+                                    if (!semanticImpact.Contains(e.Relationship)) continue;
+                                    if (!visited.Add(e.SourceId)) continue;
+                                    var n = neighbours.GetValueOrDefault(e.SourceId);
+                                    if (n != null && !string.IsNullOrEmpty(n.FilePath) && changedFiles.Contains(n.FilePath)) continue; // part of the change
+                                    next.Add(e.SourceId);
+                                    affected[e.SourceId] = n;
+                                    if (n != null && LooksLikeTest(n.FilePath)) tests[e.SourceId] = n;
+                                }
+                            }
+                            frontier = next;
+                        }
+
+                        var affectedFiles = affected.Values.Where(n => !string.IsNullOrEmpty(n?.FilePath)).Select(n => n!.FilePath!).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"Review of {fullPaths.Count} changed file(s) — {changedDefs.Count} changed symbol(s).\n");
+                        sb.Append("\nCOMPILE:\n");
+                        foreach (var l in compileLines) sb.Append(l).Append('\n');
+                        sb.Append($"\nIMPACT: {affected.Count} node(s) across {affectedFiles} file(s) outside the change depend on it.\n");
+                        if (tests.Count > 0)
+                        {
+                            sb.Append($"TESTS TO RUN ({tests.Count}):\n");
+                            foreach (var t in tests.Values.OrderBy(t => t.Name, StringComparer.Ordinal))
+                            {
+                                var loc = Shorten(string.IsNullOrEmpty(t.FilePath) ? t.Id : t.FilePath, basePath);
+                                sb.Append($"  {t.Name}\t{loc}\n");
+                            }
+                        }
+                        else
+                        {
+                            sb.Append("TESTS TO RUN: none found in the graph — the change may be untested.\n");
+                        }
+                        sb.Append("\nRISK: ");
+                        sb.Append(compileErrorFiles > 0 ? $"{compileErrorFiles} file(s) do NOT compile. " : "all checked files compile. ");
+                        sb.Append(affected.Count >= maxVisit ? "Impact is large (capped) — high blast radius." : $"{affected.Count} impacted node(s).");
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
                     }
 
                 case "signature":
