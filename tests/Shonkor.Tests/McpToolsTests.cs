@@ -134,10 +134,31 @@ public class McpToolsTests
         Assert.Contains("Caller", impact);
         Assert.DoesNotContain("CONTAINS", impact);
 
-        // find_usages likewise lists the caller, not the enclosing type.
         var usages = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("find_usages", new { symbol = "Add" })));
         Assert.Contains("Caller", usages);
         Assert.DoesNotContain("CONTAINS", usages);
+    }
+
+    [Fact]
+    public async Task BlastRadius_ListsTransitiveImpact_FlagsTests()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // Widget is referenced by Gadget and by WidgetTests (a test). Blast radius shows both, flags the
+        // test, reports a test count, and excludes structural containment.
+        var blast = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("blast_radius", new { symbol = "Widget" })));
+        Assert.Contains("Gadget", blast);
+        Assert.Contains("WidgetTests", blast);
+        Assert.Contains("REFERENCES_TYPE", blast);
+        Assert.Contains("[test]", blast);
+        Assert.Contains("test(s)", blast);
+        Assert.DoesNotContain("CONTAINS", blast);
+
+        // For a method, the radius is its callers (CALLS).
+        var methodBlast = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("blast_radius", new { symbol = "Add" })));
+        Assert.Contains("Caller", methodBlast);
+        Assert.Contains("CALLS", methodBlast);
     }
 
     [Fact]

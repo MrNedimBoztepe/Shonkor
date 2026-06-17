@@ -224,8 +224,8 @@ public sealed class McpRequestHandler
     /// </summary>
     /// <summary>
     /// Containment/grouping edges that are structure, not semantic impact or dependency: a type's parent
-    /// file, a method's parent type, or a node's Helix module. Excluded from impact_of/depends_on/find_usages
-    /// so a method's real impact (its CALLS / REFERENCES_TYPE) isn't drowned by its enclosing type.
+    /// file, a method's parent type, or a node's Helix module. Excluded from impact_of/depends_on/find_usages/
+    /// blast_radius so a method's real impact (its CALLS / REFERENCES_TYPE) isn't drowned by its enclosing type.
     /// </summary>
     private static readonly HashSet<string> StructuralRelationships = new(StringComparer.Ordinal)
     {
@@ -499,7 +499,7 @@ public sealed class McpRequestHandler
                         new
                         {
                             name = "impact_of",
-                            description = "Impact analysis: list the nodes that reference a given symbol (incoming REFERENCES_TYPE/IMPLEMENTS/EXTENDS/CALLS edges) — i.e. what would be affected if you change it. For a METHOD this is its callers (incoming CALLS), so impact is precise at the method level (semantic indexing required for CALLS). Structural containment (the enclosing type/file) is excluded. Returns 'relation  name  handle  — summary' per dependent, or states that nothing references it. The most token-efficient way to answer 'what breaks if I change X?'.",
+                            description = "Impact analysis: list the nodes that reference a given symbol (incoming REFERENCES_TYPE/IMPLEMENTS/CALLS edges) — i.e. what would be affected if you change it. Returns 'relation  name  handle  — summary' per dependent, or states that nothing references it. The most token-efficient way to answer 'what breaks if I change X?'.",
                             inputSchema = new
                             {
                                 type = "object",
@@ -719,6 +719,22 @@ public sealed class McpRequestHandler
                                     symbol = new { type = "string", description = "The method name (e.g. 'ScanFileAsync'). 'query' is accepted as an alias. Overloads resolve to the first match; use file:line addressing for a specific one." },
                                     direction = new { type = "string", description = "'callers' (incoming, who calls it — default) or 'callees' (outgoing, what it calls)." },
                                     depth = new { type = "integer", description = "Tree depth (default 3, max 6)." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
+                            name = "blast_radius",
+                            description = "Transitive impact ('blast radius') of changing a symbol: the full set of nodes affected DIRECTLY and indirectly, walking incoming impact edges (CALLS callers, REFERENCES_TYPE users, IMPLEMENTS/EXTENDS subtypes, cross-tech) to a depth — ranked by distance, with affected tests flagged [test], and a file/test count. Structural containment is excluded. Use BEFORE a risky change to see everything that could break, deterministically. CALLS-level impact needs semantic indexing.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The symbol you intend to change (e.g. 'GraphNode' or a method). 'query' is accepted as an alias." },
+                                    depth = new { type = "integer", description = "How many hops of transitive impact to follow (default 3, max 6)." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "symbol" }
@@ -1665,6 +1681,84 @@ public sealed class McpRequestHandler
                             sb.Append(" — note: CALLS edges require semantic indexing (Indexing:SemanticCSharp).");
                         }
 
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "blast_radius":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var basePath = GetProjectBasePath(projectName);
+                        var depth = Math.Clamp(ReadInt(args?["depth"], 3), 1, 6);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        // Transitive BFS over INCOMING impact edges (what is affected if def changes),
+                        // excluding structural containment. Each node is recorded at its shortest depth.
+                        const int maxNodes = 200;
+                        var affected = new Dictionary<string, (int Depth, string Rel, GraphNode? Node)>(StringComparer.Ordinal);
+                        var visited = new HashSet<string>(StringComparer.Ordinal) { def.Id };
+                        var frontier = new List<string> { def.Id };
+
+                        for (var d = 1; d <= depth && frontier.Count > 0 && affected.Count < maxNodes; d++)
+                        {
+                            var next = new List<string>();
+                            foreach (var nodeId in frontier)
+                            {
+                                var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
+                                foreach (var e in edges)
+                                {
+                                    if (e.TargetId != nodeId || e.SourceId == nodeId) continue;          // incoming only
+                                    if (StructuralRelationships.Contains(e.Relationship)) continue;       // skip containment
+                                    if (!visited.Add(e.SourceId)) continue;
+                                    affected[e.SourceId] = (d, e.Relationship, neighbours.GetValueOrDefault(e.SourceId));
+                                    next.Add(e.SourceId);
+                                    if (affected.Count >= maxNodes) break;
+                                }
+                                if (affected.Count >= maxNodes) break;
+                            }
+                            frontier = next;
+                        }
+
+                        if (affected.Count == 0)
+                        {
+                            return SendToolResponse(id, $"Blast radius of '{def.Name}' ({def.Type}): nothing depends on it — safe to change in isolation, or it is an entry point. (CALLS-level impact needs semantic indexing.)");
+                        }
+
+                        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        var testCount = 0;
+                        foreach (var (_, info) in affected)
+                        {
+                            var fp = info.Node?.FilePath;
+                            if (!string.IsNullOrEmpty(fp)) files.Add(fp);
+                            if (LooksLikeTest(fp)) testCount++;
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"Blast radius of '{def.Name}' ({def.Type}), depth {depth}: ");
+                        sb.Append($"{affected.Count} node(s) across {files.Count} file(s)");
+                        if (testCount > 0) sb.Append($", {testCount} test(s)");
+                        if (affected.Count >= maxNodes) sb.Append(" (capped)");
+                        sb.Append(".\n");
+
+                        foreach (var group in affected.Values.GroupBy(a => a.Depth).OrderBy(g => g.Key))
+                        {
+                            sb.Append($"\ndepth {group.Key}{(group.Key == 1 ? " (direct)" : "")}:\n");
+                            foreach (var a in group.OrderBy(a => a.Rel, StringComparer.Ordinal))
+                            {
+                                var name = a.Node?.Name ?? a.Node?.Id ?? "?";
+                                var handle = ToHandle(a.Node?.Id ?? string.Empty, basePath);
+                                var testTag = LooksLikeTest(a.Node?.FilePath) ? "  [test]" : "";
+                                sb.Append($"  {a.Rel}\t{name}\t{handle}{testTag}\n");
+                            }
+                        }
                         return SendToolResponse(id, sb.ToString().TrimEnd());
                     }
 
