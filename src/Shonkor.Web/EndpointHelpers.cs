@@ -49,6 +49,14 @@ public static class EndpointHelpers
     /// <summary>Dynamic plugin compilation is effectively RCE and is therefore opt-in only.</summary>
     public static bool PluginsEnabled(IConfiguration config) => config.GetValue<bool>("Security:EnablePlugins");
 
+    /// <summary>
+    /// Whether to use exact semantic C# resolution when indexing <paramref name="project"/>: the
+    /// per-project <see cref="Project.SemanticCSharp"/> setting wins; otherwise the global
+    /// <c>Indexing:SemanticCSharp</c> default applies.
+    /// </summary>
+    public static bool UseSemanticCSharp(Project project, IConfiguration config) =>
+        project.SemanticCSharp ?? config.GetValue<bool>("Indexing:SemanticCSharp");
+
     /// <summary>Compiles workspace plugins into a collectible context; returns <see cref="PluginLoadResult.Empty"/> on any failure.</summary>
     public static PluginLoadResult LoadWorkspacePlugins(string workspacePath)
     {

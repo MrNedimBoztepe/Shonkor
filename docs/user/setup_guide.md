@@ -112,7 +112,8 @@ Each graph also records the **node-id scheme version** it was built under (SQLit
 ### Exact C# resolution (opt-in)
 By default, C# type references are resolved by **name** (fast, but two same-named types in different namespaces are indistinguishable). Enable **semantic resolution** to resolve them **exactly** via a Roslyn `SemanticModel` — disambiguating namespaces, and additionally producing method-level `CALLS` edges:
 
-* **Web / SaaS:** set `Indexing:SemanticCSharp=true` (e.g. `Indexing__SemanticCSharp=true` as an env var).
+* **Per project (recommended):** set `"SemanticCSharp": true` on a project entry in `projects.json`. This wins over the global default, so one heavy/important project (e.g. your main C# solution) can run semantic while the rest stay on the fast name path. Applies to the web index endpoint, the push webhook, and the background drift reconciler.
+* **Web / SaaS global default:** set `Indexing:SemanticCSharp=true` (e.g. `Indexing__SemanticCSharp=true` as an env var) — used for any project that doesn't set its own flag.
 * **CLI:** `SHONKOR_SEMANTIC_CSHARP=true shonkor index .`
 
 It's more accurate (this is what makes impact analysis precise for C#) but heavier — it builds a compilation per scan — so it's off by default. It needs no project build: intra-codebase symbols resolve from the source itself.

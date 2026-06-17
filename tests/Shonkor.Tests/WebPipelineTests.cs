@@ -29,6 +29,23 @@ public class WebPipelineTests : IClassFixture<WebPipelineTests.AppFactory>
     }
 
     [Fact]
+    public void UseSemanticCSharp_PerProjectOverridesGlobalDefault()
+    {
+        var globalOff = new Microsoft.Extensions.Configuration.ConfigurationManager();
+        globalOff["Indexing:SemanticCSharp"] = "false";
+        var globalOn = new Microsoft.Extensions.Configuration.ConfigurationManager();
+        globalOn["Indexing:SemanticCSharp"] = "true";
+
+        // Per-project setting wins, regardless of the global default.
+        Assert.True(Shonkor.Web.EndpointHelpers.UseSemanticCSharp(new Project { SemanticCSharp = true }, globalOff));
+        Assert.False(Shonkor.Web.EndpointHelpers.UseSemanticCSharp(new Project { SemanticCSharp = false }, globalOn));
+
+        // Unset (null) falls back to the global default.
+        Assert.False(Shonkor.Web.EndpointHelpers.UseSemanticCSharp(new Project { SemanticCSharp = null }, globalOff));
+        Assert.True(Shonkor.Web.EndpointHelpers.UseSemanticCSharp(new Project { SemanticCSharp = null }, globalOn));
+    }
+
+    [Fact]
     public async Task Health_IsPublic()
     {
         var res = await _client.GetAsync("/health");
