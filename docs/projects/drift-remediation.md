@@ -1,6 +1,6 @@
 # Project: Graph drift remediation (incremental relink + freshness)
 
-**Status:** P1 + P2 + P3 done (name-mode) — Layers 0–4. Only the incremental *semantic* relink (cached compilation) remains. · **Tracked in Shonkor (Brain graph):** see `get_open_threads`
+**Status:** ✅ COMPLETE — Layers 0–4 (freshness, scoped outgoing relink, reverse-index incoming maintenance, background + git-aware reconciliation) plus incremental semantic relink for reconcile batches. Residual: interactive single-file `reindex_file` defers semantic edges to the next reconcile/full-scan (deliberate perf choice). · **Tracked in Shonkor (Brain graph):** see `get_open_threads`
 
 ## Problem
 Cross-graph edges (`REFERENCES_TYPE`, `BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMPLATE`, `BELONGS_TO_MODULE`, future `CALLS`) are **not** produced by the parser but by a **whole-graph post-scan linker** (`CrossTechLinker`) that resolves each node's stored `referencedTypes` property against the definition nodes. **`reindex_file` skips this linker.** Hence drift in three forms:
@@ -27,12 +27,14 @@ Cross-graph edges (`REFERENCES_TYPE`, `BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMP
 
 **Layer 4 — git-aware / explicit-set reconciliation. ✅ DONE.** `GraphIndexScanner.ReconcilePathsAsync(rootDirectory, paths)` re-indexes a KNOWN changed set (from `git diff --name-only` or a webhook push payload) surgically via `ScanFileAsync` — no whole-tree hashing. The GitHub push webhook now extracts `commits[].added/modified/removed` (`ExtractChangedFiles`) and reconciles exactly those, falling back to a full incremental scan when the payload names none.
 
-**Remaining (P3): incremental SEMANTIC relink.** In semantic mode, `ScanFileAsync` (and therefore both reconcile paths) still skips `CALLS`/exact-`REFERENCES_TYPE` resolution — those rebuild only on a full scan. Doing it incrementally needs a cached Roslyn compilation (reuse it, swap the one edited syntax tree, rebind dependents) held by a longer-lived service. This is the last open piece of the project.
+**Incremental SEMANTIC relink. ✅ DONE (for reconcile batches).** The reconcile paths now refresh exact semantic edges (`CALLS`/`REFERENCES_TYPE`/`IMPLEMENTS`/`EXTENDS`) incrementally. After the per-file `ScanFileAsync` loop, `ReconcilePathsAsync` (in semantic mode) builds **one** compilation for the batch (`SemanticCsharpLinker.BuildCompilationForDirectoryAsync`) and calls `RelinkFilesAsync` for the changed files **plus their type-referencers** (old + new def names, via the reverse index) — clearing those files' outgoing semantic edges and re-emitting only their trees. So a branch switch / pull / push refreshes semantic edges at one-compilation-per-batch cost (not per file, not a whole rescan), and rename/remove danglers from referencers are cleared. `ReconcileDriftAsync` inherits this (it calls `ReconcilePathsAsync`); the `DriftReconciliationService` and the push webhook both pass the semantic flag.
+
+**Residual (minor):** the *interactive* single-file `reindex_file` (`ScanFileAsync` direct) deliberately stays fast — it refreshes structure + name-mode edges immediately but defers semantic edges to the next reconcile (background/webhook/git) or full scan, since a per-keystroke compilation would be too heavy. Incoming danglers from a referencer that uses a renamed symbol *without naming its type* (e.g. via inheritance/extension methods) are caught on the next full scan.
 
 ## Phasing
 - **P1 (highest ROI, low risk): ✅ DONE.** Layer 0 (freshness tools `is_fresh`/`stale_files`) + Layer 1 (scoped outgoing `REFERENCES_TYPE` relink via `GetDefinitionsByNamesAsync`/`GetNodesByFilePathAsync`, wired into `ScanFileAsync`). Fixes the observed case; makes residual drift non-silent.
 - **P2 (reverse index + incoming maintenance): ✅ DONE.** `TypeReferences` reverse-index table + Layer 2 rename/remove/add reconciliation in `ScanFileAsync`, bounded to referencers.
-- **P3 (background + git-aware reconciliation): ✅ DONE except one piece.** Layer 3 (`ReconcileDriftAsync` + `DriftReconciliationService`) and Layer 4 (`ReconcilePathsAsync` + push-webhook wiring) are done. **Open:** incremental *semantic* relink (cached compilation) — the only remaining item before the project is fully complete.
+- **P3 (background + git-aware reconciliation + incremental semantic relink): ✅ DONE.** Layer 3 (`ReconcileDriftAsync` + `DriftReconciliationService`), Layer 4 (`ReconcilePathsAsync` + push-webhook wiring), and the incremental semantic relink (one compilation per reconcile batch, scoped to changed files + referencers). Project complete.
 
 ## Trade-offs / risks
 - Scoped relink needs a fast name→definition lookup, or it degrades to loading the whole graph — `GetDefinitionsByNamesAsync` is the key.

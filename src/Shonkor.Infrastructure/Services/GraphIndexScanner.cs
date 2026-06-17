@@ -385,23 +385,77 @@ public sealed class GraphIndexScanner
         ArgumentNullException.ThrowIfNull(paths);
 
         var stopwatch = Stopwatch.StartNew();
-        var distinct = paths.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase);
+        var fullPaths = paths
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => Path.IsPathRooted(p) ? p : Path.GetFullPath(Path.Combine(rootDirectory, p)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Capture the type names the changed files define BEFORE re-indexing, so a rename/delete in semantic
+        // mode can still relink the referencers of the old name (their incoming edges would otherwise dangle).
+        var defNames = new HashSet<string>(StringComparer.Ordinal);
+        if (_semanticCsharp)
+        {
+            foreach (var full in fullPaths)
+            {
+                foreach (var name in DefinitionNames(await _storage.GetNodesByFilePathAsync(full, cancellationToken).ConfigureAwait(false)))
+                    defNames.Add(name);
+            }
+        }
 
         var filesScanned = 0;
         var nodesCreated = 0;
         var edgesCreated = 0;
-        foreach (var raw in distinct)
+        foreach (var full in fullPaths)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var full = Path.IsPathRooted(raw) ? raw : Path.GetFullPath(Path.Combine(rootDirectory, raw));
             var r = await ScanFileAsync(full, cancellationToken).ConfigureAwait(false);
             filesScanned += r.FilesScanned;
             nodesCreated += r.NodesCreated;
             edgesCreated += r.EdgesCreated;
         }
 
+        // Incremental SEMANTIC relink (drift): refresh CALLS / exact REFERENCES_TYPE / IMPLEMENTS / EXTENDS
+        // for the changed files and their referencers, using ONE compilation per batch (ScanFileAsync skips
+        // semantic resolution per file). In non-semantic mode this is a no-op (ScanFileAsync did Layer 1+2).
+        if (_semanticCsharp && fullPaths.Count > 0)
+        {
+            await SemanticReconcileAsync(rootDirectory, fullPaths, defNames, cancellationToken).ConfigureAwait(false);
+        }
+
         stopwatch.Stop();
         return new IndexResult(filesScanned, nodesCreated, edgesCreated, stopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// Builds one project compilation and re-emits the semantic edges for the changed files plus the files
+    /// that reference their type names (old and new), so incoming CALLS/REFERENCES_TYPE are refreshed and
+    /// rename/remove danglers are cleared — bounded to the referencers via the reverse index.
+    /// </summary>
+    private async Task SemanticReconcileAsync(
+        string rootDirectory,
+        IReadOnlyCollection<string> changedFullPaths,
+        HashSet<string> oldDefNames,
+        CancellationToken cancellationToken)
+    {
+        var relinkNames = new HashSet<string>(oldDefNames, StringComparer.Ordinal);
+        foreach (var full in changedFullPaths)
+        {
+            foreach (var name in DefinitionNames(await _storage.GetNodesByFilePathAsync(full, cancellationToken).ConfigureAwait(false)))
+                relinkNames.Add(name);
+        }
+
+        var relinkSet = new HashSet<string>(changedFullPaths, StringComparer.OrdinalIgnoreCase);
+        if (relinkNames.Count > 0)
+        {
+            foreach (var referencer in await _storage.GetReferencingFilePathsAsync(relinkNames, cancellationToken).ConfigureAwait(false))
+                relinkSet.Add(referencer);
+        }
+
+        var compilation = await SemanticCsharpLinker.BuildCompilationForDirectoryAsync(rootDirectory, cancellationToken).ConfigureAwait(false);
+        if (compilation is null) return;
+
+        await SemanticCsharpLinker.RelinkFilesAsync(_storage, compilation, relinkSet, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
