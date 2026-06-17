@@ -91,7 +91,6 @@ public sealed class DriftReconciliationService : BackgroundService
         var projects = _projectManager.GetProjects();
         if (projects.Count == 0) return;
 
-        var semanticCsharp = _configuration.GetValue<bool>("Indexing:SemanticCSharp");
         var enablePlugins = _configuration.GetValue<bool>("Security:EnablePlugins");
 
         foreach (var project in projects)
@@ -99,6 +98,9 @@ public sealed class DriftReconciliationService : BackgroundService
             cancellationToken.ThrowIfCancellationRequested();
 
             if (string.IsNullOrWhiteSpace(project.Path) || !Directory.Exists(project.Path)) continue;
+
+            // Per-project semantic override wins over the global default.
+            var semanticCsharp = EndpointHelpers.UseSemanticCSharp(project, _configuration);
 
             // Skip if a scan/reconcile is already in progress for this project (avoids overlapping writes).
             if (!_projectManager.TryBeginScan(project.Name)) continue;

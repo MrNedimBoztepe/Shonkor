@@ -27,7 +27,14 @@ public class Project
     public string DatabasePath { get; set; } = string.Empty;
     public string OrganizationId { get; set; } = string.Empty;
     public string RepositoryUrl { get; set; } = string.Empty;
-    
+
+    /// <summary>
+    /// Per-project override for exact semantic C# indexing. When null (absent in projects.json), the
+    /// global <c>Indexing:SemanticCSharp</c> default applies — so e.g. one heavy project can run semantic
+    /// while the rest stay on the fast name-matching path.
+    /// </summary>
+    public bool? SemanticCSharp { get; set; }
+
     // Legacy field for backward compatibility during deserialization
     public string ApiKey { get; set; } = string.Empty;
 }
