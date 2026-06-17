@@ -160,6 +160,31 @@ public sealed class McpRequestHandler
     }
 
     /// <summary>
+    /// Returns a one-line "may be stale" warning to append to an analysis result when the resolved symbol's
+    /// FILE changed on disk since indexing (so the result may be wrong), or "" when fresh / untracked / no
+    /// filesystem access. One file hash per call (bounded), local only — so trust scales: the agent never
+    /// silently builds on stale graph data.
+    /// </summary>
+    private async Task<string> StaleSuffixAsync(IGraphStore storage, GraphNode def, CancellationToken ct = default)
+    {
+        if (_fileParsers == null || string.IsNullOrEmpty(def.FilePath)) return string.Empty;
+        var stored = await storage.GetContentHashesAsync(new[] { def.FilePath }, ct).ConfigureAwait(false);
+        if (!stored.TryGetValue(def.FilePath, out var storedHash) || string.IsNullOrEmpty(storedHash)) return string.Empty;
+        try
+        {
+            if (!System.IO.File.Exists(def.FilePath))
+                return $"\n⚠ '{def.Name}' is in the graph but its file is GONE from disk — run reindex_file.";
+            var content = await System.IO.File.ReadAllTextAsync(def.FilePath, ct).ConfigureAwait(false);
+            var hash = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+            if (hash != storedHash)
+                return $"\n⚠ '{def.Name}' file was EDITED since indexing — this result may be stale; run reindex_file first.";
+        }
+        catch { /* unreadable right now — don't annotate */ }
+        return string.Empty;
+    }
+
+    /// <summary>
     /// Returns the first non-empty line of <paramref name="content"/> that mentions <paramref name="name"/>
     /// (trimmed, capped at 160 chars), or <c>null</c> — a grep-like usage snippet for find_usages.
     /// </summary>
@@ -249,7 +274,9 @@ public sealed class McpRequestHandler
                                      : e.SourceId == def.Id && e.TargetId != def.Id))
             .ToList();
 
-        if (incident.Count == 0) return string.Format(emptyMessage, def.Name, def.Type);
+        var stale = await StaleSuffixAsync(storage, def).ConfigureAwait(false);
+
+        if (incident.Count == 0) return string.Format(emptyMessage, def.Name, def.Type) + stale;
 
         var sb = new System.Text.StringBuilder();
         sb.Append($"'{def.Name}' ({def.Type}) {verb} {incident.Count} node(s):\n");
@@ -264,7 +291,7 @@ public sealed class McpRequestHandler
                 sb.Append($"{g.Key}\t{name}\t{ToHandle(otherId, basePath)}{summary}\n");
             }
         }
-        return sb.ToString().TrimEnd();
+        return sb.ToString().TrimEnd() + stale;
     }
 
     /// <summary>Returns <paramref name="path"/> relative to <paramref name="basePath"/> when contained, else the original.</summary>
@@ -1220,7 +1247,7 @@ public sealed class McpRequestHandler
                         {
                             body = body[..maxChars].TrimEnd() + $"\n… (truncated to {maxChars} chars; raise maxChars)";
                         }
-                        return SendToolResponse(id, $"{def.Name} ({def.Type}) — {loc}{range}\n\n{body}");
+                        return SendToolResponse(id, $"{def.Name} ({def.Type}) — {loc}{range}\n\n{body}" + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
                     }
 
                 case "find_usages":
@@ -1259,7 +1286,7 @@ public sealed class McpRequestHandler
                             var snippetText = snippet != null ? $"  ⟶ {snippet}" : "";
                             sb.Append($"{e.Relationship}\t{name}\t{loc}{snippetText}\n");
                         }
-                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                        return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
                     }
 
                 case "reindex_file":
@@ -1516,7 +1543,7 @@ public sealed class McpRequestHandler
                             var via = t.Depth == 1 ? "direct" : $"via {t.Depth} hops";
                             sb.Append($"{t.Node.Name}\t{loc}\t[{via}]\n");
                         }
-                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                        return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
                     }
 
                 case "edit_plan":
@@ -1624,7 +1651,7 @@ public sealed class McpRequestHandler
                             sb.Append($"⚠ {sameNamed} other symbol(s) are also named '{def.Name}' — a text find/replace would wrongly rename them; this plan targets only the exact node's edges.\n");
                         }
                         sb.Append("After editing: check_edit + reindex_file each changed file, then related_tests to confirm.");
-                        return SendToolResponse(id, sb.ToString());
+                        return SendToolResponse(id, sb.ToString() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
                     }
 
                 case "signature":
@@ -1799,7 +1826,7 @@ public sealed class McpRequestHandler
                             sb.Append(" — note: CALLS edges require semantic indexing (Indexing:SemanticCSharp).");
                         }
 
-                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                        return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
                     }
 
                 case "blast_radius":
@@ -1877,7 +1904,7 @@ public sealed class McpRequestHandler
                                 sb.Append($"  {a.Rel}\t{name}\t{handle}{testTag}\n");
                             }
                         }
-                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                        return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
                     }
 
                 case "orient":
