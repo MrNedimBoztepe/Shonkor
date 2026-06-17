@@ -80,6 +80,18 @@ docs/
 dotnet build
 ```
 
+### 1a. Install `shonkor` as a command (recommended)
+Shonkor ships as a **.NET global tool**, so `shonkor` is on your PATH (cross-platform) and MCP clients can launch `shonkor mcp`:
+```powershell
+# from a local pack (until it's on NuGet):
+dotnet pack src/Shonkor.CLI -c Release -o ./nupkg
+dotnet tool install --global --add-source ./nupkg Shonkor
+
+# then, anywhere:
+shonkor help
+shonkor mcp install     # register the MCP server in detected clients
+```
+
 ### 2. Initialize and Index CLI
 ```powershell
 cd src/Shonkor.CLI

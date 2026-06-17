@@ -16,4 +16,16 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <!-- Distribution: install with `dotnet tool install -g Shonkor`, then `shonkor` is on PATH
+       (cross-platform via the ~/.dotnet/tools shim) so MCP clients can launch `shonkor mcp`. -->
+  <PropertyGroup>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>shonkor</ToolCommandName>
+    <PackageId>Shonkor</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Shonkor</Authors>
+    <Description>Precision GraphRAG code/documentation indexer + MCP server for AI agents.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
 </Project>
