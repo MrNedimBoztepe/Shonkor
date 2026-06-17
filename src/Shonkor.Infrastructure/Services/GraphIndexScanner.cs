@@ -351,6 +351,60 @@ public sealed class GraphIndexScanner
     }
 
     /// <summary>
+    /// Drift Layer 3 (reconcile-from-drift): detects drift against the working tree and re-indexes ONLY the
+    /// changed/new/deleted files surgically (each via <see cref="ScanFileAsync"/>, which does the Layer 1+2
+    /// scoped relink), instead of a whole-tree rescan. Catches out-of-band edits (git pull, branch switch,
+    /// external editor) at bounded cost; intended to be driven periodically by a background reconciler.
+    /// </summary>
+    public async Task<IndexResult> ReconcileDriftAsync(
+        string directoryPath,
+        IReadOnlyList<string> excludePatterns,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directoryPath);
+        ArgumentNullException.ThrowIfNull(excludePatterns);
+
+        var drift = await DetectDriftAsync(directoryPath, excludePatterns, cancellationToken).ConfigureAwait(false);
+        if (drift.IsClean) return new IndexResult(0, 0, 0, TimeSpan.Zero);
+
+        var paths = drift.Changed.Concat(drift.New).Concat(drift.Deleted);
+        return await ReconcilePathsAsync(directoryPath, paths, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Drift Layer 4 (git-aware / explicit-set reconcile): re-indexes a KNOWN set of changed paths (e.g. from
+    /// <c>git diff --name-only</c> or a webhook push payload) surgically via <see cref="ScanFileAsync"/> —
+    /// without hashing the whole tree. Relative paths are resolved against <paramref name="rootDirectory"/>.
+    /// </summary>
+    public async Task<IndexResult> ReconcilePathsAsync(
+        string rootDirectory,
+        IEnumerable<string> paths,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var stopwatch = Stopwatch.StartNew();
+        var distinct = paths.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase);
+
+        var filesScanned = 0;
+        var nodesCreated = 0;
+        var edgesCreated = 0;
+        foreach (var raw in distinct)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var full = Path.IsPathRooted(raw) ? raw : Path.GetFullPath(Path.Combine(rootDirectory, raw));
+            var r = await ScanFileAsync(full, cancellationToken).ConfigureAwait(false);
+            filesScanned += r.FilesScanned;
+            nodesCreated += r.NodesCreated;
+            edgesCreated += r.EdgesCreated;
+        }
+
+        stopwatch.Stop();
+        return new IndexResult(filesScanned, nodesCreated, edgesCreated, stopwatch.Elapsed);
+    }
+
+    /// <summary>
     /// Reports whether a single file's graph representation is in sync with its on-disk content
     /// (see <see cref="FreshnessState"/>), without modifying the graph.
     /// </summary>

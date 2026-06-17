@@ -444,6 +444,81 @@ public class ParserAndStorageTests
     }
 
     [Fact]
+    public async Task ReconcilePaths_HandlesAddModifyDelete_Surgically()
+    {
+        // Drift Layer 4: given an explicit changed-file set, reconcile re-indexes only those (add/modify/
+        // delete) without a whole-tree rescan.
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_reconcilepaths_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var aFile = Path.Combine(dir, "A.cs");
+        var bFile = Path.Combine(dir, "B.cs");
+        var cFile = Path.Combine(dir, "C.cs");
+        try
+        {
+            await File.WriteAllTextAsync(aFile, "namespace N { public class Alpha { } }");
+            await File.WriteAllTextAsync(bFile, "namespace N { public class Beta { } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            // Out-of-band: rename Alpha in A, add C, delete B.
+            await File.WriteAllTextAsync(aFile, "namespace N { public class AlphaRenamed { } }");
+            await File.WriteAllTextAsync(cFile, "namespace N { public class Gamma { } }");
+            File.Delete(bFile);
+
+            await scanner.ReconcilePathsAsync(dir, new[] { "A.cs", "C.cs", "B.cs" });
+
+            Assert.NotNull(await storage.GetNodeByIdAsync(Path.GetFullPath(aFile) + "::AlphaRenamed"));
+            Assert.Null(await storage.GetNodeByIdAsync(Path.GetFullPath(aFile) + "::Alpha"));
+            Assert.NotNull(await storage.GetNodeByIdAsync(Path.GetFullPath(cFile) + "::Gamma"));
+            Assert.Null(await storage.GetNodeByIdAsync(Path.GetFullPath(bFile) + "::Beta"));
+            Assert.Null(await storage.GetNodeByIdAsync(Path.GetFullPath(bFile)));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReconcileDrift_ReindexesOutOfBandChanges_AndLeavesGraphClean()
+    {
+        // Drift Layer 3: detect drift vs the working tree and surgically re-index the drifted files,
+        // catching an out-of-band edit; afterwards the graph reports no drift.
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_reconciledrift_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var aFile = Path.Combine(dir, "A.cs");
+        try
+        {
+            await File.WriteAllTextAsync(aFile, "namespace N { public class Alpha { } }");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            // Out-of-band edit: add a method, bypassing reindex_file.
+            await File.WriteAllTextAsync(aFile, "namespace N { public class Alpha { public void Added() { } } }");
+
+            var driftBefore = await scanner.DetectDriftAsync(dir, Array.Empty<string>());
+            Assert.False(driftBefore.IsClean);
+
+            var result = await scanner.ReconcileDriftAsync(dir, Array.Empty<string>());
+            Assert.True(result.FilesScanned > 0);
+
+            // The new method is now in the graph and no drift remains.
+            Assert.NotNull(await storage.GetNodeByIdAsync(Path.GetFullPath(aFile) + "::Alpha::Added#0"));
+            Assert.True((await scanner.DetectDriftAsync(dir, Array.Empty<string>())).IsClean);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ReindexFile_RemovesDanglingIncomingEdges_OnRename()
     {
         // Drift Layer 2: A defines Widget, B references it. Renaming Widget away in A (and reindexing ONLY A)

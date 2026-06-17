@@ -51,6 +51,10 @@ builder.Services.AddHttpClient<ISemanticAnalyzer, OllamaSemanticAnalyzer>();
 builder.Services.AddHttpClient<IEmbeddingService, OllamaEmbeddingService>();
 builder.Services.AddHostedService<SemanticEnrichmentService>();
 
+// Drift Layer 3: periodic reconciliation of each project's graph against its working tree (opt-in via
+// Drift:ReconcileIntervalSeconds > 0). Catches out-of-band edits that bypassed reindex_file.
+builder.Services.AddHostedService<DriftReconciliationService>();
+
 var app = builder.Build();
 
 // --- Middleware pipeline ---

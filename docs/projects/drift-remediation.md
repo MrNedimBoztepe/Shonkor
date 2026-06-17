@@ -1,6 +1,6 @@
 # Project: Graph drift remediation (incremental relink + freshness)
 
-**Status:** P1 + P2 done — Layer 0 (freshness), Layer 1 (scoped outgoing relink), Layer 2 (reverse index + incoming-edge maintenance). P3 planned. · **Tracked in Shonkor (Brain graph):** see `get_open_threads`
+**Status:** P1 + P2 + P3 done (name-mode) — Layers 0–4. Only the incremental *semantic* relink (cached compilation) remains. · **Tracked in Shonkor (Brain graph):** see `get_open_threads`
 
 ## Problem
 Cross-graph edges (`REFERENCES_TYPE`, `BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMPLATE`, `BELONGS_TO_MODULE`, future `CALLS`) are **not** produced by the parser but by a **whole-graph post-scan linker** (`CrossTechLinker`) that resolves each node's stored `referencedTypes` property against the definition nodes. **`reindex_file` skips this linker.** Hence drift in three forms:
@@ -23,14 +23,16 @@ Cross-graph edges (`REFERENCES_TYPE`, `BINDS_TO`, `CONTROLLER_OF`, `QUERIES_TEMP
 
 **Layer 2 — incremental incoming-edge maintenance via a reverse index. ✅ DONE (name-mode).** A dedicated `TypeReferences(TypeName, NodeId, FilePath)` table maps `typeName -> referencing nodes/files`, maintained inside `UpsertNodesAsync` (from `referencedTypes`) and the delete paths (the JSON `Metadata` column isn't efficiently queryable). On `reindex_file(A)`, `ScanFileAsync` diffs A's definition names before/after (`DefinitionNames`, symmetric difference) and, for every changed name, relinks **only the files that reference it** (`GetReferencingFilePathsAsync` → `RelinkFileReferenceTypesAsync`, now idempotent: it clears the referencer's outgoing `REFERENCES_TYPE` first). This **removes now-dangling edges** on a rename/remove and **creates newly-resolvable edges** when a referenced type is added — bounded to the referencers, not the repo. Fixes drift form 3. (Semantic mode and non-`REFERENCES_TYPE` cross-tech edges still reconcile on a full scan.)
 
-**Layer 3 — background reconciliation (eventual consistency).** A background worker (analogous to `SemanticEnrichmentService`) periodically reconciles File hashes vs disk and re-indexes changed/new/deleted files + scoped relink — catching out-of-band edits (git pull, branch switch, external editor). Optional `FileSystemWatcher` for near-real-time local incremental indexing.
+**Layer 3 — background reconciliation (eventual consistency). ✅ DONE.** `GraphIndexScanner.ReconcileDriftAsync` = `DetectDriftAsync` (hashes vs graph) then surgically re-indexes only the changed/new/deleted files via `ScanFileAsync` (Layer 1+2 scoped relink), not a whole-tree rescan. A `DriftReconciliationService : BackgroundService` (Shonkor.Web) drives it periodically, catching out-of-band edits (git pull, branch switch, external editor). Opt-in via `Drift:ReconcileIntervalSeconds > 0` (default 0/off, since it hashes candidates each cycle); loads plugins to match the indexer's parser set; skips a project whose scan is already running (`TryBeginScan`). A `FileSystemWatcher` for near-real-time triggering is a possible future refinement.
 
-**Layer 4 — git-aware bulk reconciliation.** On branch switch/pull, use `git diff --name-only <old> <new>` (or the webhook push payload) to re-index only the changed files + scoped relink of their referencers, instead of a full rescan. The webhook already does incremental indexing; extend it with the scoped relink.
+**Layer 4 — git-aware / explicit-set reconciliation. ✅ DONE.** `GraphIndexScanner.ReconcilePathsAsync(rootDirectory, paths)` re-indexes a KNOWN changed set (from `git diff --name-only` or a webhook push payload) surgically via `ScanFileAsync` — no whole-tree hashing. The GitHub push webhook now extracts `commits[].added/modified/removed` (`ExtractChangedFiles`) and reconciles exactly those, falling back to a full incremental scan when the payload names none.
+
+**Remaining (P3): incremental SEMANTIC relink.** In semantic mode, `ScanFileAsync` (and therefore both reconcile paths) still skips `CALLS`/exact-`REFERENCES_TYPE` resolution — those rebuild only on a full scan. Doing it incrementally needs a cached Roslyn compilation (reuse it, swap the one edited syntax tree, rebind dependents) held by a longer-lived service. This is the last open piece of the project.
 
 ## Phasing
 - **P1 (highest ROI, low risk): ✅ DONE.** Layer 0 (freshness tools `is_fresh`/`stale_files`) + Layer 1 (scoped outgoing `REFERENCES_TYPE` relink via `GetDefinitionsByNamesAsync`/`GetNodesByFilePathAsync`, wired into `ScanFileAsync`). Fixes the observed case; makes residual drift non-silent.
 - **P2 (reverse index + incoming maintenance): ✅ DONE.** `TypeReferences` reverse-index table + Layer 2 rename/remove/add reconciliation in `ScanFileAsync`, bounded to referencers.
-- **P3:** background reconciliation + FileSystemWatcher / git-diff (Layers 3+4).
+- **P3 (background + git-aware reconciliation): ✅ DONE except one piece.** Layer 3 (`ReconcileDriftAsync` + `DriftReconciliationService`) and Layer 4 (`ReconcilePathsAsync` + push-webhook wiring) are done. **Open:** incremental *semantic* relink (cached compilation) — the only remaining item before the project is fully complete.
 
 ## Trade-offs / risks
 - Scoped relink needs a fast name→definition lookup, or it degrades to loading the whole graph — `GetDefinitionsByNamesAsync` is the key.
