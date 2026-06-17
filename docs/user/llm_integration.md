@@ -73,6 +73,11 @@ The MCP server determines the active project **from its working directory** – 
 
 All tools accept an optional `projectName` for cross-project queries. Symbol-oriented tools also accept `query` as an alias for `symbol`. Short `@/<relative>` handles emitted by the tools can be passed straight back as seeds/paths.
 
+**Start here**
+| Tool | Purpose | Note |
+|------|---------|------|
+| `orient` | One-call session bootstrap: graph size, tool palette by intent, the edit loop, open-thread count | Call first in a new session. Run `shonkor agents >> AGENTS.md` so assistants use the graph reflexively |
+
 **Find — where is it?**
 | Tool | Purpose | Note |
 |------|---------|------|

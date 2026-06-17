@@ -758,6 +758,19 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
+                            name = "orient",
+                            description = "START HERE in a new session: a one-call orientation to this project's Shonkor graph. Returns the graph size, the tool palette grouped by intent (find/read/impact/verify/tests), the recommended edit loop, and the count of open threads. Use it to know what's available and how to work, instead of grepping/reading whole files. Costs one call and saves many.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                }
+                            }
+                        },
+                        new
+                        {
                             name = "get_open_threads",
                             description = "Resume context cheaply: lists the still-open recorded interactions (Question/Task/Decision/Milestone, i.e. anything not done/resolved/accepted/superseded) as 'type [status] name id'. Call at the start of a session to recover what was in progress without re-deriving it.",
                             inputSchema = new
@@ -1785,6 +1798,49 @@ public sealed class McpRequestHandler
                             }
                         }
                         return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "orient":
+                    {
+                        var stats = await storage.GetStatisticsAsync().ConfigureAwait(false);
+
+                        // Count still-open recorded threads (same rule as get_open_threads).
+                        var threadTypes = new[] { "Question", "Task", "Decision", "Milestone" };
+                        var closed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                        { "done", "resolved", "completed", "accepted", "superseded", "closed" };
+                        var threads = await storage.GetNodesByTypesAsync(threadTypes).ConfigureAwait(false);
+                        var openThreads = threads.Count(n => !closed.Contains(n.Properties.GetValueOrDefault("status", "").Trim()));
+
+                        var topTypes = string.Join(", ", stats.NodesByType
+                            .Where(kv => kv.Key is not "Concept" and not "MarkdownSection")
+                            .OrderByDescending(kv => kv.Value).Take(5).Select(kv => $"{kv.Key} {kv.Value}"));
+
+                        var callsNote = stats.EdgesByRelation.GetValueOrDefault("CALLS", 0) > 0
+                            ? "method-level CALLS are indexed (semantic mode)."
+                            : "no CALLS edges yet — enable semantic indexing (per-project SemanticCSharp) for method-level impact/call_hierarchy.";
+
+                        var guide =
+$@"Shonkor graph for project '{projectName ?? "(active)"}' — START HERE.
+
+GRAPH: {stats.TotalNodes} nodes, {stats.TotalEdges} edges. Top code types: {topTypes}.
+Edges: {callsNote}
+
+USE THE GRAPH instead of grepping or reading whole files:
+  Find:    locate · search_graph · search_semantic
+  Read:    signature · get_source · outline · get_subgraph
+  Impact:  impact_of (callers) · blast_radius (transitive) · call_hierarchy · depends_on · find_usages
+  Verify:  verify_exists (before claiming something exists)
+  Tests:   related_tests (exactly which tests to run, transitively)
+
+EDIT LOOP after you change code:
+  1. check_edit <file>      → does it compile? (Roslyn syntax + semantic, no build)
+  2. reindex_file <file>    → refresh the graph for that file
+  3. related_tests <symbol> → run exactly the covering tests
+  4. is_fresh / stale_files → confirm the graph matches the working tree
+
+OPEN THREADS: {openThreads} (call get_open_threads to resume prior work).";
+
+                        return SendToolResponse(id, guide);
                     }
 
                 case "get_open_threads":
