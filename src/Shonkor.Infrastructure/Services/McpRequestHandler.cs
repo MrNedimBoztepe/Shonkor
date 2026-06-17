@@ -678,6 +678,23 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
+                            name = "call_hierarchy",
+                            description = "Method-level call hierarchy over CALLS edges, rendered indented to a given depth. direction 'callers' = who calls the method, transitively (incoming, default); 'callees' = what the method calls (outgoing). Requires semantic indexing (Indexing:SemanticCSharp / SHONKOR_SEMANTIC_CSHARP=true) — that's what emits CALLS edges; without it the tree is empty. Cycles (recursion) are marked, and the tree is capped for safety.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    symbol = new { type = "string", description = "The method name (e.g. 'ScanFileAsync'). 'query' is accepted as an alias. Overloads resolve to the first match; use file:line addressing for a specific one." },
+                                    direction = new { type = "string", description = "'callers' (incoming, who calls it — default) or 'callees' (outgoing, what it calls)." },
+                                    depth = new { type = "integer", description = "Tree depth (default 3, max 6)." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "symbol" }
+                            }
+                        },
+                        new
+                        {
                             name = "verify_exists",
                             description = "Fact-check that a symbol actually exists in the graph BEFORE asserting it. Returns 'YES — name (type) at handle' on an exact name match, otherwise 'NO' plus the nearest matching names. Use this to avoid claiming a class/method exists when it doesn't.",
                             inputSchema = new
@@ -1501,6 +1518,63 @@ public sealed class McpRequestHandler
                             }
                         }
                         await Walk(def.Id, 1).ConfigureAwait(false);
+
+                        return SendToolResponse(id, sb.ToString().TrimEnd());
+                    }
+
+                case "call_hierarchy":
+                    {
+                        var symbol = ReadSymbol(args);
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                        }
+                        var direction = (args?["direction"]?.ToString() ?? "callers").ToLowerInvariant();
+                        var callees = direction is "callees" or "callee" or "outgoing" or "calls";
+                        var depth = Math.Clamp(ReadInt(args?["depth"], 3), 1, 6);
+
+                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (def == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"Call hierarchy ({(callees ? "callees" : "callers")}, depth {depth}) for '{def.Name}':\n");
+                        sb.Append($"{def.Name} ({def.Type})\n");
+
+                        var visited = new HashSet<string> { def.Id };
+                        var emitted = 0;
+                        const int maxNodes = 100;
+
+                        async Task Walk(string nodeId, int level)
+                        {
+                            if (level > depth || emitted >= maxNodes) return;
+                            var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
+                            // callers: edges INTO this node (TargetId == node); callees: edges OUT (SourceId == node).
+                            var step = edges.Where(e => e.Relationship == "CALLS"
+                                && (callees ? e.SourceId == nodeId && e.TargetId != nodeId
+                                            : e.TargetId == nodeId && e.SourceId != nodeId)).ToList();
+                            foreach (var e in step.OrderBy(e => (callees ? e.TargetId : e.SourceId)))
+                            {
+                                if (emitted >= maxNodes) { sb.Append(new string(' ', level * 2)).Append("… (truncated)\n"); break; }
+                                var otherId = callees ? e.TargetId : e.SourceId;
+                                var other = neighbours.GetValueOrDefault(otherId);
+                                var arrow = callees ? "--calls-->" : "<--calls--";
+                                sb.Append(new string(' ', level * 2)).Append($"{arrow} {other?.Name ?? otherId} ({other?.Type ?? "?"})");
+                                emitted++;
+                                if (!visited.Add(otherId)) { sb.Append("  ↺\n"); continue; }
+                                sb.Append('\n');
+                                await Walk(otherId, level + 1).ConfigureAwait(false);
+                            }
+                        }
+                        await Walk(def.Id, 1).ConfigureAwait(false);
+
+                        if (emitted == 0)
+                        {
+                            sb.Append(callees ? "  (no outgoing calls)" : "  (no callers)");
+                            sb.Append(" — note: CALLS edges require semantic indexing (Indexing:SemanticCSharp).");
+                        }
 
                         return SendToolResponse(id, sb.ToString().TrimEnd());
                     }

@@ -76,6 +76,19 @@ public class SemanticCsharpLinkerTests
     }
 
     [Fact]
+    public async Task ExtensionMethod_CallsEdge_ResolvesToUnreducedArity()
+    {
+        // `s.Use()` resolves to the REDUCED extension symbol (0 params), but the parser counted the `this`
+        // parameter (arity 1 -> node id ::Ext::Use#1). Without unreducing, the CALLS edge would dangle at #0.
+        using var storage = await LinkAsync(
+            ("/repo/Ext.cs", "namespace N { public static class Ext { public static void Use(this string s) { } } }"),
+            ("/repo/C.cs",   "namespace N { public class C { public void Run() { \"x\".Use(); } } }"));
+
+        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/Ext.cs::Ext::Use#1");
+        Assert.Contains(edges, e => e.SourceId == "/repo/C.cs::C::Run#0" && e.Relationship == "CALLS");
+    }
+
+    [Fact]
     public async Task DifferentArityOverloads_GetDistinctNodes_AndCallsResolveToTheRightOne()
     {
         // Foo() and Foo(int) are distinct overloads (arity 0 vs 1). Run calls the one-arg overload;
