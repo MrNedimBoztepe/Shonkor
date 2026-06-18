@@ -30,22 +30,32 @@ Shonkor now features a native "Ask AI" capability directly within its web dashbo
 Shonkor implements the **Model Context Protocol (MCP)** over stdio (JSON-RPC). This allows an AI assistant to query the knowledge graph **live** instead of relying on a static capsule.
 
 ### Setup
+Install the `shonkor` command (a .NET global tool), then register it in your agent clients:
 ```powershell
-# Automatically registers Shonkor in detected MCP clients
-dotnet run --project src/Shonkor.CLI -- mcp install
+# 1) install the CLI (until it's on NuGet, pack locally first)
+dotnet pack src/Shonkor.CLI -c Release -o ./nupkg
+dotnet tool install --global --add-source ./nupkg Shonkor
+
+# 2) register the MCP server in DETECTED clients (Claude Desktop, Claude Code, Antigravity)
+shonkor mcp install
+shonkor mcp status      # show which clients are detected / registered
+shonkor mcp uninstall   # remove it again
 ```
-Alternatively, configure it manually in the client configuration (e.g. `~/.claude.json` or `~/.gemini/config/mcp_config.json`):
+`mcp install` only writes into clients it finds on disk, resolves the config path per-OS
+(Windows/macOS/Linux), and launches the server via the installed `shonkor` apphost (no PATH
+dependency). Manual config (any MCP client):
 ```json
 {
   "mcpServers": {
-    "shonkor-local": {
-      "command": "shonkor",
-      "args": ["mcp"]
-    }
+    "shonkor": { "command": "shonkor", "args": ["mcp"] }
   }
 }
 ```
-After registration, **restart** the client so the server gets loaded.
+After registration, **restart** the client so the server loads.
+
+**Which project does it see?** A per-workspace client (Cursor/Claude Code/VS Code) resolves the project
+from its working directory. A global client (Claude Desktop) has no per-chat directory, so the session
+follows the registry's active project — switch it from a chat with the **`set_project`** tool ("work with FPM").
 
 ### SaaS Integration via MCP Proxy
 If you host Shonkor as a centralized SaaS application (e.g. in Kubernetes), your local AI assistant can connect to the remote graph using the `mcp-proxy` command. This bridges standard input/output from the AI to HTTP POST requests against the Shonkor Web API.

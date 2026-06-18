@@ -466,6 +466,12 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
         {
             return await McpInstaller.InstallAsync();
         }
+        if (args.Length > 1 && (args[1].Equals("uninstall", StringComparison.OrdinalIgnoreCase) || args[1].Equals("status", StringComparison.OrdinalIgnoreCase)))
+        {
+            return args[1].Equals("status", StringComparison.OrdinalIgnoreCase)
+                ? await McpInstaller.StatusAsync()
+                : await McpInstaller.UninstallAsync();
+        }
 
         var configPath = DefaultConfigFileName;
 
