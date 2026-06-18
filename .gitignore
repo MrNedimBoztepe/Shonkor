@@ -53,3 +53,5 @@ Desktop.ini
 # Local NuGet pack output (dotnet tool)
 nupkg/
 *.nupkg
+publish-test/
+publish/
