@@ -81,16 +81,31 @@ dotnet build
 ```
 
 ### 1a. Install `shonkor` as a command (recommended)
-Shonkor ships as a **.NET global tool**, so `shonkor` is on your PATH (cross-platform) and MCP clients can launch `shonkor mcp`:
+`shonkor` needs to be on your PATH so MCP clients can launch it. Two ways:
+
+**A. Prebuilt binary (no .NET SDK needed)** — self-contained release binaries are published per OS:
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/nottherealluckybuddha/Shonkor/main/scripts/install.sh | sh
+```
 ```powershell
-# from a local pack (until it's on NuGet):
+# Windows
+irm https://raw.githubusercontent.com/nottherealluckybuddha/Shonkor/main/scripts/install.ps1 | iex
+```
+
+**B. .NET global tool** (needs the .NET 10 SDK):
+```powershell
 dotnet pack src/Shonkor.CLI -c Release -o ./nupkg
 dotnet tool install --global --add-source ./nupkg Shonkor
-
-# then, anywhere:
-shonkor help
-shonkor mcp install     # register the MCP server in detected clients
 ```
+
+Then, anywhere:
+```powershell
+shonkor mcp install     # register the MCP server in detected clients (Claude Desktop/Code, Antigravity)
+shonkor mcp status      # show what's detected/registered
+```
+
+> The release binaries are produced by a tag-triggered GitHub Actions pipeline — see `docs/ci/release.yml` (add it under `.github/workflows/` and push a `vX.Y.Z` tag).
 
 ### 2. Initialize and Index CLI
 ```powershell

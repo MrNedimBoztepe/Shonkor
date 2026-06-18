@@ -1,0 +1,58 @@
+# Shonkor release pipeline — TEMPLATE.
+#
+# Your token lacks the `workflow` scope, so this file can't be pushed under
+# .github/workflows/ from the CLI. Add it via the GitHub web UI:
+#   GitHub → the repo → Add file → Create new file → path: .github/workflows/release.yml
+#   → paste this content → Commit.
+#
+# It builds a self-contained, single-file `shonkor` binary for each OS/arch
+# (no .NET SDK needed by users) on a version tag and attaches them to a GitHub
+# Release. Trigger by pushing a tag, e.g.:   git tag v0.1.0 && git push origin v0.1.0
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write   # create the release + upload assets via GITHUB_TOKEN
+
+jobs:
+  build:
+    name: Publish ${{ matrix.rid }}
+    runs-on: ubuntu-latest   # .NET cross-publishes every RID from Linux
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: win-x64,   asset: shonkor-win-x64.exe,   ext: .exe }
+          - { rid: win-arm64, asset: shonkor-win-arm64.exe, ext: .exe }
+          - { rid: linux-x64, asset: shonkor-linux-x64,     ext: ''   }
+          - { rid: osx-x64,   asset: shonkor-osx-x64,       ext: ''   }
+          - { rid: osx-arm64, asset: shonkor-osx-arm64,     ext: ''   }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish self-contained single-file
+        run: >
+          dotnet publish src/Shonkor.CLI/Shonkor.CLI.csproj
+          -c Release -r ${{ matrix.rid }} --self-contained
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -p:PackAsTool=false
+          -o publish
+
+      - name: Name the asset
+        run: mv "publish/shonkor${{ matrix.ext }}" "${{ matrix.asset }}"
+
+      - name: Attach to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
+          generate_release_notes: true
