@@ -844,6 +844,19 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
+                            name = "set_project",
+                            description = "Switch the ACTIVE project this session works with — for clients (e.g. Claude Desktop) that have no per-chat working directory, so you can say 'work with FPM' and have every following tool call resolve to that project's graph. Lists the available projects when called with no name. (No effect when the server is locked to a single tenant.)",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    name = new { type = "string", description = "The project to make active (must exist in the registry). Omit to list the available projects." }
+                                }
+                            }
+                        },
+                        new
+                        {
                             name = "get_open_threads",
                             description = "Resume context cheaply: lists the still-open recorded interactions (Question/Task/Decision/Milestone, i.e. anything not done/resolved/accepted/superseded) as 'type [status] name id'. Call at the start of a session to recover what was in progress without re-deriving it.",
                             inputSchema = new
@@ -2046,6 +2059,31 @@ public sealed class McpRequestHandler
                             }
                         }
                         return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
+                    }
+
+                case "set_project":
+                    {
+                        if (_lockToContextProject)
+                        {
+                            return SendToolResponse(id, "This server is locked to a single tenant; project switching is disabled here.");
+                        }
+                        var projects = _projectManager.GetProjects();
+                        var active = _projectManager.GetActiveProjectName();
+                        var name = args?["name"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(name))
+                        {
+                            var list = string.Join("\n", projects.Select(p => $"  {(p.Name.Equals(active, StringComparison.OrdinalIgnoreCase) ? "* " : "  ")}{p.Name}\t{p.Path}"));
+                            return SendToolResponse(id, $"Active project: {active}\nProjects:\n{list}\n(call set_project with name=<project> to switch.)");
+                        }
+                        var match = projects.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                        if (match == null)
+                        {
+                            return SendToolResponse(id, $"No project named '{name}'. Available: {string.Join(", ", projects.Select(p => p.Name))}.");
+                        }
+                        _projectManager.SetActiveProject(match.Name);
+                        var newStorage = await _projectManager.GetStorageProviderAsync(match.Name).ConfigureAwait(false);
+                        var newStats = await newStorage.GetStatisticsAsync().ConfigureAwait(false);
+                        return SendToolResponse(id, $"Active project is now '{match.Name}' ({match.Path}) — {newStats.TotalNodes} nodes, {newStats.TotalEdges} edges. Call orient for the workflow.");
                     }
 
                 case "orient":

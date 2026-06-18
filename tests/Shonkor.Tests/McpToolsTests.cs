@@ -300,6 +300,31 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task SetProject_ListsSwitchesAndRejects_AndIsBlockedWhenTenantLocked()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: false);
+
+        // No name -> lists the projects with the active one marked.
+        var list = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("set_project", new { })));
+        Assert.Contains("Active project", list);
+        Assert.Contains("P", list);
+
+        // Switch to an existing project.
+        var sw = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("set_project", new { name = "P" })));
+        Assert.Contains("Active project is now 'P'", sw);
+
+        // Unknown project is rejected.
+        var no = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("set_project", new { name = "Nope" })));
+        Assert.Contains("No project named 'Nope'", no);
+
+        // A tenant-locked server refuses switching (SaaS safety).
+        var locked = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+        var lockedResp = TextOf(await locked.ProcessJsonRpcMessageAsync(ToolCall("set_project", new { name = "P" })));
+        Assert.Contains("locked to a single tenant", lockedResp);
+    }
+
+    [Fact]
     public async Task Orient_ReturnsGraphSize_ToolPalette_AndEditLoop()
     {
         var (pm, synth, _) = await SetupAsync();

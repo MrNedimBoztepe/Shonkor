@@ -1,106 +1,150 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 
 namespace Shonkor.CLI;
 
+/// <summary>
+/// Registers (and removes) the Shonkor MCP server in the user's agent clients. Only writes into clients it
+/// can actually detect on disk, resolves config paths per-OS, and launches the server via the installed
+/// `shonkor` command — so `shonkor mcp install` works the same on Windows/macOS/Linux.
+/// </summary>
 public static class McpInstaller
 {
-    public static async Task<int> InstallAsync()
+    private const string ServerName = "shonkor";
+
+    /// <summary>A target agent client: its MCP config file and a marker directory that proves it's installed.</summary>
+    private sealed record Client(string Name, string ConfigPath, string DetectDir);
+
+    public static Task<int> InstallAsync() => RunAsync(install: true);
+    public static Task<int> UninstallAsync() => RunAsync(install: false);
+
+    private static async Task<int> RunAsync(bool install)
     {
         try
         {
-            var exePath = Process.GetCurrentProcess().MainModule?.FileName;
-            if (string.IsNullOrEmpty(exePath) || !exePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-            {
-                // Fallback for dotnet run during dev
-                exePath = "dotnet";
-            }
-
-            var args = new[] { "shonkor.dll", "mcp" };
-            if (exePath != "dotnet")
-            {
-                args = new[] { "mcp" };
-            }
-            else
-            {
-                // If we are in dev mode using dotnet run, we might want to register the absolute path to dotnet run instead,
-                // but let's assume we are running a published exe for real installation.
-                // However, since the user asked for the absolute path to the exe:
-                exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "dotnet";
-                args = new[] { "mcp" };
-            }
-
-            Console.WriteLine($"Registering MCP Server with path: {exePath}");
-
-            // MCP clients launch this server with their own working directory (not the project dir),
-            // so we pin the workspace at install time via an env var. Otherwise the server can't
-            // locate projects.json / the active project and effectively does nothing.
+            var (command, args) = ResolveLaunch();
             var env = ResolveEnvironment();
-            if (env.TryGetValue("SHONKOR_WORKSPACE", out var ws))
+
+            Console.WriteLine(install
+                ? $"Registering MCP server '{ServerName}' — launch: {command} {string.Join(' ', args)}"
+                : $"Removing MCP server '{ServerName}' from detected clients.");
+            if (install && env.TryGetValue("SHONKOR_WORKSPACE", out var ws))
+                Console.WriteLine($"  workspace: {ws}");
+
+            var any = false;
+            foreach (var client in GetClients())
             {
-                Console.WriteLine($"Pinning SHONKOR_WORKSPACE={ws}");
+                var detected = File.Exists(client.ConfigPath) || Directory.Exists(client.DetectDir);
+                if (!detected)
+                {
+                    Console.WriteLine($"  - {client.Name}: not detected (skipped)");
+                    continue;
+                }
+                any = true;
+                if (install)
+                {
+                    await UpdateConfigFileAsync(client.ConfigPath, command, args, env).ConfigureAwait(false);
+                    Console.WriteLine($"  ✓ {client.Name}: registered ({client.ConfigPath})");
+                }
+                else
+                {
+                    var removed = await RemoveFromConfigAsync(client.ConfigPath).ConfigureAwait(false);
+                    Console.WriteLine(removed
+                        ? $"  ✓ {client.Name}: removed ({client.ConfigPath})"
+                        : $"  - {client.Name}: nothing to remove");
+                }
             }
-            if (env.TryGetValue("SHONKOR_PROJECT", out var proj))
-            {
-                Console.WriteLine($"Pinning SHONKOR_PROJECT={proj}");
-            }
 
-            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-
-            // Antigravity
-            var antigravityPath = Path.Combine(userProfile, ".gemini", "config", "mcp_config.json");
-            await UpdateConfigFileAsync(antigravityPath, "shonkor", exePath, args, env);
-
-            // Claude Desktop
-            var claudePath = Path.Combine(appData, "Claude", "claude_desktop_config.json");
-            await UpdateConfigFileAsync(claudePath, "shonkor", exePath, args, env);
-
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine("MCP Server successfully registered in available clients!");
+            Console.ForegroundColor = any ? ConsoleColor.Green : ConsoleColor.Yellow;
+            Console.WriteLine(any
+                ? (install ? "Done. Restart the client(s) so the server loads." : "Done.")
+                : "No supported clients detected. Install one, or add the server manually (see docs/user/llm_integration.md).");
             Console.ResetColor();
-
             return 0;
         }
         catch (Exception ex)
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"Failed to install MCP server: {ex.Message}");
+            Console.WriteLine($"MCP {(install ? "install" : "uninstall")} failed: {ex.Message}");
             Console.ResetColor();
             return 1;
         }
     }
 
-    private static System.Collections.Generic.Dictionary<string, string> ResolveEnvironment()
+    /// <summary>Reports, per client, whether it's detected and whether Shonkor is registered.</summary>
+    public static async Task<int> StatusAsync()
     {
-        var env = new System.Collections.Generic.Dictionary<string, string>();
+        var (command, args) = ResolveLaunch();
+        Console.WriteLine($"Shonkor MCP launch: {command} {string.Join(' ', args)}\n");
+        foreach (var client in GetClients())
+        {
+            var detected = File.Exists(client.ConfigPath) || Directory.Exists(client.DetectDir);
+            var registered = detected && File.Exists(client.ConfigPath) && await IsRegisteredAsync(client.ConfigPath).ConfigureAwait(false);
+            var state = !detected ? "not detected" : registered ? "registered ✓" : "detected, NOT registered (run: shonkor mcp install)";
+            Console.WriteLine($"  {client.Name,-16} {state}");
+        }
+        return 0;
+    }
 
-        // Honor an explicit override, otherwise walk up from the install-time working directory
-        // looking for the workspace marker (projects.json / shonkor.json).
+    /// <summary>The supported clients for the current OS, with per-OS config locations.</summary>
+    private static IEnumerable<Client> GetClients()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        // Claude Desktop — OS-specific app-config location.
+        string claudeDir;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            claudeDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            claudeDir = Path.Combine(home, "Library", "Application Support", "Claude");
+        else
+            claudeDir = Path.Combine(home, ".config", "Claude");
+        yield return new Client("Claude Desktop", Path.Combine(claudeDir, "claude_desktop_config.json"), claudeDir);
+
+        // Claude Code — user-scope config file in the home directory, data dir ~/.claude.
+        yield return new Client("Claude Code", Path.Combine(home, ".claude.json"), Path.Combine(home, ".claude"));
+
+        // Antigravity / Gemini — home-relative, same on every OS.
+        var gemini = Path.Combine(home, ".gemini");
+        yield return new Client("Antigravity", Path.Combine(gemini, "config", "mcp_config.json"), gemini);
+    }
+
+    /// <summary>How an MCP client should launch the server: the installed `shonkor` apphost, or `dotnet shonkor.dll` in dev.</summary>
+    private static (string Command, string[] Args) ResolveLaunch()
+    {
+        var main = Process.GetCurrentProcess().MainModule?.FileName;
+        var name = main is null ? null : Path.GetFileNameWithoutExtension(main);
+        if (!string.IsNullOrEmpty(main) && string.Equals(name, "shonkor", StringComparison.OrdinalIgnoreCase))
+        {
+            // Installed as a global tool: register the absolute apphost path (robust — no PATH dependency).
+            return (main, new[] { "mcp" });
+        }
+        // Dev fallback (`dotnet run`): launch the entry dll via dotnet.
+        var dll = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+        return string.IsNullOrEmpty(dll)
+            ? ("shonkor", new[] { "mcp" })
+            : ("dotnet", new[] { dll, "mcp" });
+    }
+
+    private static Dictionary<string, string> ResolveEnvironment()
+    {
+        var env = new Dictionary<string, string>();
         var workspace = Environment.GetEnvironmentVariable("SHONKOR_WORKSPACE");
-        if (string.IsNullOrWhiteSpace(workspace))
-        {
-            workspace = ResolveWorkspacePath();
-        }
-        if (!string.IsNullOrWhiteSpace(workspace))
-        {
-            env["SHONKOR_WORKSPACE"] = workspace;
-        }
+        if (string.IsNullOrWhiteSpace(workspace)) workspace = ResolveWorkspacePath();
+        if (!string.IsNullOrWhiteSpace(workspace)) env["SHONKOR_WORKSPACE"] = workspace;
 
-        // We deliberately do NOT pin SHONKOR_PROJECT. MCP clients like Claude Desktop have no
-        // per-chat working directory, so a hardcoded project would lock every session to one graph.
-        // With SHONKOR_PROJECT unset, the server follows the registry's ActiveProjectName, which the
-        // user can switch without re-installing. An explicit override is still honored if present.
+        // SHONKOR_PROJECT is intentionally NOT pinned: clients with a per-workspace cwd resolve the project
+        // from it, and global clients (Claude Desktop) switch via the set_project MCP tool. An explicit
+        // override is still honoured.
         var project = Environment.GetEnvironmentVariable("SHONKOR_PROJECT");
-        if (!string.IsNullOrWhiteSpace(project))
-        {
-            env["SHONKOR_PROJECT"] = project;
-        }
-
+        if (!string.IsNullOrWhiteSpace(project)) env["SHONKOR_PROJECT"] = project;
         return env;
     }
 
@@ -110,87 +154,67 @@ public static class McpInstaller
         var current = dir;
         while (!string.IsNullOrEmpty(current))
         {
-            if (File.Exists(Path.Combine(current, "projects.json")) ||
-                File.Exists(Path.Combine(current, "shonkor.json")))
-            {
+            if (File.Exists(Path.Combine(current, "projects.json")) || File.Exists(Path.Combine(current, "shonkor.json")))
                 return current;
-            }
-
             var parent = Directory.GetParent(current);
-            if (parent == null || parent.FullName == current)
-            {
-                break;
-            }
+            if (parent == null || parent.FullName == current) break;
             current = parent.FullName;
         }
-
         return dir;
     }
 
-    private static async Task UpdateConfigFileAsync(string configPath, string serverName, string command, string[] args, System.Collections.Generic.IReadOnlyDictionary<string, string>? env = null)
+    private static async Task<JsonObject> LoadOrCreateAsync(string configPath)
     {
         if (!File.Exists(configPath))
         {
             var dir = Path.GetDirectoryName(configPath);
-            if (dir != null && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-            
-            var emptyConfig = new JsonObject
-            {
-                ["mcpServers"] = new JsonObject()
-            };
-            await File.WriteAllTextAsync(configPath, emptyConfig.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            if (dir != null && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            return new JsonObject { ["mcpServers"] = new JsonObject() };
+        }
+        try { return JsonNode.Parse(await File.ReadAllTextAsync(configPath).ConfigureAwait(false))?.AsObject() ?? new JsonObject(); }
+        catch { return new JsonObject(); }
+    }
+
+    private static async Task UpdateConfigFileAsync(string configPath, string command, string[] args, IReadOnlyDictionary<string, string> env)
+    {
+        var root = await LoadOrCreateAsync(configPath).ConfigureAwait(false);
+        if (root["mcpServers"] is not JsonObject servers)
+        {
+            servers = new JsonObject();
+            root["mcpServers"] = servers;
         }
 
-        var json = await File.ReadAllTextAsync(configPath);
-        JsonObject? root;
+        var argsArray = new JsonArray();
+        foreach (var a in args) argsArray.Add(a);
+        var node = new JsonObject { ["command"] = command, ["args"] = argsArray };
+        if (env.Count > 0)
+        {
+            var envObj = new JsonObject();
+            foreach (var kv in env) envObj[kv.Key] = kv.Value;
+            node["env"] = envObj;
+        }
+        servers[ServerName] = node;
+
+        await File.WriteAllTextAsync(configPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true })).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> RemoveFromConfigAsync(string configPath)
+    {
+        if (!File.Exists(configPath)) return false;
+        var root = await LoadOrCreateAsync(configPath).ConfigureAwait(false);
+        if (root["mcpServers"] is not JsonObject servers || !servers.ContainsKey(ServerName)) return false;
+        servers.Remove(ServerName);
+        await File.WriteAllTextAsync(configPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true })).ConfigureAwait(false);
+        return true;
+    }
+
+    private static async Task<bool> IsRegisteredAsync(string configPath)
+    {
         try
         {
-            root = JsonNode.Parse(json)?.AsObject();
+            var root = JsonNode.Parse(await File.ReadAllTextAsync(configPath).ConfigureAwait(false))?.AsObject();
+            return root?["mcpServers"] is JsonObject servers && servers.ContainsKey(ServerName);
         }
-        catch
-        {
-            root = new JsonObject();
-        }
-
-        root ??= new JsonObject();
-
-        if (!root.ContainsKey("mcpServers"))
-        {
-            root["mcpServers"] = new JsonObject();
-        }
-
-        var mcpServers = root["mcpServers"]?.AsObject();
-        if (mcpServers != null)
-        {
-            var argsArray = new JsonArray();
-            foreach (var arg in args)
-            {
-                argsArray.Add(arg);
-            }
-
-            var serverNode = new JsonObject
-            {
-                ["command"] = command,
-                ["args"] = argsArray
-            };
-
-            if (env != null && env.Count > 0)
-            {
-                var envObject = new JsonObject();
-                foreach (var kvp in env)
-                {
-                    envObject[kvp.Key] = kvp.Value;
-                }
-                serverNode["env"] = envObject;
-            }
-
-            mcpServers[serverName] = serverNode;
-
-            await File.WriteAllTextAsync(configPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-            Console.WriteLine($"Updated {configPath}");
-        }
+        catch { return false; }
     }
 }
