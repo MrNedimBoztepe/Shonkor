@@ -77,7 +77,7 @@ If you host Shonkor as a centralized SaaS application (e.g. in Kubernetes), your
 *Note: You can omit `--project` if the `SHONKOR_PROJECT` environment variable is set.*
 
 ### Project Context from the Working Directory
-The MCP server determines the active project **from its working directory** – which is the directory where the client is running. There is **no** global "active project" that can be influenced externally (e.g. from the web dashboard). Override via the `SHONKOR_PROJECT` environment variable. Each tool additionally accepts an optional `projectName` argument for cross-project queries.
+The MCP server determines the active project **from its working directory** – which is the directory where the client is running. There is **no** global "active project" that can be influenced externally (e.g. from the web dashboard). Override via the `SHONKOR_PROJECT` environment variable. Each tool additionally accepts an optional `projectName` argument for cross-project queries. For clients without a per-chat working directory (e.g. Claude Desktop), `set_project` switches the active project **for that session only** — it never writes the shared registry, so other sessions are unaffected.
 
 ### Available Tools (token-efficient)
 
@@ -93,7 +93,7 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 |------|---------|------|
 | `locate` | Pure "Where is X?" → `name -> file:line` | Most minimal output, ideal first step |
 | `search_graph` | FTS5 keyword search; one line per match | `verbose: true` for full JSON |
-| `search_semantic` | Vector/meaning search ("where is auth handled?") | Needs the embedding backend (web server + Ollama); degrades gracefully otherwise |
+| `search_semantic` | Vector/meaning search ("where is auth handled?") | **Only listed when an embedding backend is wired** (web server + Ollama); not present in the local stdio CLI |
 
 **Read — show me the code**
 | Tool | Purpose | Note |
@@ -108,11 +108,8 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 **Analyze — impact & relationships**
 | Tool | Purpose | Note |
 |------|---------|------|
-| `impact_of` | What references a symbol (incoming) — *"what breaks if I change it?"*; for a **method**, its callers (`CALLS`) | Grouped by relation, with AI summaries; structural containment excluded |
-| `depends_on` | What a symbol itself uses (outgoing) — its footprint; for a method, what it calls | Inverse of `impact_of`; structural containment excluded |
-| `dependency_tree` | Transitive reference tree, indented to a depth, `uses` / `used_by` | Type/reference-level; cycles marked |
+| `references` | Reference/impact over `REFERENCES_TYPE`/`IMPLEMENTS`/`EXTENDS`. `direction=used_by` (default) = *"what breaks if I change it?"*; `direction=uses` = its footprint | `depth=1` = flat list grouped by relation (AI summaries); `depth>1` = transitive — ranked blast radius with `[test]` flags (`used_by`) or indented tree (`uses`); structural containment excluded |
 | `call_hierarchy` | Method-level **callers** / **callees**, indented to a depth, over `CALLS` | Needs semantic indexing (`Indexing:SemanticCSharp`); recursion marked |
-| `blast_radius` | **Transitive** impact of a change, ranked by hop distance, affected tests flagged `[test]` | Walks incoming impact edges (CALLS/REFERENCES_TYPE/IMPLEMENTS/EXTENDS/cross-tech); structural containment excluded |
 | `find_usages` | Call/reference sites **with a code snippet** at each (graph-aware grep) | `relation  name  file:line  ⟶ <usage line>` |
 | `find_path` | Shortest connection chain between two symbols | `A --REL--> B <--REL-- C`, real edge directions |
 | `implementations_of` | Types that implement an interface / extend a base type | `IMPLEMENTS`/`EXTENDS`, with `file:line` + summaries |
@@ -127,14 +124,13 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 | `reindex_file` | Re-index a single file after you edit it, so the graph matches the working tree | Local only (stdio CLI / dev relay); disabled in SaaS; preserves incoming references; relinks the file's `REFERENCES_TYPE` edges |
 | `check_edit` | Compile-check a C# file after editing — **syntax** errors (always reliable) + **semantic** errors (semantic project) | Self-contained (no `dotnet build`); external-package "type not found" noise suppressed; local only |
 | `review` | Code-review briefing for changed files: per-file **compile** + aggregated transitive **impact** + **tests** to run + **risks** | One call over a diff (`paths`); deterministic "what does this change affect/break?" |
-| `is_fresh` | Is one file's graph still in sync with disk? | `Fresh`/`Stale`/`Untracked`/`Deleted` (SHA256 vs stored); local only |
-| `stale_files` | Project-wide drift report before trusting graph-wide analysis | Lists `Changed`/`New`/`Deleted`; empty = graph matches the tree; local only |
+| `freshness` | Anti-drift check. With `path` → one file: `Fresh`/`Stale`/`Untracked`/`Deleted` (SHA256 vs stored). Without `path` → project-wide drift report (`Changed`/`New`/`Deleted`; empty = graph matches the tree) | Local only |
 
 **Session memory**
 | Tool | Purpose | Note |
 |------|---------|------|
 | `get_open_threads` | Resume context: list still-open recorded tasks/questions/decisions/milestones | Call at the start of a session |
-| `record_decision` / `record_milestone` / `record_task` / `record_question` | Persist these as nodes in the graph | Linkable with `connectedNodeIds` |
+| `record` | Persist a memory node: `type` = `decision` / `milestone` / `task` / `question` | Linkable with `connectedNodeIds`; `decision` needs `content`, `milestone` needs `status` |
 | `get_stats` | Node/edge statistics of the DB | |
 
 ### Example Workflow: the agentic edit loop

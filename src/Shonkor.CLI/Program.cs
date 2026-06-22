@@ -153,10 +153,10 @@ public static class Program
 This project is indexed by **Shonkor** — a precise, self-contained code graph exposed via the `shonkor` MCP server. Prefer its tools over grepping or reading whole files: they are deterministic, token-cheap, and stay in sync with the working tree.
 
 - **Start each session** with `orient` — it shows the graph, the tool palette, and the workflow.
-- **Find:** `locate`, `search_graph`, `search_semantic`. **Read precisely:** `signature`, `get_source`, `outline` (no need to read whole files).
-- **Before changing code:** `blast_radius` / `impact_of` (what could break?), `call_hierarchy` (callers/callees), `depends_on` (footprint).
+- **Find:** `locate`, `search_graph`. **Read precisely:** `signature`, `get_source`, `outline` (no need to read whole files).
+- **Before changing code:** `references` (direction `used_by` = what breaks if you change it, `uses` = footprint; `depth>1` for transitive/blast radius), `call_hierarchy` (callers/callees), `find_usages` (call sites).
 - **After editing a C# file:** `check_edit` (does it compile? — Roslyn, no build) → `reindex_file` (refresh the graph) → run exactly the tests `related_tests` names.
-- **Never claim a symbol exists** without `verify_exists`. Check freshness with `is_fresh` / `stale_files` when in doubt.
+- **Never claim a symbol exists** without `verify_exists`. Check `freshness` (a file, or the whole project) when in doubt.
 ");
     }
 

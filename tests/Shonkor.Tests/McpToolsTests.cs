@@ -96,7 +96,7 @@ public class McpToolsTests
         var (pm, synth, _) = await SetupAsync();
         var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
 
-        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("impact_of", new { symbol = "Widget" })));
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Widget" })));
 
         Assert.Contains("Gadget", text);             // the dependent is listed
         Assert.Contains("REFERENCES_TYPE", text);    // grouped by relation
@@ -181,7 +181,7 @@ public class McpToolsTests
 
         // Add is contained by Calc (CONTAINS) and called by Caller (CALLS). Method-level impact = the caller,
         // not the enclosing type: the structural CONTAINS edge is filtered out.
-        var impact = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("impact_of", new { symbol = "Add" })));
+        var impact = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Add" })));
         Assert.Contains("CALLS", impact);
         Assert.Contains("Caller", impact);
         Assert.DoesNotContain("CONTAINS", impact);
@@ -199,7 +199,7 @@ public class McpToolsTests
 
         // Widget is referenced by Gadget and by WidgetTests (a test). Blast radius shows both, flags the
         // test, reports a test count, and excludes structural containment.
-        var blast = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("blast_radius", new { symbol = "Widget" })));
+        var blast = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Widget", direction = "used_by", depth = 3 })));
         Assert.Contains("Gadget", blast);
         Assert.Contains("WidgetTests", blast);
         Assert.Contains("REFERENCES_TYPE", blast);
@@ -208,7 +208,7 @@ public class McpToolsTests
         Assert.DoesNotContain("CONTAINS", blast);
 
         // For a method, the radius is its callers (CALLS).
-        var methodBlast = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("blast_radius", new { symbol = "Add" })));
+        var methodBlast = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Add", direction = "used_by", depth = 3 })));
         Assert.Contains("Caller", methodBlast);
         Assert.Contains("CALLS", methodBlast);
     }
@@ -330,12 +330,12 @@ public class McpToolsTests
             var handler = new McpRequestHandler(new ProjectManager(ws), new ContextCapsuleSynthesizer(), "P",
                 lockToContextProject: true, fileParsers: new IFileParser[] { new RoslynAstParser() });
 
-            var fresh = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("impact_of", new { symbol = "Foo" })));
+            var fresh = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Foo" })));
             Assert.DoesNotContain("stale", fresh, StringComparison.OrdinalIgnoreCase);
 
             // Edit the file on disk WITHOUT reindexing -> analysis must warn it may be stale.
             await File.WriteAllTextAsync(file, "namespace N { public class Foo { public void Added() { } } }");
-            var stale = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("impact_of", new { symbol = "Foo" })));
+            var stale = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Foo" })));
             Assert.Contains("EDITED since indexing", stale);
         }
         finally
@@ -358,7 +358,7 @@ public class McpToolsTests
 
         // Switch to an existing project.
         var sw = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("set_project", new { name = "P" })));
-        Assert.Contains("Active project is now 'P'", sw);
+        Assert.Contains("is now 'P'", sw);
 
         // Unknown project is rejected.
         var no = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("set_project", new { name = "Nope" })));
@@ -380,7 +380,7 @@ public class McpToolsTests
 
         Assert.Contains("START HERE", text);
         Assert.Contains("nodes", text);                 // live graph size
-        Assert.Contains("blast_radius", text);          // impact palette
+        Assert.Contains("references", text);            // impact palette
         Assert.Contains("check_edit", text);            // edit loop
         Assert.Contains("related_tests", text);
         Assert.Contains("OPEN THREADS", text);          // composes the thread count
@@ -407,7 +407,7 @@ public class McpToolsTests
         var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
 
         // Gadget is referenced by nothing -> safe to change.
-        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("impact_of", new { symbol = "Gadget" })));
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Gadget" })));
         Assert.Contains("Nothing references", text);
     }
 
@@ -441,7 +441,34 @@ public class McpToolsTests
     }
 
     [Fact]
-    public async Task ToolsList_AdvertisesImpactOf()
+    public async Task Record_RoutesByType_AndRejectsUnknownOrMissingRequired()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // type=task records a Task; it then shows up as an open thread.
+        var rec = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("record", new { type = "task", name = "Wire the importer" })));
+        Assert.Contains("recorded task", rec);
+
+        var threads = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("get_open_threads", new { })));
+        Assert.Contains("Wire the importer", threads);
+
+        // type=decision requires content (returned as a JSON-RPC error, so assert on the raw response;
+        // the JSON encoder escapes apostrophes, so match on the unquoted words).
+        var noContent = await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("record", new { type = "decision", name = "Pick a store" }));
+        Assert.Contains("requires", noContent!);
+        Assert.Contains("content", noContent!);
+
+        // An unknown type is rejected with the allowed set.
+        var bad = await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("record", new { type = "note", name = "x" }));
+        Assert.Contains("decision, milestone, task, question", bad!);
+    }
+
+    [Fact]
+    public async Task ToolsList_AdvertisesReferences()
     {
         var (pm, synth, _) = await SetupAsync();
         var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
@@ -449,7 +476,7 @@ public class McpToolsTests
         var res = await handler.ProcessJsonRpcMessageAsync(
             JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, method = "tools/list" }));
 
-        Assert.Contains("impact_of", res);
+        Assert.Contains("references", res);
     }
 
     [Fact]
@@ -538,9 +565,9 @@ public class McpToolsTests
         Assert.Contains("Add", outline);
         Assert.Contains("Method", outline);
 
-        // dependency_tree (uses): Gadget --REFERENCES_TYPE--> Widget.
+        // references (uses, depth>1) = dependency tree: Gadget --REFERENCES_TYPE--> Widget.
         var tree = TextOf(await handler.ProcessJsonRpcMessageAsync(
-            ToolCall("dependency_tree", new { symbol = "Gadget", direction = "uses", depth = 2 })));
+            ToolCall("references", new { symbol = "Gadget", direction = "uses", depth = 2 })));
         Assert.Contains("--REFERENCES_TYPE--> Widget", tree);
     }
 
@@ -572,19 +599,19 @@ public class McpToolsTests
     }
 
     [Fact]
-    public async Task DependsOn_ListsOutgoingReferences()
+    public async Task References_Uses_ListsOutgoingReferences()
     {
         var (pm, synth, _) = await SetupAsync();
         var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
 
-        // Gadget --REFERENCES_TYPE--> Widget, so Gadget depends on Widget.
-        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("depends_on", new { symbol = "Gadget" })));
+        // Gadget --REFERENCES_TYPE--> Widget, so Gadget (uses) depends on Widget.
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Gadget", direction = "uses" })));
         Assert.Contains("Widget", text);
         Assert.Contains("REFERENCES_TYPE", text);
         Assert.Contains("A reusable widget.", text); // dependency's AI summary
 
         // Widget points at nothing -> self-contained.
-        var leaf = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("depends_on", new { symbol = "Widget" })));
+        var leaf = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Widget", direction = "uses" })));
         Assert.Contains("self-contained", leaf);
     }
 

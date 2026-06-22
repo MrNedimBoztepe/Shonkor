@@ -5,6 +5,20 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — MCP tool surface slimmed (34 → 26 in the local CLI)
+- **`references`** replaces `impact_of`, `depends_on`, `dependency_tree`, and `blast_radius`.
+  `direction` (`used_by` default / `uses`) and `depth` (1 = flat list, >1 = transitive blast
+  radius with `[test]` flags / dependency tree) select the behavior.
+- **`freshness`** replaces `is_fresh` + `stale_files`: with a `path` it checks one file, without
+  it returns the project-wide drift report.
+- **`record`** replaces `record_decision` / `record_milestone` / `record_task` / `record_question`;
+  `type` selects which (decision needs `content`, milestone needs `status`).
+- **`search_semantic`** is now capability-gated: it is only listed when an embedding backend is
+  wired (web server + Ollama), so the local stdio CLI no longer advertises an inert tool.
+- **`set_project`** now switches the active project for the current session only (in-memory). It no
+  longer writes the shared, persisted `ActiveProjectName`, so switching in one chat can never
+  affect another session or client.
+
 ### Changed
 - The repo-root `Directory.Build.props` is now the single source of truth for the
   assembly/package version. The MCP server reports this version at runtime in the

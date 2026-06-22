@@ -51,14 +51,22 @@ public sealed class McpRequestHandler
     private readonly bool _lockToContextProject;
 
     /// <summary>
+    /// A session-local active-project override set by <c>set_project</c>. Lives only in this server
+    /// process — it deliberately does NOT touch the shared, persisted ActiveProjectName, so switching
+    /// the project in one chat never affects another session or client. Null until set.
+    /// </summary>
+    private string? _sessionProjectOverride;
+
+    /// <summary>
     /// Resolves the project name to use for a call. When the session is tenant-locked the context
     /// project always wins (the explicit argument is ignored, preventing cross-tenant access).
-    /// Otherwise the explicit argument wins, falling back to the directory-derived context.
+    /// Otherwise: an explicit per-call argument wins, then this session's set_project override, then
+    /// the directory-derived context.
     /// </summary>
     private string? ResolveProjectName(string? projectName) =>
         _lockToContextProject
             ? _contextProjectName
-            : (!string.IsNullOrWhiteSpace(projectName) ? projectName : _contextProjectName);
+            : (!string.IsNullOrWhiteSpace(projectName) ? projectName : (_sessionProjectOverride ?? _contextProjectName));
 
     private Task<IGraphStorageProvider> GetStorageAsync(string? projectName)
     {
@@ -269,16 +277,16 @@ public sealed class McpRequestHandler
     }
 
     /// <summary>
-    /// Shared body for <c>impact_of</c> (incoming references) and <c>depends_on</c> (outgoing
-    /// references): resolves the symbol, pulls its 1-hop neighbourhood, keeps the edges incident to it
+    /// Shared body for <c>references</c> at depth 1 (incoming = used_by, outgoing = uses):
+    /// resolves the symbol, pulls its 1-hop neighbourhood, keeps the edges incident to it
     /// in the requested direction, and renders them grouped by relationship as
     /// <c>relation\tname\thandle  — summary</c>. <paramref name="emptyMessage"/> is a format string with
     /// <c>{0}</c>=name and <c>{1}</c>=type.
     /// </summary>
     /// <summary>
     /// Containment/grouping edges that are structure, not semantic impact or dependency: a type's parent
-    /// file, a method's parent type, or a node's Helix module. Excluded from impact_of/depends_on/find_usages/
-    /// blast_radius so a method's real impact (its CALLS / REFERENCES_TYPE) isn't drowned by its enclosing type.
+    /// file, a method's parent type, or a node's Helix module. Excluded from references/find_usages so a
+    /// method's real impact (its CALLS / REFERENCES_TYPE) isn't drowned by its enclosing type.
     /// </summary>
     private static readonly HashSet<string> StructuralRelationships = new(StringComparer.Ordinal)
     {
@@ -498,9 +506,8 @@ public sealed class McpRequestHandler
                 });
 
             case "tools/list":
-                return SendResponse(id, new
                 {
-                    tools = new object[]
+                    var toolDefs = new List<object>
                     {
                         new
                         {
@@ -556,29 +563,16 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
-                            name = "impact_of",
-                            description = "Impact analysis: list the nodes that reference a given symbol (incoming REFERENCES_TYPE/IMPLEMENTS/CALLS edges) — i.e. what would be affected if you change it. Returns 'relation  name  handle  — summary' per dependent, or states that nothing references it. The most token-efficient way to answer 'what breaks if I change X?'.",
+                            name = "references",
+                            description = "Reference/impact analysis over the graph's REFERENCES_TYPE/IMPLEMENTS/EXTENDS edges. direction='used_by' (default) = what references the symbol (what breaks if you change it); direction='uses' = the symbol's own dependencies. depth=1 (default) returns a flat 'relation  name  handle  — summary' list; depth>1 returns a transitive view — ranked by distance with affected tests flagged for used_by (blast radius), or an indented tree for uses. The one tool for 'what breaks if I change X?' and 'what does X depend on?'.",
                             inputSchema = new
                             {
                                 type = "object",
                                 properties = new
                                 {
                                     symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode'). 'query' is accepted as an alias." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "symbol" }
-                            }
-                        },
-                        new
-                        {
-                            name = "depends_on",
-                            description = "Inverse of impact_of: list what a symbol itself uses (outgoing REFERENCES_TYPE/IMPLEMENTS/CALLS edges) — its direct dependencies. Returns 'relation  name  handle  — summary' per dependency, or states it's self-contained. Use to understand a symbol's footprint before reading or changing it.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode'). 'query' is accepted as an alias." },
+                                    direction = new { type = "string", description = "'used_by' (incoming — what references it, default) or 'uses' (outgoing — what it depends on)." },
+                                    depth = new { type = "integer", description = "1 (default) = direct only (flat list); >1 = transitive (max 6). used_by+depth>1 = ranked blast radius with [test] flags; uses+depth>1 = dependency tree." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "symbol" }
@@ -587,7 +581,7 @@ public sealed class McpRequestHandler
                         new
                         {
                             name = "get_source",
-                            description = "Return the EXACT source code of a symbol (its stored body) plus its 'file:startLine-endLine' location — so you can read precisely what to edit without loading whole files. Resolves the symbol like impact_of. Supports maxChars to cap large bodies. The most token-efficient way to read a specific class/method before changing it.",
+                            description = "Return the EXACT source code of a symbol (its stored body) plus its 'file:startLine-endLine' location — so you can read precisely what to edit without loading whole files. Resolves the symbol by name. Supports maxChars to cap large bodies. The most token-efficient way to read a specific class/method before changing it.",
                             inputSchema = new
                             {
                                 type = "object",
@@ -603,7 +597,7 @@ public sealed class McpRequestHandler
                         new
                         {
                             name = "find_usages",
-                            description = "List the call/reference SITES of a symbol with a code snippet at each — a graph-aware grep. For every node that references the symbol, returns 'relation  name  file:line  ⟶ <the line that uses it>'. Use to see HOW something is used (and what would break) before changing its signature; richer than impact_of, which lists dependents without the usage line.",
+                            description = "List the call/reference SITES of a symbol with a code snippet at each — a graph-aware grep. For every node that references the symbol, returns 'relation  name  file:line  ⟶ <the line that uses it>'. Use to see HOW something is used (and what would break) before changing its signature; richer than 'references' (depth 1), which lists dependents without the usage line.",
                             inputSchema = new
                             {
                                 type = "object",
@@ -647,28 +641,14 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
-                            name = "is_fresh",
-                            description = "Anti-drift check for ONE file: does the graph still match the file on disk? Returns Fresh (in sync), Stale (edited since indexing — run reindex_file), Untracked (on disk but never indexed), or Deleted (indexed but gone from disk). Use before trusting analysis for a file you may have just changed.",
+                            name = "freshness",
+                            description = "Anti-drift check: does the graph still match the files on disk? With 'path' → checks ONE file: Fresh (in sync), Stale (edited since indexing — run reindex_file), Untracked (on disk but never indexed), or Deleted (indexed but gone). Without 'path' → a project-wide drift report listing Changed/New/Deleted files (empty = graph matches the working tree). Use before trusting analysis for files you may have just changed.",
                             inputSchema = new
                             {
                                 type = "object",
                                 properties = new
                                 {
-                                    path = new { type = "string", description = "File to check: absolute, project-relative, or an '@/<relative>' handle." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "path" }
-                            }
-                        },
-                        new
-                        {
-                            name = "stale_files",
-                            description = "Drift report for the whole project: lists files whose on-disk content diverges from the graph — Changed (edited since indexing), New (on disk but unindexed), Deleted (indexed but gone). An empty report means the graph matches the working tree. Use to decide whether a full re-index is needed before trusting graph-wide analysis.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
+                                    path = new { type = "string", description = "Optional. A file to check (absolute, project-relative, or an '@/<relative>' handle). Omit for a whole-project drift report." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 }
                             }
@@ -676,7 +656,7 @@ public sealed class McpRequestHandler
                         new
                         {
                             name = "implementations_of",
-                            description = "List the types that implement an interface or extend a base type (incoming IMPLEMENTS/EXTENDS edges), each as 'relation  name  file:line  — summary'. More precise than impact_of when you specifically need subtypes (e.g. all IFileParser implementations).",
+                            description = "List the types that implement an interface or extend a base type (incoming IMPLEMENTS/EXTENDS edges), each as 'relation  name  file:line  — summary'. More precise than 'references' when you specifically need subtypes (e.g. all IFileParser implementations).",
                             inputSchema = new
                             {
                                 type = "object",
@@ -783,23 +763,6 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
-                            name = "dependency_tree",
-                            description = "Transitive dependency tree over reference edges (REFERENCES_TYPE/IMPLEMENTS/EXTENDS), rendered indented to a given depth. direction 'uses' = what the symbol depends on (outgoing); 'used_by' = what depends on it (incoming). NOTE: this is type/reference-level (the graph does not resolve method-level calls). Cycles are marked, and the tree is capped for safety.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    symbol = new { type = "string", description = "The root symbol (e.g. 'GraphNode'). 'query' is accepted as an alias." },
-                                    direction = new { type = "string", description = "'uses' (outgoing, default) or 'used_by' (incoming)." },
-                                    depth = new { type = "integer", description = "Tree depth (default 2, max 5)." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "symbol" }
-                            }
-                        },
-                        new
-                        {
                             name = "call_hierarchy",
                             description = "Method-level call hierarchy over CALLS edges, rendered indented to a given depth. direction 'callers' = who calls the method, transitively (incoming, default); 'callees' = what the method calls (outgoing). Requires semantic indexing (Indexing:SemanticCSharp / SHONKOR_SEMANTIC_CSHARP=true) — that's what emits CALLS edges; without it the tree is empty. Cycles (recursion) are marked, and the tree is capped for safety.",
                             inputSchema = new
@@ -810,22 +773,6 @@ public sealed class McpRequestHandler
                                     symbol = new { type = "string", description = "The method name (e.g. 'ScanFileAsync'). 'query' is accepted as an alias. Overloads resolve to the first match; use file:line addressing for a specific one." },
                                     direction = new { type = "string", description = "'callers' (incoming, who calls it — default) or 'callees' (outgoing, what it calls)." },
                                     depth = new { type = "integer", description = "Tree depth (default 3, max 6)." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "symbol" }
-                            }
-                        },
-                        new
-                        {
-                            name = "blast_radius",
-                            description = "Transitive impact ('blast radius') of changing a symbol: the full set of nodes affected DIRECTLY and indirectly, walking incoming impact edges (CALLS callers, REFERENCES_TYPE users, IMPLEMENTS/EXTENDS subtypes, cross-tech) to a depth — ranked by distance, with affected tests flagged [test], and a file/test count. Structural containment is excluded. Use BEFORE a risky change to see everything that could break, deterministically. CALLS-level impact needs semantic indexing.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    symbol = new { type = "string", description = "The symbol you intend to change (e.g. 'GraphNode' or a method). 'query' is accepted as an alias." },
-                                    depth = new { type = "integer", description = "How many hops of transitive impact to follow (default 3, max 6)." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 },
                                 required = new[] { "symbol" }
@@ -883,22 +830,6 @@ public sealed class McpRequestHandler
                                 {
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 }
-                            }
-                        },
-                        new
-                        {
-                            name = "search_semantic",
-                            description = "Concept/meaning-based search via vector embeddings (e.g. 'where is authentication handled?'), complementing the keyword-based search_graph. Returns 'type  name  handle  — summary' per hit. Requires the embedding backend (web server + Ollama) and nodes that have been embedded by the enrichment worker; degrades to a clear message otherwise.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    query = new { type = "string", description = "Natural-language description of what you're looking for." },
-                                    limit = new { type = "integer", description = "Max number of results (default 10)." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "query" }
                             }
                         },
                         new
@@ -963,75 +894,49 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
-                            name = "record_decision",
-                            description = "Record an architectural decision, rationale, or context in the graph connected to specific code nodes (classes, files, methods).",
+                            name = "record",
+                            description = "Record a memory node in the graph, connected to specific code nodes. 'type' selects what: 'decision' (architectural choice + rationale; requires content), 'milestone' (progress/focus/blocker; requires status), 'task' (a concrete todo; status defaults to Todo), or 'question' (an open uncertainty). Use to persist context an agent should be able to resume later (see get_open_threads).",
                             inputSchema = new
                             {
                                 type = "object",
                                 properties = new
                                 {
-                                    name = new { type = "string", description = "Title or core question of the decision" },
-                                    content = new { type = "string", description = "Detailed explanation, alternatives considered, and rationale" },
-                                    connectedNodeIds = new { type = "array", items = new { type = "string" }, description = "List of node IDs this decision influences" },
+                                    type = new { type = "string", description = "One of: 'decision', 'milestone', 'task', 'question'." },
+                                    name = new { type = "string", description = "Title / the decision question / the task title / the open question." },
+                                    content = new { type = "string", description = "Detail: rationale & alternatives (decision), description/steps (task), or context (question). Required for 'decision'." },
+                                    status = new { type = "string", description = "For 'milestone' (required, e.g. 'Completed'/'In Progress'/'Blocked') or 'task' (e.g. 'Todo'/'In Progress'/'Done')." },
+                                    connectedNodeIds = new { type = "array", items = new { type = "string" }, description = "List of node IDs this memory connects to." },
                                     projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
                                 },
-                                required = new[] { "name", "content" }
-                            }
-                        },
-                        new
-                        {
-                            name = "record_milestone",
-                            description = "Record a task milestone, progress update, or active focus/blocker status connected to specific code nodes.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    name = new { type = "string", description = "Title of the milestone or focus area (e.g. 'Configured SQLite User Schema')" },
-                                    status = new { type = "string", description = "Status update (e.g. 'Completed', 'In Progress', 'Blocked')" },
-                                    connectedNodeIds = new { type = "array", items = new { type = "string" }, description = "List of node IDs this milestone influences" },
-                                    projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
-                                },
-                                required = new[] { "name", "status" }
-                            }
-                        },
-                        new
-                        {
-                            name = "record_task",
-                            description = "Record a concrete todo or action item identified by the AI during a session.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    name = new { type = "string", description = "Short title of the task" },
-                                    content = new { type = "string", description = "Detailed description or steps" },
-                                    status = new { type = "string", description = "e.g. 'Todo', 'In Progress', 'Done'" },
-                                    connectedNodeIds = new { type = "array", items = new { type = "string" }, description = "Related nodes" },
-                                    projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
-                                },
-                                required = new[] { "name", "status" }
-                            }
-                        },
-                        new
-                        {
-                            name = "record_question",
-                            description = "Record an open question, uncertainty, or needed clarification that blocks progress.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    name = new { type = "string", description = "The question" },
-                                    content = new { type = "string", description = "Context around why this is a question" },
-                                    connectedNodeIds = new { type = "array", items = new { type = "string" }, description = "Related nodes" },
-                                    projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
-                                },
-                                required = new[] { "name" }
+                                required = new[] { "type", "name" }
                             }
                         }
+                    };
+
+                    // Capability-gated: only advertise semantic search when an embedding backend is wired
+                    // (web server + Ollama). In the local stdio CLI it isn't, so we don't list an inert tool.
+                    if (_embeddingService != null)
+                    {
+                        toolDefs.Add(new
+                        {
+                            name = "search_semantic",
+                            description = "Concept/meaning-based search via vector embeddings (e.g. 'where is authentication handled?'), complementing the keyword-based search_graph. Returns 'type  name  handle  — summary' per hit. Requires nodes that have been embedded by the enrichment worker.",
+                            inputSchema = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    query = new { type = "string", description = "Natural-language description of what you're looking for." },
+                                    limit = new { type = "integer", description = "Max number of results (default 10)." },
+                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+                                },
+                                required = new[] { "query" }
+                            }
+                        });
                     }
-                });
+
+                    return SendResponse(id, new { tools = toolDefs });
+                }
 
             case "tools/call":
                 var toolName = obj["params"]?["name"]?.ToString();
@@ -1229,34 +1134,133 @@ public sealed class McpRequestHandler
                         return SendToolResponse(id, JsonSerializer.Serialize(formatted));
                     }
 
-                case "impact_of":
+                case "references":
                     {
                         var symbol = ReadSymbol(args);
                         if (string.IsNullOrWhiteSpace(symbol))
                         {
                             return SendError(id, -32602, "Parameter 'symbol' is required");
                         }
-                        // Incoming references: what would be affected if you change the symbol.
-                        var report = await EdgeReportAsync(storage, projectName, symbol, incoming: true,
-                            verb: "is referenced by",
-                            emptyMessage: "Nothing references '{0}' ({1}) — safe to change in isolation, or it is an entry point.")
-                            .ConfigureAwait(false);
-                        return SendToolResponse(id, report);
-                    }
+                        var direction = (args?["direction"]?.ToString() ?? "used_by").ToLowerInvariant();
+                        var usedBy = direction is "used_by" or "used-by" or "callers" or "incoming";
+                        var depth = Math.Clamp(ReadInt(args?["depth"], 1), 1, 6);
 
-                case "depends_on":
-                    {
-                        var symbol = ReadSymbol(args);
-                        if (string.IsNullOrWhiteSpace(symbol))
+                        // depth 1 → flat, grouped-by-relation report (direct dependents / dependencies).
+                        if (depth <= 1)
                         {
-                            return SendError(id, -32602, "Parameter 'symbol' is required");
+                            var report = usedBy
+                                ? await EdgeReportAsync(storage, projectName, symbol, incoming: true,
+                                    verb: "is referenced by",
+                                    emptyMessage: "Nothing references '{0}' ({1}) — safe to change in isolation, or it is an entry point.").ConfigureAwait(false)
+                                : await EdgeReportAsync(storage, projectName, symbol, incoming: false,
+                                    verb: "depends on",
+                                    emptyMessage: "'{0}' ({1}) depends on nothing in the graph — it is self-contained or a leaf.").ConfigureAwait(false);
+                            return SendToolResponse(id, report);
                         }
-                        // Outgoing references: the symbol's own direct dependencies.
-                        var report = await EdgeReportAsync(storage, projectName, symbol, incoming: false,
-                            verb: "depends on",
-                            emptyMessage: "'{0}' ({1}) depends on nothing in the graph — it is self-contained or a leaf.")
-                            .ConfigureAwait(false);
-                        return SendToolResponse(id, report);
+
+                        var refDef = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+                        if (refDef == null)
+                        {
+                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+                        }
+                        var refBasePath = GetProjectBasePath(projectName);
+
+                        // depth > 1, used_by → transitive blast radius (ranked by distance, tests flagged).
+                        if (usedBy)
+                        {
+                            const int maxNodes = 200;
+                            var affected = new Dictionary<string, (int Depth, string Rel, GraphNode? Node)>(StringComparer.Ordinal);
+                            var visited = new HashSet<string>(StringComparer.Ordinal) { refDef.Id };
+                            var frontier = new List<string> { refDef.Id };
+
+                            for (var d = 1; d <= depth && frontier.Count > 0 && affected.Count < maxNodes; d++)
+                            {
+                                var next = new List<string>();
+                                foreach (var nodeId in frontier)
+                                {
+                                    var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
+                                    foreach (var e in edges)
+                                    {
+                                        if (e.TargetId != nodeId || e.SourceId == nodeId) continue;          // incoming only
+                                        if (StructuralRelationships.Contains(e.Relationship)) continue;       // skip containment
+                                        if (!visited.Add(e.SourceId)) continue;
+                                        affected[e.SourceId] = (d, e.Relationship, neighbours.GetValueOrDefault(e.SourceId));
+                                        next.Add(e.SourceId);
+                                        if (affected.Count >= maxNodes) break;
+                                    }
+                                    if (affected.Count >= maxNodes) break;
+                                }
+                                frontier = next;
+                            }
+
+                            if (affected.Count == 0)
+                            {
+                                return SendToolResponse(id, $"Blast radius of '{refDef.Name}' ({refDef.Type}): nothing depends on it — safe to change in isolation, or it is an entry point. (CALLS-level impact needs semantic indexing.)");
+                            }
+
+                            var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            var testCount = 0;
+                            foreach (var (_, info) in affected)
+                            {
+                                var fp = info.Node?.FilePath;
+                                if (!string.IsNullOrEmpty(fp)) files.Add(fp);
+                                if (LooksLikeTest(fp)) testCount++;
+                            }
+
+                            var sb = new System.Text.StringBuilder();
+                            sb.Append($"Blast radius of '{refDef.Name}' ({refDef.Type}), depth {depth}: ");
+                            sb.Append($"{affected.Count} node(s) across {files.Count} file(s)");
+                            if (testCount > 0) sb.Append($", {testCount} test(s)");
+                            if (affected.Count >= maxNodes) sb.Append(" (capped)");
+                            sb.Append(".\n");
+
+                            foreach (var group in affected.Values.GroupBy(a => a.Depth).OrderBy(g => g.Key))
+                            {
+                                sb.Append($"\ndepth {group.Key}{(group.Key == 1 ? " (direct)" : "")}:\n");
+                                foreach (var a in group.OrderBy(a => a.Rel, StringComparer.Ordinal))
+                                {
+                                    var name = a.Node?.Name ?? a.Node?.Id ?? "?";
+                                    var handle = ToHandle(a.Node?.Id ?? string.Empty, refBasePath);
+                                    var testTag = LooksLikeTest(a.Node?.FilePath) ? "  [test]" : "";
+                                    sb.Append($"  {a.Rel}\t{name}\t{handle}{testTag}\n");
+                                }
+                            }
+                            return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, refDef).ConfigureAwait(false));
+                        }
+
+                        // depth > 1, uses → transitive dependency tree (outgoing reference edges).
+                        {
+                            var depRelations = new HashSet<string> { "REFERENCES_TYPE", "IMPLEMENTS", "EXTENDS" };
+                            var sb = new System.Text.StringBuilder();
+                            sb.Append($"Dependency tree (uses, depth {depth}) for '{refDef.Name}':\n");
+                            sb.Append($"{refDef.Name} ({refDef.Type})\n");
+
+                            var visited = new HashSet<string> { refDef.Id };
+                            var emitted = 0;
+                            const int maxNodes = 100;
+
+                            async Task Walk(string nodeId, int level)
+                            {
+                                if (level > depth || emitted >= maxNodes) return;
+                                var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
+                                var step = edges.Where(e => depRelations.Contains(e.Relationship)
+                                    && e.SourceId == nodeId && e.TargetId != nodeId).ToList();
+                                foreach (var e in step.OrderBy(e => e.Relationship))
+                                {
+                                    if (emitted >= maxNodes) { sb.Append(new string(' ', level * 2)).Append("… (truncated)\n"); break; }
+                                    var otherId = e.TargetId;
+                                    var other = neighbours.GetValueOrDefault(otherId);
+                                    sb.Append(new string(' ', level * 2)).Append($"--{e.Relationship}--> {other?.Name ?? otherId} ({other?.Type ?? "?"})");
+                                    emitted++;
+                                    if (!visited.Add(otherId)) { sb.Append("  ↺\n"); continue; }
+                                    sb.Append('\n');
+                                    await Walk(otherId, level + 1).ConfigureAwait(false);
+                                }
+                            }
+                            await Walk(refDef.Id, 1).ConfigureAwait(false);
+
+                            return SendToolResponse(id, sb.ToString().TrimEnd());
+                        }
                     }
 
                 case "verify_exists":
@@ -1447,48 +1451,41 @@ public sealed class McpRequestHandler
                         return SendToolResponse(id, report);
                     }
 
-                case "is_fresh":
+                case "freshness":
                     {
+                        if (_fileParsers == null)
+                        {
+                            return SendToolResponse(id,
+                                "freshness is unavailable here (no filesystem access). Run via the local MCP server in the project directory.");
+                        }
+
                         var rawPath = args?["path"]?.ToString();
-                        if (string.IsNullOrWhiteSpace(rawPath))
-                        {
-                            return SendError(id, -32602, "Parameter 'path' is required");
-                        }
-                        if (_fileParsers == null)
-                        {
-                            return SendToolResponse(id,
-                                "is_fresh is unavailable here (no filesystem access). Run via the local MCP server in the project directory.");
-                        }
 
-                        var basePath = GetProjectBasePath(projectName);
-                        var resolved = FromHandle(rawPath, basePath);
-                        if (!System.IO.Path.IsPathRooted(resolved))
+                        // With a path → single-file freshness check.
+                        if (!string.IsNullOrWhiteSpace(rawPath))
                         {
-                            resolved = System.IO.Path.Combine(basePath, resolved);
-                        }
+                            var fileBase = GetProjectBasePath(projectName);
+                            var resolved = FromHandle(rawPath, fileBase);
+                            if (!System.IO.Path.IsPathRooted(resolved))
+                            {
+                                resolved = System.IO.Path.Combine(fileBase, resolved);
+                            }
 
-                        var scanner = new GraphIndexScanner(storage, _fileParsers);
-                        var state = await scanner.CheckFreshnessAsync(resolved).ConfigureAwait(false);
-                        var handle = ToHandle(System.IO.Path.GetFullPath(resolved), basePath);
-                        var hint = state switch
-                        {
-                            GraphIndexScanner.FreshnessState.Fresh => "the graph matches the file on disk.",
-                            GraphIndexScanner.FreshnessState.Stale => "the file was edited since indexing — run reindex_file before trusting analysis.",
-                            GraphIndexScanner.FreshnessState.Untracked => "the file is on disk but not in the graph — run reindex_file (or a full index).",
-                            GraphIndexScanner.FreshnessState.Deleted => "the file is in the graph but gone from disk — run reindex_file to remove it.",
-                            _ => string.Empty
-                        };
-                        return SendToolResponse(id, $"{state}: {handle} — {hint}");
-                    }
-
-                case "stale_files":
-                    {
-                        if (_fileParsers == null)
-                        {
-                            return SendToolResponse(id,
-                                "stale_files is unavailable here (no filesystem access). Run via the local MCP server in the project directory.");
+                            var fileScanner = new GraphIndexScanner(storage, _fileParsers);
+                            var state = await fileScanner.CheckFreshnessAsync(resolved).ConfigureAwait(false);
+                            var handle = ToHandle(System.IO.Path.GetFullPath(resolved), fileBase);
+                            var hint = state switch
+                            {
+                                GraphIndexScanner.FreshnessState.Fresh => "the graph matches the file on disk.",
+                                GraphIndexScanner.FreshnessState.Stale => "the file was edited since indexing — run reindex_file before trusting analysis.",
+                                GraphIndexScanner.FreshnessState.Untracked => "the file is on disk but not in the graph — run reindex_file (or a full index).",
+                                GraphIndexScanner.FreshnessState.Deleted => "the file is in the graph but gone from disk — run reindex_file to remove it.",
+                                _ => string.Empty
+                            };
+                            return SendToolResponse(id, $"{state}: {handle} — {hint}");
                         }
 
+                        // Without a path → project-wide drift report.
                         var basePath = GetProjectBasePath(projectName);
                         var resolvedName = ResolveProjectName(projectName) ?? _projectManager.GetActiveProjectName();
                         var excludePatterns = _projectManager.GetProjectConfig(resolvedName).ExcludePatterns;
@@ -1893,57 +1890,6 @@ public sealed class McpRequestHandler
                         return SendToolResponse(id, outline.Contains('\n') ? outline : outline + "\n  (no members)");
                     }
 
-                case "dependency_tree":
-                    {
-                        var symbol = ReadSymbol(args);
-                        if (string.IsNullOrWhiteSpace(symbol))
-                        {
-                            return SendError(id, -32602, "Parameter 'symbol' is required");
-                        }
-                        var direction = (args?["direction"]?.ToString() ?? "uses").ToLowerInvariant();
-                        var usedBy = direction is "used_by" or "used-by" or "callers" or "incoming";
-                        var depth = Math.Clamp(ReadInt(args?["depth"], 2), 1, 5);
-
-                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
-                        if (def == null)
-                        {
-                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
-                        }
-
-                        var depRelations = new HashSet<string> { "REFERENCES_TYPE", "IMPLEMENTS", "EXTENDS" };
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append($"Dependency tree ({(usedBy ? "used-by" : "uses")}, depth {depth}) for '{def.Name}':\n");
-                        sb.Append($"{def.Name} ({def.Type})\n");
-
-                        var visited = new HashSet<string> { def.Id };
-                        var emitted = 0;
-                        const int maxNodes = 100;
-
-                        async Task Walk(string nodeId, int level)
-                        {
-                            if (level > depth || emitted >= maxNodes) return;
-                            var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
-                            var step = edges.Where(e => depRelations.Contains(e.Relationship)
-                                && (usedBy ? e.TargetId == nodeId && e.SourceId != nodeId
-                                           : e.SourceId == nodeId && e.TargetId != nodeId)).ToList();
-                            foreach (var e in step.OrderBy(e => e.Relationship))
-                            {
-                                if (emitted >= maxNodes) { sb.Append(new string(' ', level * 2)).Append("… (truncated)\n"); break; }
-                                var otherId = usedBy ? e.SourceId : e.TargetId;
-                                var other = neighbours.GetValueOrDefault(otherId);
-                                var arrow = usedBy ? $"<--{e.Relationship}--" : $"--{e.Relationship}-->";
-                                sb.Append(new string(' ', level * 2)).Append($"{arrow} {other?.Name ?? otherId} ({other?.Type ?? "?"})");
-                                emitted++;
-                                if (!visited.Add(otherId)) { sb.Append("  ↺\n"); continue; }
-                                sb.Append('\n');
-                                await Walk(otherId, level + 1).ConfigureAwait(false);
-                            }
-                        }
-                        await Walk(def.Id, 1).ConfigureAwait(false);
-
-                        return SendToolResponse(id, sb.ToString().TrimEnd());
-                    }
-
                 case "call_hierarchy":
                     {
                         var symbol = ReadSymbol(args);
@@ -2001,84 +1947,6 @@ public sealed class McpRequestHandler
                         return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
                     }
 
-                case "blast_radius":
-                    {
-                        var symbol = ReadSymbol(args);
-                        if (string.IsNullOrWhiteSpace(symbol))
-                        {
-                            return SendError(id, -32602, "Parameter 'symbol' is required");
-                        }
-                        var basePath = GetProjectBasePath(projectName);
-                        var depth = Math.Clamp(ReadInt(args?["depth"], 3), 1, 6);
-
-                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
-                        if (def == null)
-                        {
-                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
-                        }
-
-                        // Transitive BFS over INCOMING impact edges (what is affected if def changes),
-                        // excluding structural containment. Each node is recorded at its shortest depth.
-                        const int maxNodes = 200;
-                        var affected = new Dictionary<string, (int Depth, string Rel, GraphNode? Node)>(StringComparer.Ordinal);
-                        var visited = new HashSet<string>(StringComparer.Ordinal) { def.Id };
-                        var frontier = new List<string> { def.Id };
-
-                        for (var d = 1; d <= depth && frontier.Count > 0 && affected.Count < maxNodes; d++)
-                        {
-                            var next = new List<string>();
-                            foreach (var nodeId in frontier)
-                            {
-                                var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
-                                foreach (var e in edges)
-                                {
-                                    if (e.TargetId != nodeId || e.SourceId == nodeId) continue;          // incoming only
-                                    if (StructuralRelationships.Contains(e.Relationship)) continue;       // skip containment
-                                    if (!visited.Add(e.SourceId)) continue;
-                                    affected[e.SourceId] = (d, e.Relationship, neighbours.GetValueOrDefault(e.SourceId));
-                                    next.Add(e.SourceId);
-                                    if (affected.Count >= maxNodes) break;
-                                }
-                                if (affected.Count >= maxNodes) break;
-                            }
-                            frontier = next;
-                        }
-
-                        if (affected.Count == 0)
-                        {
-                            return SendToolResponse(id, $"Blast radius of '{def.Name}' ({def.Type}): nothing depends on it — safe to change in isolation, or it is an entry point. (CALLS-level impact needs semantic indexing.)");
-                        }
-
-                        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        var testCount = 0;
-                        foreach (var (_, info) in affected)
-                        {
-                            var fp = info.Node?.FilePath;
-                            if (!string.IsNullOrEmpty(fp)) files.Add(fp);
-                            if (LooksLikeTest(fp)) testCount++;
-                        }
-
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append($"Blast radius of '{def.Name}' ({def.Type}), depth {depth}: ");
-                        sb.Append($"{affected.Count} node(s) across {files.Count} file(s)");
-                        if (testCount > 0) sb.Append($", {testCount} test(s)");
-                        if (affected.Count >= maxNodes) sb.Append(" (capped)");
-                        sb.Append(".\n");
-
-                        foreach (var group in affected.Values.GroupBy(a => a.Depth).OrderBy(g => g.Key))
-                        {
-                            sb.Append($"\ndepth {group.Key}{(group.Key == 1 ? " (direct)" : "")}:\n");
-                            foreach (var a in group.OrderBy(a => a.Rel, StringComparer.Ordinal))
-                            {
-                                var name = a.Node?.Name ?? a.Node?.Id ?? "?";
-                                var handle = ToHandle(a.Node?.Id ?? string.Empty, basePath);
-                                var testTag = LooksLikeTest(a.Node?.FilePath) ? "  [test]" : "";
-                                sb.Append($"  {a.Rel}\t{name}\t{handle}{testTag}\n");
-                            }
-                        }
-                        return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
-                    }
-
                 case "set_project":
                     {
                         if (_lockToContextProject)
@@ -2086,22 +1954,24 @@ public sealed class McpRequestHandler
                             return SendToolResponse(id, "This server is locked to a single tenant; project switching is disabled here.");
                         }
                         var projects = _projectManager.GetProjects();
-                        var active = _projectManager.GetActiveProjectName();
+                        // The effective project for THIS session: the session override if set, else the context/active.
+                        var active = _sessionProjectOverride ?? _contextProjectName ?? _projectManager.GetActiveProjectName();
                         var name = args?["name"]?.ToString();
                         if (string.IsNullOrWhiteSpace(name))
                         {
                             var list = string.Join("\n", projects.Select(p => $"  {(p.Name.Equals(active, StringComparison.OrdinalIgnoreCase) ? "* " : "  ")}{p.Name}\t{p.Path}"));
-                            return SendToolResponse(id, $"Active project: {active}\nProjects:\n{list}\n(call set_project with name=<project> to switch.)");
+                            return SendToolResponse(id, $"Active project (this session): {active}\nProjects:\n{list}\n(call set_project with name=<project> to switch — session-local, does not affect other chats.)");
                         }
                         var match = projects.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
                         if (match == null)
                         {
                             return SendToolResponse(id, $"No project named '{name}'. Available: {string.Join(", ", projects.Select(p => p.Name))}.");
                         }
-                        _projectManager.SetActiveProject(match.Name);
+                        // Session-local switch only — never writes the shared, persisted ActiveProjectName.
+                        _sessionProjectOverride = match.Name;
                         var newStorage = await _projectManager.GetStorageProviderAsync(match.Name).ConfigureAwait(false);
                         var newStats = await newStorage.GetStatisticsAsync().ConfigureAwait(false);
-                        return SendToolResponse(id, $"Active project is now '{match.Name}' ({match.Path}) — {newStats.TotalNodes} nodes, {newStats.TotalEdges} edges. Call orient for the workflow.");
+                        return SendToolResponse(id, $"Active project for this session is now '{match.Name}' ({match.Path}) — {newStats.TotalNodes} nodes, {newStats.TotalEdges} edges. Call orient for the workflow.");
                     }
 
                 case "orient":
@@ -2123,6 +1993,9 @@ public sealed class McpRequestHandler
                             ? "method-level CALLS are indexed (semantic mode)."
                             : "no CALLS edges yet — enable semantic indexing (per-project SemanticCSharp) for method-level impact/call_hierarchy.";
 
+                        // search_semantic is only listed/usable when an embedding backend is wired (web server + Ollama).
+                        var semanticNote = _embeddingService != null ? " · search_semantic" : string.Empty;
+
                         var guide =
 $@"Shonkor graph for project '{projectName ?? "(active)"}' — START HERE.
 
@@ -2130,9 +2003,9 @@ GRAPH: {stats.TotalNodes} nodes, {stats.TotalEdges} edges. Top code types: {topT
 Edges: {callsNote}
 
 USE THE GRAPH instead of grepping or reading whole files:
-  Find:    locate · search_graph · search_semantic
+  Find:    locate · search_graph{semanticNote}
   Read:    signature · get_source · outline · get_subgraph
-  Impact:  impact_of (callers) · blast_radius (transitive) · call_hierarchy · depends_on · find_usages
+  Impact:  references (direction=used_by|uses, depth) · find_usages · call_hierarchy
   Verify:  verify_exists (before claiming something exists)
   Tests:   related_tests (exactly which tests to run, transitively)
 
@@ -2140,7 +2013,7 @@ EDIT LOOP after you change code:
   1. check_edit <file>      → does it compile? (Roslyn syntax + semantic, no build)
   2. reindex_file <file>    → refresh the graph for that file
   3. related_tests <symbol> → run exactly the covering tests
-  4. is_fresh / stale_files → confirm the graph matches the working tree
+  4. freshness [path]       → confirm the graph matches the working tree (a file, or whole project)
 
 OPEN THREADS: {openThreads} (call get_open_threads to resume prior work).";
 
@@ -2378,65 +2251,62 @@ OPEN THREADS: {openThreads} (call get_open_threads to resume prior work).";
                         return SendToolResponse(id, JsonSerializer.Serialize(formattedStats));
                     }
 
-                case "record_decision":
+                case "record":
                     {
+                        var type = (args?["type"]?.ToString() ?? string.Empty).Trim().ToLowerInvariant();
                         var name = args?["name"]?.ToString();
-                        var content = args?["content"]?.ToString();
-                        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(content))
+                        if (string.IsNullOrWhiteSpace(name))
                         {
-                            return SendError(id, -32602, "Parameters 'name' and 'content' are required");
+                            return SendError(id, -32602, "Parameter 'name' is required");
                         }
-                        return await RecordNodeAsync(id, storage, "decision", "Decision", name, content,
-                            new Dictionary<string, string> { ["created"] = UtcNow() },
-                            args?["connectedNodeIds"] as JsonArray, "INFLUENCES",
-                            (nodeId, count) => $"Successfully recorded decision '{name}' (ID: {nodeId}) and connected it to {count} nodes.")
-                            .ConfigureAwait(false);
-                    }
-
-                case "record_milestone":
-                    {
-                        var name = args?["name"]?.ToString();
+                        var content = args?["content"]?.ToString();
                         var status = args?["status"]?.ToString();
-                        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(status))
-                        {
-                            return SendError(id, -32602, "Parameters 'name' and 'status' are required");
-                        }
-                        return await RecordNodeAsync(id, storage, "milestone", "Milestone", name, $"Status: {status}",
-                            new Dictionary<string, string> { ["status"] = status, ["updated"] = UtcNow() },
-                            args?["connectedNodeIds"] as JsonArray, "AFFECTS",
-                            (nodeId, count) => $"Successfully recorded milestone '{name}' (ID: {nodeId}) with status '{status}' connected to {count} nodes.")
-                            .ConfigureAwait(false);
-                    }
+                        var connected = args?["connectedNodeIds"] as JsonArray;
 
-                case "record_task":
-                    {
-                        var name = args?["name"]?.ToString();
-                        var content = args?["content"]?.ToString();
-                        var status = args?["status"]?.ToString() ?? "Todo";
-                        if (string.IsNullOrWhiteSpace(name))
+                        switch (type)
                         {
-                            return SendError(id, -32602, "Parameter 'name' is required");
-                        }
-                        return await RecordNodeAsync(id, storage, "task", "Task", name, content ?? $"Status: {status}",
-                            new Dictionary<string, string> { ["status"] = status, ["created"] = UtcNow() },
-                            args?["connectedNodeIds"] as JsonArray, "HasTask",
-                            (nodeId, count) => $"Successfully recorded task '{name}' (ID: {nodeId}) connected to {count} nodes.")
-                            .ConfigureAwait(false);
-                    }
+                            case "decision":
+                                if (string.IsNullOrWhiteSpace(content))
+                                {
+                                    return SendError(id, -32602, "A 'decision' requires 'content' (the rationale/alternatives).");
+                                }
+                                return await RecordNodeAsync(id, storage, "decision", "Decision", name, content,
+                                    new Dictionary<string, string> { ["created"] = UtcNow() },
+                                    connected, "INFLUENCES",
+                                    (nodeId, count) => $"Successfully recorded decision '{name}' (ID: {nodeId}) and connected it to {count} nodes.")
+                                    .ConfigureAwait(false);
 
-                case "record_question":
-                    {
-                        var name = args?["name"]?.ToString();
-                        var content = args?["content"]?.ToString() ?? "";
-                        if (string.IsNullOrWhiteSpace(name))
-                        {
-                            return SendError(id, -32602, "Parameter 'name' is required");
+                            case "milestone":
+                                if (string.IsNullOrWhiteSpace(status))
+                                {
+                                    return SendError(id, -32602, "A 'milestone' requires 'status'.");
+                                }
+                                return await RecordNodeAsync(id, storage, "milestone", "Milestone", name, $"Status: {status}",
+                                    new Dictionary<string, string> { ["status"] = status, ["updated"] = UtcNow() },
+                                    connected, "AFFECTS",
+                                    (nodeId, count) => $"Successfully recorded milestone '{name}' (ID: {nodeId}) with status '{status}' connected to {count} nodes.")
+                                    .ConfigureAwait(false);
+
+                            case "task":
+                                {
+                                    var taskStatus = string.IsNullOrWhiteSpace(status) ? "Todo" : status;
+                                    return await RecordNodeAsync(id, storage, "task", "Task", name, content ?? $"Status: {taskStatus}",
+                                        new Dictionary<string, string> { ["status"] = taskStatus, ["created"] = UtcNow() },
+                                        connected, "HasTask",
+                                        (nodeId, count) => $"Successfully recorded task '{name}' (ID: {nodeId}) connected to {count} nodes.")
+                                        .ConfigureAwait(false);
+                                }
+
+                            case "question":
+                                return await RecordNodeAsync(id, storage, "question", "Question", name, content ?? string.Empty,
+                                    new Dictionary<string, string> { ["status"] = "Open", ["created"] = UtcNow() },
+                                    connected, "RELATES_TO",
+                                    (nodeId, count) => $"Successfully recorded question '{name}' (ID: {nodeId}) connected to {count} nodes.")
+                                    .ConfigureAwait(false);
+
+                            default:
+                                return SendError(id, -32602, "Parameter 'type' must be one of: decision, milestone, task, question.");
                         }
-                        return await RecordNodeAsync(id, storage, "question", "Question", name, content,
-                            new Dictionary<string, string> { ["status"] = "Open", ["created"] = UtcNow() },
-                            args?["connectedNodeIds"] as JsonArray, "RELATES_TO",
-                            (nodeId, count) => $"Successfully recorded question '{name}' (ID: {nodeId}) connected to {count} nodes.")
-                            .ConfigureAwait(false);
                     }
 
                 default:
