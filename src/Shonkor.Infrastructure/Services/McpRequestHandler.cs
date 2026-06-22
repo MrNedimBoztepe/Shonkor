@@ -511,40 +511,6 @@ public sealed class McpRequestHandler
                     {
                         new
                         {
-                            name = "search_graph",
-                            description = "Token-efficient FTS5 search for classes, methods, files, or markdown sections. Returns one compact line per hit (type, name, file:line, summary). Use 'type' to filter by node type (e.g. 'Class', 'Method'). Set verbose=true only when you also need each hit's graph connections.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    query = new { type = "string", description = "The search text or terms" },
-                                    limit = new { type = "integer", description = "Max number of results to return (default 10)" },
-                                    type = new { type = "string", description = "Filter results to a specific node type (e.g. 'Class', 'Method', 'Interface', 'File', 'Record', 'Property', 'MarkdownSection', 'Concept'). Omit for all types." },
-                                    verbose = new { type = "boolean", description = "Include each hit's graph connections and full metadata as JSON (default false). Leave false for token-efficient lookups." },
-                                    projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
-                                },
-                                required = new[] { "query" }
-                            }
-                        },
-                        new
-                        {
-                            name = "locate",
-                            description = "Minimal symbol locator: returns one 'name -> file:line | summary' line per hit. The most token-efficient way to find where a class, method, file, or section is defined and understand its purpose. Use this for pure 'where is X?' lookups.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    query = new { type = "string", description = "The symbol name or search text" },
-                                    limit = new { type = "integer", description = "Max number of results to return (default 15)" },
-                                    projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
-                                },
-                                required = new[] { "query" }
-                            }
-                        },
-                        new
-                        {
                             name = "get_subgraph",
                             description = "Retrieve nodes and edges connected to seed nodes within N hops. Token-efficient text by default: each node is 'handle  type  name  — summary' and edges are 'handle --REL--> handle'. The handle (e.g. '@/src/...File.cs::Class::Method') is a short, reusable id you can pass straight back as a seed. Set verbose=true for full JSON; maxChars to cap the size.",
                             inputSchema = new
@@ -853,29 +819,8 @@ public sealed class McpRequestHandler
                         },
                     };
 
-                    // Capability-gated: only advertise semantic search when an embedding backend is wired
-                    // (web server + Ollama). In the local stdio CLI it isn't, so we don't list an inert tool.
-                    if (_embeddingService != null)
-                    {
-                        toolDefs.Add(new
-                        {
-                            name = "search_semantic",
-                            description = "Concept/meaning-based search via vector embeddings (e.g. 'where is authentication handled?'), complementing the keyword-based search_graph. Returns 'type  name  handle  — summary' per hit. Requires nodes that have been embedded by the enrichment worker.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    query = new { type = "string", description = "Natural-language description of what you're looking for." },
-                                    limit = new { type = "integer", description = "Max number of results (default 10)." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "query" }
-                            }
-                        });
-                    }
-
-                    // Append schemas for tools already migrated into the registry (capability-filtered).
+                    // Append schemas for tools already migrated into the registry (capability-filtered;
+                    // e.g. search_semantic only appears when an embedding backend is wired).
                     toolDefs.AddRange(_registry.GetSchemas(_ctx));
 
                     return SendResponse(id, new { tools = toolDefs });
@@ -918,8 +863,10 @@ public sealed class McpRequestHandler
         try
         {
             // Migrated tools live in the registry; the switch below is the shrinking fallback.
+            // IsAvailable gates only tools/list advertising — a tool that is called anyway still runs and
+            // returns its own graceful "unavailable" message rather than a generic tool-not-found error.
             var migrated = _registry.Find(toolName);
-            if (migrated != null && migrated.IsAvailable(_ctx))
+            if (migrated != null)
             {
                 return await migrated.ExecuteAsync(id, args, _ctx).ConfigureAwait(false);
             }
@@ -929,90 +876,6 @@ public sealed class McpRequestHandler
 
             switch (toolName)
             {
-                case "search_graph":
-                    {
-                        var query = args?["query"]?.ToString();
-                        if (string.IsNullOrWhiteSpace(query))
-                        {
-                            return SendError(id, -32602, "Parameter 'query' is required");
-                            
-                        }
-                        var limit = ReadInt(args?["limit"], 10);
-                        var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
-                        var typeFilter = args?["type"]?.ToString();
-                        var results = await storage.SearchAsync(query, limit, filterType: typeFilter).ConfigureAwait(false);
-                        var basePath = GetProjectBasePath(projectName);
-
-                        if (!verbose)
-                        {
-                            // Token-efficient default: one line per hit, paths relative to the project root,
-                            // no connections, no indentation. Closer to ripgrep output than verbose JSON.
-                            if (results.Count == 0)
-                            {
-                                return SendToolResponse(id, $"No matches for '{query}'{(typeFilter != null ? $" (type={typeFilter})" : "")}.");
-                            }
-
-                            var lines = results.Select(r =>
-                            {
-                                var rawLoc = string.IsNullOrEmpty(r.Node.FilePath) ? r.Node.Id : r.Node.FilePath;
-                                var loc = Shorten(rawLoc, basePath);
-                                if (r.Node.StartLine.HasValue) loc += $":{r.Node.StartLine}";
-                                var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t{r.Node.Summary}" : "";
-                                return $"{r.Node.Type}\t{r.Node.Name}\t{loc}{summary}";
-                            });
-                            return SendToolResponse(id, string.Join("\n", lines));
-                        }
-
-                        // verbose: full structured JSON incl. connections (compact, no indentation).
-                        var formattedResults = results.Select(r => new
-                        {
-                            node = new
-                            {
-                                r.Node.Id,
-                                r.Node.Type,
-                                r.Node.Name,
-                                r.Node.FilePath,
-                                r.Node.StartLine,
-                                r.Node.EndLine
-                            },
-                            score = Math.Round(r.Score, 3),
-                            connections = r.RelatedEdges.Select(e => new
-                            {
-                                e.SourceId,
-                                e.TargetId,
-                                Relationship = e.Relationship
-                            })
-                        }).ToList();
-
-                        return SendToolResponse(id, JsonSerializer.Serialize(formattedResults));
-                    }
-
-                case "locate":
-                    {
-                        var query = args?["query"]?.ToString();
-                        if (string.IsNullOrWhiteSpace(query))
-                        {
-                            return SendError(id, -32602, "Parameter 'query' is required");
-                            
-                        }
-                        var limit = ReadInt(args?["limit"], 15);
-                        var results = await storage.SearchAsync(query, limit).ConfigureAwait(false);
-                        if (results.Count == 0)
-                        {
-                            return SendToolResponse(id, $"No matches for '{query}'.");
-                        }
-
-                        var basePath = GetProjectBasePath(projectName);
-                        var lines = results.Select(r =>
-                        {
-                            var rawLoc = string.IsNullOrEmpty(r.Node.FilePath) ? r.Node.Id : r.Node.FilePath;
-                            var loc = Shorten(rawLoc, basePath);
-                            if (r.Node.StartLine.HasValue) loc += $":{r.Node.StartLine}";
-                            var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $" | {r.Node.Summary}" : "";
-                            return $"{r.Node.Name} -> {loc}{summary}";
-                        });
-                        return SendToolResponse(id, string.Join("\n", lines));
-                    }
 
                 case "get_subgraph":
                     {
@@ -1942,41 +1805,6 @@ EDIT LOOP after you change code:
 OPEN THREADS: {openThreads} (call get_open_threads to resume prior work).";
 
                         return SendToolResponse(id, guide);
-                    }
-
-                case "search_semantic":
-                    {
-                        var query = args?["query"]?.ToString();
-                        if (string.IsNullOrWhiteSpace(query))
-                        {
-                            return SendError(id, -32602, "Parameter 'query' is required");
-                        }
-                        if (_embeddingService == null)
-                        {
-                            return SendToolResponse(id, "Semantic search is unavailable here (no embedding backend wired). Use search_graph (FTS) instead, or run via the web server with Ollama.");
-                        }
-
-                        var limit = ReadInt(args?["limit"], 10);
-                        var basePath = GetProjectBasePath(projectName);
-
-                        var embedding = await _embeddingService.GenerateEmbeddingAsync(query).ConfigureAwait(false);
-                        if (embedding == null || embedding.Length == 0)
-                        {
-                            return SendToolResponse(id, "Could not embed the query (is the embedding backend / Ollama running?).");
-                        }
-
-                        var results = await storage.SearchSemanticAsync(embedding, limit).ConfigureAwait(false);
-                        if (results.Count == 0)
-                        {
-                            return SendToolResponse(id, $"No semantically similar nodes for '{query}'. (Have nodes been embedded by the enrichment worker yet?)");
-                        }
-
-                        var lines = results.Select(r =>
-                        {
-                            var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t— {r.Node.Summary}" : "";
-                            return $"{r.Node.Type}\t{r.Node.Name}\t{ToHandle(r.Node.Id, basePath)}{summary}";
-                        });
-                        return SendToolResponse(id, string.Join("\n", lines));
                     }
 
                 case "find_path":

@@ -18,5 +18,10 @@ public static class McpToolRegistryFactory
         new VerifyExistsTool(),
         new GetOpenThreadsTool(),
         new RecordTool(),
+
+        // Group 2 — find
+        new SearchGraphTool(),
+        new LocateTool(),
+        new SearchSemanticTool(),
     };
 }
