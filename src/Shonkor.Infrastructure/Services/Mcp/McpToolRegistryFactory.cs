@@ -23,5 +23,13 @@ public static class McpToolRegistryFactory
         new SearchGraphTool(),
         new LocateTool(),
         new SearchSemanticTool(),
+
+        // Group 3 — read
+        new SignatureTool(),
+        new GetSourceTool(),
+        new OutlineTool(),
+        new GetSubgraphTool(),
+        new GenerateCapsuleTool(),
+        new ArchitectureTool(),
     };
 }
