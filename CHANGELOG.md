@@ -5,6 +5,13 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — MCP internals: tool registry (no behavior change)
+- The ~2500-line `McpRequestHandler` god-class is decomposed into an `IMcpTool` registry. Each tool is
+  now a small, independently testable class under `Services/Mcp/Tools/`; shared state and helpers live in
+  `McpToolContext` and `McpToolHelpers`. The handler keeps only the stdio loop and the JSON-RPC envelope
+  (initialize / tools/list / tools/call), shrinking from ~2500 to ~210 lines. The tool surface and all
+  outputs are unchanged; 103 tests stay green.
+
 ### Changed — MCP tool surface slimmed (34 → 26 in the local CLI)
 - **`references`** replaces `impact_of`, `depends_on`, `dependency_tree`, and `blast_radius`.
   `direction` (`used_by` default / `uses`) and `depth` (1 = flat list, >1 = transitive blast

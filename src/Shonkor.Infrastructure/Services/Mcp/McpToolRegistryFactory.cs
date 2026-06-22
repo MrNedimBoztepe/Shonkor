@@ -38,5 +38,18 @@ public static class McpToolRegistryFactory
         new CallHierarchyTool(),
         new ImplementationsOfTool(),
         new FindPathTool(),
+
+        // Group 5 — edit loop
+        new ReindexFileTool(),
+        new CheckEditTool(),
+        new FreshnessTool(),
+        new RelatedTestsTool(),
+        new EditPlanTool(),
+        new RenamePlanTool(),
+        new ReviewTool(),
+
+        // Group 6 — meta
+        new OrientTool(),
+        new SetProjectTool(),
     };
 }
