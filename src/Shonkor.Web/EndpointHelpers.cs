@@ -46,8 +46,12 @@ public static class EndpointHelpers
         context.Connection.RemoteIpAddress != null &&
         IPAddress.IsLoopback(context.Connection.RemoteIpAddress);
 
-    /// <summary>Dynamic plugin compilation is effectively RCE and is therefore opt-in only.</summary>
-    public static bool PluginsEnabled(IConfiguration config) => config.GetValue<bool>("Security:EnablePlugins");
+    /// <summary>
+    /// Global kill-switch for the assembly-plugin system. The real trust gate is now per-plugin activation
+    /// (installing a plugin runs nothing), so this defaults to ON; set <c>Security:EnablePlugins=false</c>
+    /// to hard-disable loading every plugin regardless of its activation state.
+    /// </summary>
+    public static bool PluginsEnabled(IConfiguration config) => config.GetValue("Security:EnablePlugins", true);
 
     /// <summary>
     /// Whether to use exact semantic C# resolution when indexing <paramref name="project"/>: the

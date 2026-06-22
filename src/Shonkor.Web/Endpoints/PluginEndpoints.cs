@@ -141,8 +141,8 @@ public static class PluginEndpoints
                 var allParsers = new List<IFileParser>(coreParsers);
 
                 using var pluginLoad = PluginsEnabled(config)
-                    ? LoadWorkspacePlugins(pm.WorkspacePath)
-                    : PluginLoadResult.Empty;
+                    ? AssemblyPluginLoader.LoadActive(pm.WorkspacePath)
+                    : AssemblyPluginLoadResult.Empty;
                 allParsers.AddRange(pluginLoad.Parsers);
 
                 var types = allParsers

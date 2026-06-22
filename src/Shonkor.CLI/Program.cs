@@ -48,6 +48,10 @@ public static class Program
                 HandleAgents();
                 return 0;
 
+            case "plugin":
+            case "plugins":
+                return HandlePlugin(args);
+
             default:
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine($"Unknown command: '{args[0]}'");
@@ -100,6 +104,10 @@ public static class Program
         Console.Write("  agents  ");
         Console.ResetColor();
         Console.WriteLine("Print an AGENTS.md/CLAUDE.md snippet teaching AI assistants to use the graph (e.g. shonkor agents >> AGENTS.md).");
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.Write("  plugin  ");
+        Console.ResetColor();
+        Console.WriteLine("Manage parser plugins: install <zip> | activate <id> | deactivate <id> | list | uninstall <id>.");
         Console.WriteLine();
 
         Console.WriteLine("Command Details & Options:");
@@ -233,6 +241,16 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
                 new MarkdownHierarchyParser(),
                 new GraphQLParser()
             };
+
+            // Merge in the workspace's ACTIVE plugins (pre-built assemblies; installation is inert).
+            var pluginWorkspace = Environment.GetEnvironmentVariable("SHONKOR_WORKSPACE");
+            if (string.IsNullOrWhiteSpace(pluginWorkspace)) pluginWorkspace = ResolveWorkspacePath();
+            using var pluginLoad = AssemblyPluginLoader.LoadActive(pluginWorkspace);
+            if (pluginLoad.Parsers.Count > 0)
+            {
+                parsers.AddRange(pluginLoad.Parsers);
+                Console.WriteLine($"Loaded {pluginLoad.Parsers.Count} active plugin parser(s).");
+            }
 
             // Opt-in semantic C# linking (exact REFERENCES_TYPE/IMPLEMENTS/EXTENDS/CALLS via Roslyn).
             var semanticCsharp = string.Equals(Environment.GetEnvironmentVariable("SHONKOR_SEMANTIC_CSHARP"), "true", StringComparison.OrdinalIgnoreCase);
@@ -554,6 +572,76 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
         }
 
         return dir;
+    }
+
+    /// <summary>
+    /// Plugin lifecycle CLI: install a ZIP (inert), then explicitly activate it. Resolves the workspace
+    /// like the MCP server (SHONKOR_WORKSPACE, else walk up to the registry marker).
+    /// </summary>
+    private static int HandlePlugin(string[] args)
+    {
+        var workspace = Environment.GetEnvironmentVariable("SHONKOR_WORKSPACE");
+        if (string.IsNullOrWhiteSpace(workspace)) workspace = ResolveWorkspacePath();
+        var registry = new PluginRegistry(workspace);
+
+        static int Report(PluginOperationResult r)
+        {
+            if (r.Success)
+            {
+                Console.WriteLine(r.Message);
+                return 0;
+            }
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.Error.WriteLine(r.Message);
+            Console.ResetColor();
+            return 1;
+        }
+
+        var sub = args.Length > 1 ? args[1].ToLowerInvariant() : "list";
+        switch (sub)
+        {
+            case "list":
+            {
+                var plugins = registry.List();
+                if (plugins.Count == 0)
+                {
+                    Console.WriteLine($"No plugins installed in {Path.Combine(workspace, "plugins")}.");
+                    return 0;
+                }
+                Console.WriteLine($"Plugins in {Path.Combine(workspace, "plugins")}:");
+                foreach (var p in plugins)
+                {
+                    var mark = p.State switch
+                    {
+                        PluginState.Active => "●",
+                        PluginState.Failed => "✗",
+                        _ => "○"
+                    };
+                    Console.WriteLine($"  {mark} {p.Manifest.Id}\tv{p.Manifest.Version}\t[{p.State}]\t{p.Manifest.Name}");
+                    if (p.State == PluginState.Failed && !string.IsNullOrEmpty(p.Error))
+                    {
+                        Console.WriteLine($"      ! {p.Error}");
+                    }
+                }
+                return 0;
+            }
+            case "install":
+                if (args.Length < 3) { Console.Error.WriteLine("Usage: shonkor plugin install <path-to.zip>"); return 1; }
+                return Report(registry.InstallFromZip(args[2]));
+            case "activate":
+                if (args.Length < 3) { Console.Error.WriteLine("Usage: shonkor plugin activate <id>"); return 1; }
+                return Report(registry.Activate(args[2]));
+            case "deactivate":
+                if (args.Length < 3) { Console.Error.WriteLine("Usage: shonkor plugin deactivate <id>"); return 1; }
+                return Report(registry.Deactivate(args[2]));
+            case "uninstall":
+            case "remove":
+                if (args.Length < 3) { Console.Error.WriteLine("Usage: shonkor plugin uninstall <id>"); return 1; }
+                return Report(registry.Uninstall(args[2]));
+            default:
+                Console.Error.WriteLine($"Unknown plugin subcommand: '{sub}'. Use: list | install <zip> | activate <id> | deactivate <id> | uninstall <id>.");
+                return 1;
+        }
     }
 
     private static CliConfig LoadConfig(string configPath)
