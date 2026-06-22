@@ -1,5 +1,6 @@
 // Licensed to Shonkor under the MIT License.
 
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Shonkor.Core.Interfaces;
@@ -99,6 +100,19 @@ public sealed class McpRequestHandler
 
     /// <summary>How many candidate hits the symbol-oriented tools pull before applying their selection heuristic.</summary>
     private const int SymbolSearchLimit = 8;
+
+    /// <summary>MCP protocol revision used as a fallback when the client doesn't request one in <c>initialize</c>.</summary>
+    private const string DefaultProtocolVersion = "2025-06-18";
+
+    /// <summary>
+    /// Server version reported in the <c>initialize</c> handshake, read from the running assembly's
+    /// informational version (set repo-wide in Directory.Build.props) — the single source of truth.
+    /// The <c>+commithash</c> suffix, if any, is trimmed.
+    /// </summary>
+    private static readonly string ServerVersion =
+        (System.Reflection.Assembly.GetEntryAssembly() ?? typeof(McpRequestHandler).Assembly)
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion?.Split('+')[0] ?? "0.0.0";
 
     /// <summary>Node types that count as a "declaration" when resolving a symbol to its definition.</summary>
     private static readonly string[] DeclarationTypes =
@@ -466,9 +480,12 @@ public sealed class McpRequestHandler
             switch (method)
             {
                 case "initialize":
+                    // Echo the client's requested protocol revision (the spec's negotiation rule),
+                    // falling back to our default when the client omits it.
+                    var requestedProto = obj["params"]?["protocolVersion"]?.ToString();
                     return SendResponse(id, new
                     {
-                        protocolVersion = "2024-11-05",
+                        protocolVersion = string.IsNullOrWhiteSpace(requestedProto) ? DefaultProtocolVersion : requestedProto,
                         capabilities = new
                         {
                         tools = new {}
@@ -476,7 +493,7 @@ public sealed class McpRequestHandler
                     serverInfo = new
                     {
                         name = "Shonkor MCP Server",
-                        version = "1.0.0"
+                        version = ServerVersion
                     }
                 });
 
@@ -912,7 +929,8 @@ public sealed class McpRequestHandler
                                 {
                                     query = new { type = "string", description = "The seed query or topic to construct the capsule around" },
                                     hops = new { type = "integer", description = "Traversal hops for context expansion (default 2)" },
-                                    maxChars = new { type = "integer", description = "Optional hard cap on the capsule size in characters (~4 chars per token). When exceeded, the capsule is truncated at a section boundary. Use to fit a token budget." }
+                                    maxChars = new { type = "integer", description = "Optional hard cap on the capsule size in characters (~4 chars per token). When exceeded, the capsule is truncated at a section boundary. Use to fit a token budget." },
+                                    projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
                                 },
                                 required = new[] { "query" }
                             }

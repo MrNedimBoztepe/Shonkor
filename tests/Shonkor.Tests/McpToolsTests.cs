@@ -104,6 +104,52 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task ToolsList_EveryTool_ExposesProjectName_ExceptSetProject()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P");
+
+        var listMsg = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, method = "tools/list" });
+        using var doc = JsonDocument.Parse((await handler.ProcessJsonRpcMessageAsync(listMsg))!);
+        var tools = doc.RootElement.GetProperty("result").GetProperty("tools");
+
+        // set_project switches the active project itself, so it is intentionally project-agnostic.
+        var exempt = new HashSet<string> { "set_project" };
+
+        foreach (var tool in tools.EnumerateArray())
+        {
+            var name = tool.GetProperty("name").GetString()!;
+            if (exempt.Contains(name)) continue;
+            var props = tool.GetProperty("inputSchema").GetProperty("properties");
+            Assert.True(props.TryGetProperty("projectName", out _), $"Tool '{name}' is missing the 'projectName' argument.");
+        }
+    }
+
+    [Fact]
+    public async Task Initialize_EchoesClientProtocol_AndReportsAssemblyVersion()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P");
+
+        var initMsg = JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id = 1,
+            method = "initialize",
+            @params = new { protocolVersion = "2025-03-26" }
+        });
+        using var doc = JsonDocument.Parse((await handler.ProcessJsonRpcMessageAsync(initMsg))!);
+        var result = doc.RootElement.GetProperty("result");
+
+        // The client's requested protocol revision is echoed back (negotiation).
+        Assert.Equal("2025-03-26", result.GetProperty("protocolVersion").GetString());
+        // The version is read from the running assembly (not a hardcoded string) so it's always populated.
+        // The exact value is the test host's here; the SSOT (csproj/Directory.Build.props) is checked via the binary.
+        var version = result.GetProperty("serverInfo").GetProperty("version").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(version));
+    }
+
+    [Fact]
     public async Task CallHierarchy_ResolvesCallersAndCallees_OverCallsEdges()
     {
         var (pm, synth, _) = await SetupAsync();

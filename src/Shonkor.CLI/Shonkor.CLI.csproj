@@ -25,8 +25,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>shonkor</ToolCommandName>
     <PackageId>Shonkor</PackageId>
-    <Version>0.1.0</Version>
-    <Authors>Shonkor</Authors>
+    <!-- Version and Authors come from the repo-root Directory.Build.props (single source of truth). -->
     <Description>Precision GraphRAG code/documentation indexer + MCP server for AI agents.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>

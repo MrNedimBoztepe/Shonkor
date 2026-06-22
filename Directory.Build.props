@@ -1,0 +1,21 @@
+<Project>
+
+  <!-- Single source of truth for assembly/package version across all projects.
+       Bump here; the MCP server reports it at runtime and the package picks it up. -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>Shonkor</Authors>
+  </PropertyGroup>
+
+  <!-- Security override: Microsoft.Data.Sqlite transitively pulls the native
+       SQLitePCLRaw.lib.e_sqlite3 2.1.11, which bundles a SQLite < 3.50.2 that is
+       affected by CVE-2025-6965 (GHSA-2m69-gcr7-jv3q, NU1903). The native lib
+       package now uses SQLite-aligned versioning; 3.50.3 bundles a fixed SQLite
+       and has no managed dependencies, so it safely overrides the transitive
+       2.1.11 across every project that touches SQLite. Bump when a newer fixed
+       native build ships. -->
+  <ItemGroup>
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
+  </ItemGroup>
+
+</Project>
