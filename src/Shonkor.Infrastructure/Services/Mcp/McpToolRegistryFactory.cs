@@ -31,5 +31,12 @@ public static class McpToolRegistryFactory
         new GetSubgraphTool(),
         new GenerateCapsuleTool(),
         new ArchitectureTool(),
+
+        // Group 4 — analyze
+        new ReferencesTool(),
+        new FindUsagesTool(),
+        new CallHierarchyTool(),
+        new ImplementationsOfTool(),
+        new FindPathTool(),
     };
 }

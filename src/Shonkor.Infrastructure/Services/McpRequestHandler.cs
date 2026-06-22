@@ -511,38 +511,6 @@ public sealed class McpRequestHandler
                     {
                         new
                         {
-                            name = "references",
-                            description = "Reference/impact analysis over the graph's REFERENCES_TYPE/IMPLEMENTS/EXTENDS edges. direction='used_by' (default) = what references the symbol (what breaks if you change it); direction='uses' = the symbol's own dependencies. depth=1 (default) returns a flat 'relation  name  handle  — summary' list; depth>1 returns a transitive view — ranked by distance with affected tests flagged for used_by (blast radius), or an indented tree for uses. The one tool for 'what breaks if I change X?' and 'what does X depend on?'.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode'). 'query' is accepted as an alias." },
-                                    direction = new { type = "string", description = "'used_by' (incoming — what references it, default) or 'uses' (outgoing — what it depends on)." },
-                                    depth = new { type = "integer", description = "1 (default) = direct only (flat list); >1 = transitive (max 6). used_by+depth>1 = ranked blast radius with [test] flags; uses+depth>1 = dependency tree." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "symbol" }
-                            }
-                        },
-                        new
-                        {
-                            name = "find_usages",
-                            description = "List the call/reference SITES of a symbol with a code snippet at each — a graph-aware grep. For every node that references the symbol, returns 'relation  name  file:line  ⟶ <the line that uses it>'. Use to see HOW something is used (and what would break) before changing its signature; richer than 'references' (depth 1), which lists dependents without the usage line.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    symbol = new { type = "string", description = "The type/method/symbol name whose usages to find (e.g. 'GraphNode'). 'query' is accepted as an alias." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "symbol" }
-                            }
-                        },
-                        new
-                        {
                             name = "reindex_file",
                             description = "Re-index a SINGLE file after you edit it, so the graph matches the working tree before you query again — closes the edit loop. Clears the file's old nodes/edges, re-parses it (a missing file is removed), and relinks the file's outgoing REFERENCES_TYPE edges so impact/dependency stay correct. Accepts an absolute path, a project-relative path, or an '@/' handle. Available only where the MCP server can see the files (local stdio/dev); degrades with a clear message otherwise. Other cross-tech links (BINDS_TO/CALLS) refresh on a full scan.",
                             inputSchema = new
@@ -583,21 +551,6 @@ public sealed class McpRequestHandler
                                     path = new { type = "string", description = "Optional. A file to check (absolute, project-relative, or an '@/<relative>' handle). Omit for a whole-project drift report." },
                                     projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 }
-                            }
-                        },
-                        new
-                        {
-                            name = "implementations_of",
-                            description = "List the types that implement an interface or extend a base type (incoming IMPLEMENTS/EXTENDS edges), each as 'relation  name  file:line  — summary'. More precise than 'references' when you specifically need subtypes (e.g. all IFileParser implementations).",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    symbol = new { type = "string", description = "Interface or base type name (e.g. 'IFileParser'). 'query' is accepted as an alias." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "symbol" }
                             }
                         },
                         new
@@ -665,23 +618,6 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
-                            name = "call_hierarchy",
-                            description = "Method-level call hierarchy over CALLS edges, rendered indented to a given depth. direction 'callers' = who calls the method, transitively (incoming, default); 'callees' = what the method calls (outgoing). Requires semantic indexing (Indexing:SemanticCSharp / SHONKOR_SEMANTIC_CSHARP=true) — that's what emits CALLS edges; without it the tree is empty. Cycles (recursion) are marked, and the tree is capped for safety.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    symbol = new { type = "string", description = "The method name (e.g. 'ScanFileAsync'). 'query' is accepted as an alias. Overloads resolve to the first match; use file:line addressing for a specific one." },
-                                    direction = new { type = "string", description = "'callers' (incoming, who calls it — default) or 'callees' (outgoing, what it calls)." },
-                                    depth = new { type = "integer", description = "Tree depth (default 3, max 6)." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "symbol" }
-                            }
-                        },
-                        new
-                        {
                             name = "orient",
                             description = "START HERE in a new session: a one-call orientation to this project's Shonkor graph. Returns the graph size, the tool palette grouped by intent (find/read/impact/verify/tests), the recommended edit loop, and the count of open threads. Use it to know what's available and how to work, instead of grepping/reading whole files. Costs one call and saves many.",
                             inputSchema = new
@@ -704,23 +640,6 @@ public sealed class McpRequestHandler
                                 {
                                     name = new { type = "string", description = "The project to make active (must exist in the registry). Omit to list the available projects." }
                                 }
-                            }
-                        },
-                        new
-                        {
-                            name = "find_path",
-                            description = "Explain HOW two symbols are connected: returns the shortest chain between them as 'A --REL--> B <--REL-- C …', with each arrow showing the real edge direction. Far cheaper than dumping a subgraph when you only need the connection. Returns a clear 'no path' message if they're unconnected within maxHops.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    from = new { type = "string", description = "Start symbol (name of a class/method/etc.)." },
-                                    to = new { type = "string", description = "Target symbol to reach." },
-                                    maxHops = new { type = "integer", description = "Max path length to search (default 5)." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "from", "to" }
                             }
                         },
                     };
@@ -782,174 +701,6 @@ public sealed class McpRequestHandler
 
             switch (toolName)
             {
-
-                case "references":
-                    {
-                        var symbol = ReadSymbol(args);
-                        if (string.IsNullOrWhiteSpace(symbol))
-                        {
-                            return SendError(id, -32602, "Parameter 'symbol' is required");
-                        }
-                        var direction = (args?["direction"]?.ToString() ?? "used_by").ToLowerInvariant();
-                        var usedBy = direction is "used_by" or "used-by" or "callers" or "incoming";
-                        var depth = Math.Clamp(ReadInt(args?["depth"], 1), 1, 6);
-
-                        // depth 1 → flat, grouped-by-relation report (direct dependents / dependencies).
-                        if (depth <= 1)
-                        {
-                            var report = usedBy
-                                ? await EdgeReportAsync(storage, projectName, symbol, incoming: true,
-                                    verb: "is referenced by",
-                                    emptyMessage: "Nothing references '{0}' ({1}) — safe to change in isolation, or it is an entry point.").ConfigureAwait(false)
-                                : await EdgeReportAsync(storage, projectName, symbol, incoming: false,
-                                    verb: "depends on",
-                                    emptyMessage: "'{0}' ({1}) depends on nothing in the graph — it is self-contained or a leaf.").ConfigureAwait(false);
-                            return SendToolResponse(id, report);
-                        }
-
-                        var refDef = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
-                        if (refDef == null)
-                        {
-                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
-                        }
-                        var refBasePath = GetProjectBasePath(projectName);
-
-                        // depth > 1, used_by → transitive blast radius (ranked by distance, tests flagged).
-                        if (usedBy)
-                        {
-                            const int maxNodes = 200;
-                            var affected = new Dictionary<string, (int Depth, string Rel, GraphNode? Node)>(StringComparer.Ordinal);
-                            var visited = new HashSet<string>(StringComparer.Ordinal) { refDef.Id };
-                            var frontier = new List<string> { refDef.Id };
-
-                            for (var d = 1; d <= depth && frontier.Count > 0 && affected.Count < maxNodes; d++)
-                            {
-                                var next = new List<string>();
-                                foreach (var nodeId in frontier)
-                                {
-                                    var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
-                                    foreach (var e in edges)
-                                    {
-                                        if (e.TargetId != nodeId || e.SourceId == nodeId) continue;          // incoming only
-                                        if (StructuralRelationships.Contains(e.Relationship)) continue;       // skip containment
-                                        if (!visited.Add(e.SourceId)) continue;
-                                        affected[e.SourceId] = (d, e.Relationship, neighbours.GetValueOrDefault(e.SourceId));
-                                        next.Add(e.SourceId);
-                                        if (affected.Count >= maxNodes) break;
-                                    }
-                                    if (affected.Count >= maxNodes) break;
-                                }
-                                frontier = next;
-                            }
-
-                            if (affected.Count == 0)
-                            {
-                                return SendToolResponse(id, $"Blast radius of '{refDef.Name}' ({refDef.Type}): nothing depends on it — safe to change in isolation, or it is an entry point. (CALLS-level impact needs semantic indexing.)");
-                            }
-
-                            var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                            var testCount = 0;
-                            foreach (var (_, info) in affected)
-                            {
-                                var fp = info.Node?.FilePath;
-                                if (!string.IsNullOrEmpty(fp)) files.Add(fp);
-                                if (LooksLikeTest(fp)) testCount++;
-                            }
-
-                            var sb = new System.Text.StringBuilder();
-                            sb.Append($"Blast radius of '{refDef.Name}' ({refDef.Type}), depth {depth}: ");
-                            sb.Append($"{affected.Count} node(s) across {files.Count} file(s)");
-                            if (testCount > 0) sb.Append($", {testCount} test(s)");
-                            if (affected.Count >= maxNodes) sb.Append(" (capped)");
-                            sb.Append(".\n");
-
-                            foreach (var group in affected.Values.GroupBy(a => a.Depth).OrderBy(g => g.Key))
-                            {
-                                sb.Append($"\ndepth {group.Key}{(group.Key == 1 ? " (direct)" : "")}:\n");
-                                foreach (var a in group.OrderBy(a => a.Rel, StringComparer.Ordinal))
-                                {
-                                    var name = a.Node?.Name ?? a.Node?.Id ?? "?";
-                                    var handle = ToHandle(a.Node?.Id ?? string.Empty, refBasePath);
-                                    var testTag = LooksLikeTest(a.Node?.FilePath) ? "  [test]" : "";
-                                    sb.Append($"  {a.Rel}\t{name}\t{handle}{testTag}\n");
-                                }
-                            }
-                            return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, refDef).ConfigureAwait(false));
-                        }
-
-                        // depth > 1, uses → transitive dependency tree (outgoing reference edges).
-                        {
-                            var depRelations = new HashSet<string> { "REFERENCES_TYPE", "IMPLEMENTS", "EXTENDS" };
-                            var sb = new System.Text.StringBuilder();
-                            sb.Append($"Dependency tree (uses, depth {depth}) for '{refDef.Name}':\n");
-                            sb.Append($"{refDef.Name} ({refDef.Type})\n");
-
-                            var visited = new HashSet<string> { refDef.Id };
-                            var emitted = 0;
-                            const int maxNodes = 100;
-
-                            async Task Walk(string nodeId, int level)
-                            {
-                                if (level > depth || emitted >= maxNodes) return;
-                                var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
-                                var step = edges.Where(e => depRelations.Contains(e.Relationship)
-                                    && e.SourceId == nodeId && e.TargetId != nodeId).ToList();
-                                foreach (var e in step.OrderBy(e => e.Relationship))
-                                {
-                                    if (emitted >= maxNodes) { sb.Append(new string(' ', level * 2)).Append("… (truncated)\n"); break; }
-                                    var otherId = e.TargetId;
-                                    var other = neighbours.GetValueOrDefault(otherId);
-                                    sb.Append(new string(' ', level * 2)).Append($"--{e.Relationship}--> {other?.Name ?? otherId} ({other?.Type ?? "?"})");
-                                    emitted++;
-                                    if (!visited.Add(otherId)) { sb.Append("  ↺\n"); continue; }
-                                    sb.Append('\n');
-                                    await Walk(otherId, level + 1).ConfigureAwait(false);
-                                }
-                            }
-                            await Walk(refDef.Id, 1).ConfigureAwait(false);
-
-                            return SendToolResponse(id, sb.ToString().TrimEnd());
-                        }
-                    }
-
-                case "find_usages":
-                    {
-                        var symbol = ReadSymbol(args);
-                        if (string.IsNullOrWhiteSpace(symbol))
-                        {
-                            return SendError(id, -32602, "Parameter 'symbol' is required");
-                        }
-                        var basePath = GetProjectBasePath(projectName);
-
-                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
-                        if (def == null)
-                        {
-                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
-                        }
-
-                        var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
-                        // Real usages only — exclude structural containment (e.g. the enclosing type/file).
-                        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id
-                            && !StructuralRelationships.Contains(e.Relationship)).ToList();
-                        if (incoming.Count == 0)
-                        {
-                            return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found in the graph.");
-                        }
-
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append($"{incoming.Count} usage(s) of '{def.Name}':\n");
-                        foreach (var e in incoming.OrderBy(e => e.Relationship))
-                        {
-                            var user = neighbours.GetValueOrDefault(e.SourceId);
-                            var name = user?.Name ?? e.SourceId;
-                            var loc = Shorten(user != null && !string.IsNullOrEmpty(user.FilePath) ? user.FilePath : e.SourceId, basePath);
-                            if (user?.StartLine is int line) loc += $":{line}";
-                            var snippet = FirstLineMentioning(user?.Content, def.Name);
-                            var snippetText = snippet != null ? $"  ⟶ {snippet}" : "";
-                            sb.Append($"{e.Relationship}\t{name}\t{loc}{snippetText}\n");
-                        }
-                        return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
-                    }
 
                 case "reindex_file":
                     {
@@ -1093,43 +844,6 @@ public sealed class McpRequestHandler
                         AppendGroup("CHANGED (edited since indexing)", drift.Changed);
                         AppendGroup("NEW (on disk, not indexed)", drift.New);
                         AppendGroup("DELETED (indexed, gone from disk)", drift.Deleted);
-                        return SendToolResponse(id, sb.ToString().TrimEnd());
-                    }
-
-                case "implementations_of":
-                    {
-                        var symbol = ReadSymbol(args);
-                        if (string.IsNullOrWhiteSpace(symbol))
-                        {
-                            return SendError(id, -32602, "Parameter 'symbol' is required");
-                        }
-                        var basePath = GetProjectBasePath(projectName);
-
-                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
-                        var name = def?.Name ?? symbol;
-
-                        // IMPLEMENTS/EXTENDS edges target the base type by NAME, so query by name.
-                        var (edges, neighbours) = await storage.GetIncidentEdgesAsync(name).ConfigureAwait(false);
-                        var impls = edges
-                            .Where(e => (e.Relationship == "IMPLEMENTS" || e.Relationship == "EXTENDS") && e.TargetId == name && e.SourceId != name)
-                            .ToList();
-
-                        if (impls.Count == 0)
-                        {
-                            return SendToolResponse(id, $"No implementations or subclasses of '{name}' found in the graph.");
-                        }
-
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append($"{impls.Count} type(s) implement/extend '{name}':\n");
-                        foreach (var e in impls.OrderBy(e => e.Relationship))
-                        {
-                            var impl = neighbours.GetValueOrDefault(e.SourceId);
-                            var implName = impl?.Name ?? e.SourceId;
-                            var loc = Shorten(impl != null && !string.IsNullOrEmpty(impl.FilePath) ? impl.FilePath : e.SourceId, basePath);
-                            if (impl?.StartLine is int line) loc += $":{line}";
-                            var summary = impl != null && !string.IsNullOrEmpty(impl.Summary) ? $"  — {impl.Summary}" : "";
-                            sb.Append($"{e.Relationship}\t{implName}\t{loc}{summary}\n");
-                        }
                         return SendToolResponse(id, sb.ToString().TrimEnd());
                     }
 
@@ -1407,63 +1121,6 @@ public sealed class McpRequestHandler
                         return SendToolResponse(id, sb.ToString().TrimEnd());
                     }
 
-                case "call_hierarchy":
-                    {
-                        var symbol = ReadSymbol(args);
-                        if (string.IsNullOrWhiteSpace(symbol))
-                        {
-                            return SendError(id, -32602, "Parameter 'symbol' is required");
-                        }
-                        var direction = (args?["direction"]?.ToString() ?? "callers").ToLowerInvariant();
-                        var callees = direction is "callees" or "callee" or "outgoing" or "calls";
-                        var depth = Math.Clamp(ReadInt(args?["depth"], 3), 1, 6);
-
-                        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
-                        if (def == null)
-                        {
-                            return SendToolResponse(id, $"No definition found for '{symbol}'.");
-                        }
-
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append($"Call hierarchy ({(callees ? "callees" : "callers")}, depth {depth}) for '{def.Name}':\n");
-                        sb.Append($"{def.Name} ({def.Type})\n");
-
-                        var visited = new HashSet<string> { def.Id };
-                        var emitted = 0;
-                        const int maxNodes = 100;
-
-                        async Task Walk(string nodeId, int level)
-                        {
-                            if (level > depth || emitted >= maxNodes) return;
-                            var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
-                            // callers: edges INTO this node (TargetId == node); callees: edges OUT (SourceId == node).
-                            var step = edges.Where(e => e.Relationship == "CALLS"
-                                && (callees ? e.SourceId == nodeId && e.TargetId != nodeId
-                                            : e.TargetId == nodeId && e.SourceId != nodeId)).ToList();
-                            foreach (var e in step.OrderBy(e => (callees ? e.TargetId : e.SourceId)))
-                            {
-                                if (emitted >= maxNodes) { sb.Append(new string(' ', level * 2)).Append("… (truncated)\n"); break; }
-                                var otherId = callees ? e.TargetId : e.SourceId;
-                                var other = neighbours.GetValueOrDefault(otherId);
-                                var arrow = callees ? "--calls-->" : "<--calls--";
-                                sb.Append(new string(' ', level * 2)).Append($"{arrow} {other?.Name ?? otherId} ({other?.Type ?? "?"})");
-                                emitted++;
-                                if (!visited.Add(otherId)) { sb.Append("  ↺\n"); continue; }
-                                sb.Append('\n');
-                                await Walk(otherId, level + 1).ConfigureAwait(false);
-                            }
-                        }
-                        await Walk(def.Id, 1).ConfigureAwait(false);
-
-                        if (emitted == 0)
-                        {
-                            sb.Append(callees ? "  (no outgoing calls)" : "  (no callers)");
-                            sb.Append(" — note: CALLS edges require semantic indexing (Indexing:SemanticCSharp).");
-                        }
-
-                        return SendToolResponse(id, sb.ToString().TrimEnd() + await StaleSuffixAsync(storage, def).ConfigureAwait(false));
-                    }
-
                 case "set_project":
                     {
                         if (_lockToContextProject)
@@ -1535,44 +1192,6 @@ EDIT LOOP after you change code:
 OPEN THREADS: {openThreads} (call get_open_threads to resume prior work).";
 
                         return SendToolResponse(id, guide);
-                    }
-
-                case "find_path":
-                    {
-                        var fromArg = args?["from"]?.ToString();
-                        var toArg = args?["to"]?.ToString();
-                        if (string.IsNullOrWhiteSpace(fromArg) || string.IsNullOrWhiteSpace(toArg))
-                        {
-                            return SendError(id, -32602, "Parameters 'from' and 'to' are required");
-                        }
-                        var maxHops = ReadInt(args?["maxHops"], 5);
-                        var basePath = GetProjectBasePath(projectName);
-
-                        var fromDef = await ResolveDefinitionAsync(storage, fromArg).ConfigureAwait(false);
-                        if (fromDef == null) return SendToolResponse(id, $"No definition found for 'from' = '{fromArg}'.");
-                        var toDef = await ResolveDefinitionAsync(storage, toArg).ConfigureAwait(false);
-                        if (toDef == null) return SendToolResponse(id, $"No definition found for 'to' = '{toArg}'.");
-                        if (fromDef.Id == toDef.Id)
-                        {
-                            return SendToolResponse(id, $"'{fromArg}' and '{toArg}' resolve to the same node ({fromDef.Name}).");
-                        }
-
-                        var path = await GraphPathFinder.FindPathAsync(storage, fromDef.Id, toDef.Id, maxHops).ConfigureAwait(false);
-                        if (path == null)
-                        {
-                            return SendToolResponse(id,
-                                $"No path from '{fromDef.Name}' to '{toDef.Name}' within {maxHops} hops — they may be in different components. Try raising maxHops.");
-                        }
-
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append($"Path ({path.Count - 1} hop(s)) from '{fromDef.Name}' to '{toDef.Name}':\n");
-                        sb.Append(path[0].Node.Name);
-                        for (var i = 1; i < path.Count; i++)
-                        {
-                            var step = path[i];
-                            sb.Append(step.Forward ? $" --{step.Relation}--> " : $" <--{step.Relation}-- ").Append(step.Node.Name);
-                        }
-                        return SendToolResponse(id, sb.ToString());
                     }
 
                 default:
