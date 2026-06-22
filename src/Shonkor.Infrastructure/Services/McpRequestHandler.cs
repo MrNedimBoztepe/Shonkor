@@ -8,6 +8,7 @@ using Shonkor.Core.Models;
 using Shonkor.Core.Services;
 
 using Shonkor.Infrastructure.Services;
+using Shonkor.Infrastructure.Services.Mcp;
 
 namespace Shonkor.Infrastructure.Services;
 
@@ -51,22 +52,17 @@ public sealed class McpRequestHandler
     private readonly bool _lockToContextProject;
 
     /// <summary>
-    /// A session-local active-project override set by <c>set_project</c>. Lives only in this server
-    /// process — it deliberately does NOT touch the shared, persisted ActiveProjectName, so switching
-    /// the project in one chat never affects another session or client. Null until set.
+    /// The shared tool context (services + session state + stateful helpers) handed to every migrated
+    /// <see cref="IMcpTool"/>. The remaining switch-based tools delegate their project resolution here too,
+    /// so the session's set_project override is single-sourced.
     /// </summary>
-    private string? _sessionProjectOverride;
+    private readonly McpToolContext _ctx;
 
-    /// <summary>
-    /// Resolves the project name to use for a call. When the session is tenant-locked the context
-    /// project always wins (the explicit argument is ignored, preventing cross-tenant access).
-    /// Otherwise: an explicit per-call argument wins, then this session's set_project override, then
-    /// the directory-derived context.
-    /// </summary>
-    private string? ResolveProjectName(string? projectName) =>
-        _lockToContextProject
-            ? _contextProjectName
-            : (!string.IsNullOrWhiteSpace(projectName) ? projectName : (_sessionProjectOverride ?? _contextProjectName));
+    /// <summary>The registry of migrated tool classes; consulted before the legacy switch in tools/call.</summary>
+    private readonly McpToolRegistry _registry;
+
+    /// <summary>Resolves the project name to use for a call (delegates to the shared context).</summary>
+    private string? ResolveProjectName(string? projectName) => _ctx.ResolveProjectName(projectName);
 
     private Task<IGraphStorageProvider> GetStorageAsync(string? projectName)
     {
@@ -414,6 +410,10 @@ public sealed class McpRequestHandler
         _embeddingService = embeddingService;
         _fileParsers = fileParsers;
         _compilationCache = compilationCache;
+
+        _ctx = new McpToolContext(projectManager, synthesizer, contextProjectName, lockToContextProject,
+            embeddingService, fileParsers, compilationCache);
+        _registry = new McpToolRegistry(McpToolRegistryFactory.CreateTools());
     }
 
     /// <summary>
@@ -780,21 +780,6 @@ public sealed class McpRequestHandler
                         },
                         new
                         {
-                            name = "verify_exists",
-                            description = "Fact-check that a symbol actually exists in the graph BEFORE asserting it. Returns 'YES — name (type) at handle' on an exact name match, otherwise 'NO' plus the nearest matching names. Use this to avoid claiming a class/method exists when it doesn't.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    symbol = new { type = "string", description = "The exact symbol name to verify (e.g. 'GraphNode'). 'query' is accepted as an alias." },
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
-                                },
-                                required = new[] { "symbol" }
-                            }
-                        },
-                        new
-                        {
                             name = "orient",
                             description = "START HERE in a new session: a one-call orientation to this project's Shonkor graph. Returns the graph size, the tool palette grouped by intent (find/read/impact/verify/tests), the recommended edit loop, and the count of open threads. Use it to know what's available and how to work, instead of grepping/reading whole files. Costs one call and saves many.",
                             inputSchema = new
@@ -816,19 +801,6 @@ public sealed class McpRequestHandler
                                 properties = new
                                 {
                                     name = new { type = "string", description = "The project to make active (must exist in the registry). Omit to list the available projects." }
-                                }
-                            }
-                        },
-                        new
-                        {
-                            name = "get_open_threads",
-                            description = "Resume context cheaply: lists the still-open recorded interactions (Question/Task/Decision/Milestone, i.e. anything not done/resolved/accepted/superseded) as 'type [status] name id'. Call at the start of a session to recover what was in progress without re-deriving it.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
                                 }
                             }
                         },
@@ -879,38 +851,6 @@ public sealed class McpRequestHandler
                                 }
                             }
                         },
-                        new
-                        {
-                            name = "get_stats",
-                            description = "Get overall database statistics, including total node and edge counts grouped by type.",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
-                                }
-                            }
-                        },
-                        new
-                        {
-                            name = "record",
-                            description = "Record a memory node in the graph, connected to specific code nodes. 'type' selects what: 'decision' (architectural choice + rationale; requires content), 'milestone' (progress/focus/blocker; requires status), 'task' (a concrete todo; status defaults to Todo), or 'question' (an open uncertainty). Use to persist context an agent should be able to resume later (see get_open_threads).",
-                            inputSchema = new
-                            {
-                                type = "object",
-                                properties = new
-                                {
-                                    type = new { type = "string", description = "One of: 'decision', 'milestone', 'task', 'question'." },
-                                    name = new { type = "string", description = "Title / the decision question / the task title / the open question." },
-                                    content = new { type = "string", description = "Detail: rationale & alternatives (decision), description/steps (task), or context (question). Required for 'decision'." },
-                                    status = new { type = "string", description = "For 'milestone' (required, e.g. 'Completed'/'In Progress'/'Blocked') or 'task' (e.g. 'Todo'/'In Progress'/'Done')." },
-                                    connectedNodeIds = new { type = "array", items = new { type = "string" }, description = "List of node IDs this memory connects to." },
-                                    projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
-                                },
-                                required = new[] { "type", "name" }
-                            }
-                        }
                     };
 
                     // Capability-gated: only advertise semantic search when an embedding backend is wired
@@ -934,6 +874,9 @@ public sealed class McpRequestHandler
                             }
                         });
                     }
+
+                    // Append schemas for tools already migrated into the registry (capability-filtered).
+                    toolDefs.AddRange(_registry.GetSchemas(_ctx));
 
                     return SendResponse(id, new { tools = toolDefs });
                 }
@@ -974,6 +917,13 @@ public sealed class McpRequestHandler
 
         try
         {
+            // Migrated tools live in the registry; the switch below is the shrinking fallback.
+            var migrated = _registry.Find(toolName);
+            if (migrated != null && migrated.IsAvailable(_ctx))
+            {
+                return await migrated.ExecuteAsync(id, args, _ctx).ConfigureAwait(false);
+            }
+
             var projectName = args?["projectName"]?.ToString();
             var storage = await GetStorageAsync(projectName).ConfigureAwait(false);
 
@@ -1261,32 +1211,6 @@ public sealed class McpRequestHandler
 
                             return SendToolResponse(id, sb.ToString().TrimEnd());
                         }
-                    }
-
-                case "verify_exists":
-                    {
-                        var symbol = ReadSymbol(args);
-                        if (string.IsNullOrWhiteSpace(symbol))
-                        {
-                            return SendError(id, -32602, "Parameter 'symbol' is required");
-                        }
-                        var basePath = GetProjectBasePath(projectName);
-                        var hits = (await storage.SearchAsync(symbol, SymbolSearchLimit).ConfigureAwait(false)).Select(h => h.Node).ToList();
-
-                        var exact = hits.FirstOrDefault(n => IsExactNameMatch(n, symbol));
-                        if (exact != null)
-                        {
-                            return SendToolResponse(id, $"YES — '{exact.Name}' ({exact.Type}) exists at {ToHandle(exact.Id, basePath)}.");
-                        }
-
-                        // Honest negative: don't let the caller assume — offer the nearest names instead.
-                        if (hits.Count == 0)
-                        {
-                            return SendToolResponse(id, $"NO — nothing named '{symbol}' is in the graph.");
-                        }
-                        // Distinct BEFORE Take so duplicate names don't shrink the suggestion list below 5.
-                        var nearest = string.Join(", ", hits.Select(n => $"{n.Name} ({n.Type})").Distinct().Take(5));
-                        return SendToolResponse(id, $"NO exact match for '{symbol}'. Nearest: {nearest}.");
                     }
 
                 case "get_source":
@@ -1955,7 +1879,7 @@ public sealed class McpRequestHandler
                         }
                         var projects = _projectManager.GetProjects();
                         // The effective project for THIS session: the session override if set, else the context/active.
-                        var active = _sessionProjectOverride ?? _contextProjectName ?? _projectManager.GetActiveProjectName();
+                        var active = _ctx.SessionProjectOverride ?? _contextProjectName ?? _projectManager.GetActiveProjectName();
                         var name = args?["name"]?.ToString();
                         if (string.IsNullOrWhiteSpace(name))
                         {
@@ -1968,7 +1892,7 @@ public sealed class McpRequestHandler
                             return SendToolResponse(id, $"No project named '{name}'. Available: {string.Join(", ", projects.Select(p => p.Name))}.");
                         }
                         // Session-local switch only — never writes the shared, persisted ActiveProjectName.
-                        _sessionProjectOverride = match.Name;
+                        _ctx.SessionProjectOverride = match.Name;
                         var newStorage = await _projectManager.GetStorageProviderAsync(match.Name).ConfigureAwait(false);
                         var newStats = await newStorage.GetStatisticsAsync().ConfigureAwait(false);
                         return SendToolResponse(id, $"Active project for this session is now '{match.Name}' ({match.Path}) — {newStats.TotalNodes} nodes, {newStats.TotalEdges} edges. Call orient for the workflow.");
@@ -2018,37 +1942,6 @@ EDIT LOOP after you change code:
 OPEN THREADS: {openThreads} (call get_open_threads to resume prior work).";
 
                         return SendToolResponse(id, guide);
-                    }
-
-                case "get_open_threads":
-                    {
-                        var interactionTypes = new[] { "Question", "Task", "Decision", "Milestone" };
-                        var closedStatuses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                        {
-                            "done", "resolved", "completed", "accepted", "superseded", "closed"
-                        };
-
-                        var items = await storage.GetNodesByTypesAsync(interactionTypes).ConfigureAwait(false);
-                        var open = items
-                            .Where(n => !closedStatuses.Contains(n.Properties.GetValueOrDefault("status", "").Trim()))
-                            .ToList();
-
-                        if (open.Count == 0)
-                        {
-                            return SendToolResponse(id, "No open threads (tasks/questions/decisions/milestones).");
-                        }
-
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append("Open threads (").Append(open.Count).Append("):\n");
-                        foreach (var g in open.GroupBy(n => n.Type))
-                        {
-                            foreach (var n in g)
-                            {
-                                var status = n.Properties.GetValueOrDefault("status", "Open");
-                                sb.Append($"{n.Type}\t[{status}]\t{n.Name}\t{n.Id}\n");
-                            }
-                        }
-                        return SendToolResponse(id, sb.ToString().TrimEnd());
                     }
 
                 case "search_semantic":
@@ -2229,84 +2122,6 @@ OPEN THREADS: {openThreads} (call get_open_threads to resume prior work).";
                         sb.Append("```\n(Edge labels = number of cross-module type/call references. Prose/rationale is yours to add — this is the structural skeleton for arc42 ch. 5.)");
 
                         return SendToolResponse(id, sb.ToString());
-                    }
-
-                case "get_stats":
-                    {
-                        var stats = await storage.GetStatisticsAsync().ConfigureAwait(false);
-                        var formattedStats = new
-                        {
-                            stats.TotalNodes,
-                            stats.TotalEdges,
-                            stats.NodesByType,
-                            stats.EdgesByRelation,
-                            stats.SchemeVersion,
-                            stats.CurrentSchemeVersion,
-                            // Surfaced so the AI knows the graph's ids are in an outdated format and a full
-                            // re-index (shonkor index .) is recommended before trusting method-level results.
-                            ReindexRecommended = stats.ReindexRecommended
-                                ? $"Graph built under node-id scheme v{stats.SchemeVersion} < current v{stats.CurrentSchemeVersion}; run a full re-index (shonkor index .) to migrate method/constructor ids."
-                                : null
-                        };
-                        return SendToolResponse(id, JsonSerializer.Serialize(formattedStats));
-                    }
-
-                case "record":
-                    {
-                        var type = (args?["type"]?.ToString() ?? string.Empty).Trim().ToLowerInvariant();
-                        var name = args?["name"]?.ToString();
-                        if (string.IsNullOrWhiteSpace(name))
-                        {
-                            return SendError(id, -32602, "Parameter 'name' is required");
-                        }
-                        var content = args?["content"]?.ToString();
-                        var status = args?["status"]?.ToString();
-                        var connected = args?["connectedNodeIds"] as JsonArray;
-
-                        switch (type)
-                        {
-                            case "decision":
-                                if (string.IsNullOrWhiteSpace(content))
-                                {
-                                    return SendError(id, -32602, "A 'decision' requires 'content' (the rationale/alternatives).");
-                                }
-                                return await RecordNodeAsync(id, storage, "decision", "Decision", name, content,
-                                    new Dictionary<string, string> { ["created"] = UtcNow() },
-                                    connected, "INFLUENCES",
-                                    (nodeId, count) => $"Successfully recorded decision '{name}' (ID: {nodeId}) and connected it to {count} nodes.")
-                                    .ConfigureAwait(false);
-
-                            case "milestone":
-                                if (string.IsNullOrWhiteSpace(status))
-                                {
-                                    return SendError(id, -32602, "A 'milestone' requires 'status'.");
-                                }
-                                return await RecordNodeAsync(id, storage, "milestone", "Milestone", name, $"Status: {status}",
-                                    new Dictionary<string, string> { ["status"] = status, ["updated"] = UtcNow() },
-                                    connected, "AFFECTS",
-                                    (nodeId, count) => $"Successfully recorded milestone '{name}' (ID: {nodeId}) with status '{status}' connected to {count} nodes.")
-                                    .ConfigureAwait(false);
-
-                            case "task":
-                                {
-                                    var taskStatus = string.IsNullOrWhiteSpace(status) ? "Todo" : status;
-                                    return await RecordNodeAsync(id, storage, "task", "Task", name, content ?? $"Status: {taskStatus}",
-                                        new Dictionary<string, string> { ["status"] = taskStatus, ["created"] = UtcNow() },
-                                        connected, "HasTask",
-                                        (nodeId, count) => $"Successfully recorded task '{name}' (ID: {nodeId}) connected to {count} nodes.")
-                                        .ConfigureAwait(false);
-                                }
-
-                            case "question":
-                                return await RecordNodeAsync(id, storage, "question", "Question", name, content ?? string.Empty,
-                                    new Dictionary<string, string> { ["status"] = "Open", ["created"] = UtcNow() },
-                                    connected, "RELATES_TO",
-                                    (nodeId, count) => $"Successfully recorded question '{name}' (ID: {nodeId}) connected to {count} nodes.")
-                                    .ConfigureAwait(false);
-
-                            default:
-                                return SendError(id, -32602, "Parameter 'type' must be one of: decision, milestone, task, question.");
-                        }
                     }
 
                 default:
