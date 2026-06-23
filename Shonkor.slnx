@@ -4,6 +4,7 @@
     <Project Path="src/Shonkor.CLI/Shonkor.CLI.csproj" />
     <Project Path="src/Shonkor.Core/Shonkor.Core.csproj" />
     <Project Path="src/Shonkor.Infrastructure/Shonkor.Infrastructure.csproj" />
+    <Project Path="src/Shonkor.Plugin.Cms/Shonkor.Plugin.Cms.csproj" />
     <Project Path="src/Shonkor.Web/Shonkor.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">

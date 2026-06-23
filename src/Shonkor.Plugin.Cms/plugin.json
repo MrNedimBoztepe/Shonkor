@@ -1,0 +1,9 @@
+{
+  "id": "shonkor-cms",
+  "name": "CMS Parsers (Optimizely, Kentico, Sitecore)",
+  "version": "0.1.0",
+  "description": "First-party content-model parsers: Optimizely & Kentico ([ContentType] C#) and Sitecore (Unicorn .yml / XM Cloud).",
+  "entryAssembly": "Shonkor.Plugin.Cms.dll",
+  "minHostApi": "1.0",
+  "targetExtensions": [".cs", ".yml"]
+}

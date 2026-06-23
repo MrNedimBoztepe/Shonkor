@@ -5,6 +5,21 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — Plugins are now installable assemblies (runtime C# compilation removed)
+- A plugin is a **pre-built assembly installed from a ZIP** and is **inert until explicitly activated**.
+  `PluginRegistry` validates the `plugin.json` manifest + host-API version, extracts the package
+  (zip-slip guarded) into `plugins/{id}/`, and tracks the `Installed → Active → Disabled/Failed`
+  lifecycle; `AssemblyPluginLoader` loads only Active plugins into a collectible `AssemblyLoadContext`
+  (the host shares the `Shonkor.Core` contract for type identity). Installing a plugin runs nothing.
+- **Removed the Roslyn source-compilation plugin path** (`PluginLoader`, `StandardPluginsInstaller`,
+  the `.cs` scaffold/list/delete endpoints) — the arbitrary-source RCE surface is gone.
+- CLI: `shonkor plugin install <zip> | activate <id> | deactivate <id> | list | uninstall <id>`.
+  Web: `/api/plugins` (list), `POST /api/plugins/install` (ZIP upload), `.../activate`, `.../deactivate`,
+  `DELETE /api/plugins/{id}` — loopback-only for state changes.
+- `Security:EnablePlugins` is now an opt-OUT kill switch (default on); per-plugin activation is the gate.
+- The first-party CMS parsers (Optimizely/Kentico/Sitecore) moved to a new `Shonkor.Plugin.Cms` example
+  plugin project that builds an installable ZIP, instead of being compiled at runtime from embedded source.
+
 ### Changed — MCP internals: tool registry (no behavior change)
 - The ~2500-line `McpRequestHandler` god-class is decomposed into an `IMcpTool` registry. Each tool is
   now a small, independently testable class under `Services/Mcp/Tools/`; shared state and helpers live in

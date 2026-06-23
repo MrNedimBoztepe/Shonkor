@@ -13,6 +13,12 @@ public sealed class SitecoreXmCloudPlugin : IFileParser
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".tsx", ".jsx", ".ts", ".js", ".json" }.ToFrozenSet();
 
+    public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
+    {
+        new NodeTypeDescriptor("XmCloudComponent", "CMS", true),
+        new NodeTypeDescriptor("XmCloudRouteData", "CMS", true)
+    };
+
     public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(string filePath, string content)
     {
         var nodes = new List<GraphNode>();

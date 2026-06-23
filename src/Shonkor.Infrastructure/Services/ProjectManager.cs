@@ -86,7 +86,6 @@ public partial class ProjectManager
         WorkspacePath = currentWorkspace;
         _projectsFilePath = Path.Combine(currentWorkspace, "projects.json");
         LoadProjects(currentWorkspace);
-        StandardPluginsInstaller.Install(WorkspacePath);
     }
 
     private void EnsureUpToDate()
