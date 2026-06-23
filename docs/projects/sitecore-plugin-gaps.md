@@ -39,10 +39,19 @@ Kritische Bestandsaufnahme der Sitecore-spezifischen Parser im CMS-Plugin
 - **Hochwertige Features (F3/F5-Verletzungen/F8) hängen an der 2-Phasen-Erweiterung** → strategische Entscheidung **vor** Umsetzung, sonst pro-Datei-Mehrfacharbeit.
 
 ## Empfohlene Reihenfolge
-1. **F1/F2 + B0/B7-Fix** (umgesetzt: Präsentation/Vererbung + GUID-Normalisierung + Test).
-2. `plugins/`-Leiche entfernen, **Helix nach `src/` portieren** (F5-Basis).
-3. **2-Phasen-Plugin-Vertrag** entwerfen → dann F3/F7/F8.
-4. F4 (XM-Cloud echt), F6 (Config).
+1. ✅ **F1/F2 + B0/B7-Fix** — Präsentation/Vererbung + GUID-Normalisierung + Test.
+2. ✅ **F5 Helix** in `src/Shonkor.Plugin.Cms` portiert. (B1 entfiel: Root-`plugins/` ist gitignored/untracked, kein committeter Code.)
+3. ✅ **F4 XM-Cloud/JSS** echtes Parsing (Component↔Route↔Datasource). ✅ **F6 Config**-/Patch-Graph.
+4. ⏳ **2-Phasen-Plugin-Vertrag** entwerfen → schaltet F3/F7/F8 + Helix-Verletzungen + `clrtype:`-Auflösung frei.
 
-## Status
-- **F1/F2 umgesetzt** in `SitecoreUnicornPlugin` (`HAS_RENDERING`, `USES_DATASOURCE`, `INHERITS_FROM`, GUID-Normalisierung) + Test. Rest offen.
+## Status (umgesetzt auf `feature/sitecore-presentation-graph`)
+| Feature | Edges/Knoten | Status |
+|---|---|---|
+| F1 Präsentation | `HAS_RENDERING`, `USES_DATASOURCE` | ✅ |
+| F2 Vererbung | `INHERITS_FROM` | ✅ |
+| F4 XM-Cloud/JSS | `XmCloudComponent`, `DEFINES_COMPONENT`, `RENDERS_COMPONENT`, `USES_DATASOURCE` | ✅ |
+| F5 Helix | `Concept`, `BELONGS_TO_CONCEPT` | ✅ |
+| F6 Config | `SitecoreConfig`, `ClrType`, `REGISTERS_PROCESSOR/_SERVICE/_CONFIGURATOR`, `HANDLES_EVENT` | ✅ |
+| F3/F7/F8 + Helix-Verletzungen + `clrtype:`→C#-Auflösung | — | ⏳ braucht 2-Phasen-Vertrag |
+
+GUID-Normalisierung (lowercase/dashed/brace-los) ist plugin-übergreifend, sodass Headless-Datasources (F4) und klassische Items (F1/Unicorn) auf **denselben** Knoten zeigen. 16 Plugin-Tests grün.
