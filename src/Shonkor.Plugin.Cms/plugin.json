@@ -1,8 +1,8 @@
 {
   "id": "shonkor-cms",
   "name": "CMS Parsers (Optimizely, Kentico, Sitecore)",
-  "version": "0.2.0",
-  "description": "First-party content-model parsers: Optimizely & Kentico ([ContentType] C#), Sitecore Unicorn (.yml: items, presentation, template inheritance), Sitecore XM Cloud (JSS), and Sitecore Helix architecture (Feature/Foundation/Project concepts).",
+  "version": "0.3.0",
+  "description": "First-party content-model parsers: Optimizely & Kentico ([ContentType] C#), Sitecore Unicorn (.yml: items, presentation, template inheritance), Sitecore XM Cloud (JSS), Sitecore config patches (.config: pipelines/DI/events), and Sitecore Helix architecture (Feature/Foundation/Project concepts).",
   "entryAssembly": "Shonkor.Plugin.Cms.dll",
   "minHostApi": "1.0",
   "targetExtensions": [".cs", ".yml", ".yaml", ".json", ".ts", ".tsx", ".js", ".jsx", ".xml", ".config", ".html", ".cshtml"]
