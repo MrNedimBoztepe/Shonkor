@@ -2,6 +2,7 @@
 
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Shonkor.Core.Models;
 using static Shonkor.Infrastructure.Services.Mcp.McpToolHelpers;
 
 namespace Shonkor.Infrastructure.Services.Mcp.Tools;
@@ -118,5 +119,61 @@ public sealed class SetProjectTool : IMcpTool
         var newStorage = await ctx.ProjectManager.GetStorageProviderAsync(match.Name).ConfigureAwait(false);
         var newStats = await newStorage.GetStatisticsAsync().ConfigureAwait(false);
         return SendToolResponse(id, $"Active project for this session is now '{match.Name}' ({match.Path}) — {newStats.TotalNodes} nodes, {newStats.TotalEdges} edges. Call orient for the workflow.");
+    }
+}
+
+/// <summary>Lists graph diagnostics produced by phase-2 post-processors (unresolved/ambiguous refs, rule violations).</summary>
+public sealed class GetDiagnosticsTool : IMcpTool
+{
+    public string Name => "get_diagnostics";
+
+    public object GetSchema() => new
+    {
+        name = "get_diagnostics",
+        description = "List graph diagnostics produced by phase-2 post-processors — e.g. Sitecore config type references that resolve to no indexed C# class (sitecore.clrtype-unresolved), ambiguous resolutions, or Helix layer violations. Optionally filter by minimum severity or exact code. Use after an index to see what the cross-file analysis flagged.",
+        inputSchema = new
+        {
+            type = "object",
+            properties = new
+            {
+                projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." },
+                minSeverity = new { type = "string", description = "Minimum severity to include: info | warning | error." },
+                code = new { type = "string", description = "Optional exact diagnostic code filter, e.g. 'sitecore.clrtype-unresolved'." }
+            }
+        }
+    };
+
+    public async Task<string> ExecuteAsync(JsonElement id, JsonObject? args, McpToolContext ctx)
+    {
+        var projectName = args?["projectName"]?.ToString();
+        var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
+
+        DiagnosticSeverity? minSeverity = args?["minSeverity"]?.ToString()?.Trim().ToLowerInvariant() switch
+        {
+            "error" => DiagnosticSeverity.Error,
+            "warning" => DiagnosticSeverity.Warning,
+            "info" => DiagnosticSeverity.Info,
+            _ => null
+        };
+        var code = args?["code"]?.ToString();
+        if (string.IsNullOrWhiteSpace(code)) code = null;
+
+        var diagnostics = await storage.GetDiagnosticsAsync(minSeverity, code).ConfigureAwait(false);
+        if (diagnostics.Count == 0)
+        {
+            return SendToolResponse(id, "No diagnostics. (Phase-2 post-processors run on a full index; run an index if you expect some.)");
+        }
+
+        var basePath = ctx.GetProjectBasePath(projectName);
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"{diagnostics.Count} diagnostic(s):\n");
+        foreach (var d in diagnostics)
+        {
+            var where = !string.IsNullOrEmpty(d.NodeId)
+                ? $"\t{ToHandle(d.NodeId, basePath)}"
+                : (!string.IsNullOrEmpty(d.FilePath) ? $"\t{d.FilePath}" : string.Empty);
+            sb.Append($"[{d.Severity}] {d.Code}\t{d.Message}{where}\n");
+        }
+        return SendToolResponse(id, sb.ToString().TrimEnd());
     }
 }
