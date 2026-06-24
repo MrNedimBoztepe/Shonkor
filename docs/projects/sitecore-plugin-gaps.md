@@ -52,6 +52,18 @@ Kritische Bestandsaufnahme der Sitecore-spezifischen Parser im CMS-Plugin
 | F4 XM-Cloud/JSS | `XmCloudComponent`, `DEFINES_COMPONENT`, `RENDERS_COMPONENT`, `USES_DATASOURCE` | ✅ |
 | F5 Helix | `Concept`, `BELONGS_TO_CONCEPT` | ✅ |
 | F6 Config | `SitecoreConfig`, `ClrType`, `REGISTERS_PROCESSOR/_SERVICE/_CONFIGURATOR`, `HANDLES_EVENT` | ✅ |
-| F3/F7/F8 + Helix-Verletzungen + `clrtype:`→C#-Auflösung | — | ⏳ braucht 2-Phasen-Vertrag |
 
 GUID-Normalisierung (lowercase/dashed/brace-los) ist plugin-übergreifend, sodass Headless-Datasources (F4) und klassische Items (F1/Unicorn) auf **denselben** Knoten zeigen. 16 Plugin-Tests grün.
+
+## Phase-2-Features (umgesetzt auf dem 2-Phasen-Vertrag)
+Der graph-bewusste `IGraphPostProcessor` (Phase 2, nur Voll-Scans) schaltet die dateiübergreifenden Features frei. Alle Post-Processoren sind additiv (Knoten/Kanten/Diagnosen, nie löschend) und über das `get_diagnostics`-Tool sichtbar.
+
+| Feature | Mechanik | Diagnose-/Kanten-Code | Status |
+|---|---|---|---|
+| `clrtype:`→C# | Config-`ClrType` per Namen auf C#-Definition auflösen | `RESOLVES_TO` / `sitecore.clrtype-unresolved`/`-ambiguous` | ✅ |
+| F8 Datasources | `USES_DATASOURCE`-Ziel fehlt im Graphen | `sitecore.unresolved-datasource` (Warning) | ✅ |
+| F5-Verletzungen | Helix-Schichtregel über C#-Kopplung (`REFERENCES_TYPE`/`IMPLEMENTS`/`EXTENDS`) | `sitecore.helix-violation` (Warning) | ✅ |
+| F3 Feldtypen | Feldtyp aus „Template field"-Items lernen; echte vs. unechte Referenzen | `REFERENCES_ITEM` (Kante) / `sitecore.spurious-reference` (Info) | ✅ |
+| F7 Abdeckung | Referenziertes Template/Rendering fehlt im serialisierten Set (Denylist für Standard-Items) | `sitecore.serialization-coverage` (Info) | ✅ |
+
+**Vertrag-Randbedingung:** Kanten-`Properties` werden **nicht** persistiert (nur `SourceId`/`TargetId`/`RelationType`). Phase-2-Logik liest deshalb Knoten-`Properties` (Metadata-JSON) bzw. arbeitet rein topologisch. `IGraphView` bietet `GetNodeAsync`/`NodesByTypeAsync`/`DefinitionsByNameAsync`/`IncidentEdgesAsync`/`EdgesByRelationshipAsync`.
