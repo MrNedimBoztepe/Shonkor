@@ -91,10 +91,10 @@ public sealed class PluginRegistry
             return PluginOperationResult.Fail($"Could not read the plugin manifest: {ex.Message}");
         }
 
-        var validation = ValidateManifest(manifest);
-        if (validation != null)
+        var (validationError, compatWarning) = ValidateManifest(manifest);
+        if (validationError != null)
         {
-            return PluginOperationResult.Fail(validation);
+            return PluginOperationResult.Fail(validationError);
         }
 
         lock (_lock)
@@ -132,7 +132,8 @@ public sealed class PluginRegistry
 
             var updated = plugins.Where(p => p.Manifest.Id != manifest.Id).Append(entry).ToList();
             Save(updated);
-            return PluginOperationResult.Ok($"Installed '{manifest.Id}' v{manifest.Version} (inactive — run 'activate' to enable it).", entry);
+            var warningPrefix = compatWarning != null ? compatWarning + " " : string.Empty;
+            return PluginOperationResult.Ok($"{warningPrefix}Installed '{manifest.Id}' v{manifest.Version} (inactive — run 'activate' to enable it).", entry);
         }
     }
 
@@ -188,22 +189,46 @@ public sealed class PluginRegistry
         }
     }
 
-    private static string? ValidateManifest(PluginManifest m)
+    /// <summary>
+    /// Validates a manifest. Returns a fatal <c>Error</c> (install is refused) and/or a non-fatal
+    /// <c>Warning</c> (install proceeds, message surfaced to the user). A major host-API mismatch is fatal;
+    /// a plugin needing a higher minor than this host is a graceful warning (the contract is additive, so
+    /// the plugin still loads — any feature this older host lacks simply isn't invoked).
+    /// </summary>
+    private static (string? Error, string? Warning) ValidateManifest(PluginManifest m)
     {
-        if (string.IsNullOrWhiteSpace(m.Id)) return "Manifest 'id' is required.";
-        if (m.Id.Any(c => !(char.IsLetterOrDigit(c) || c is '-' or '_'))) return "Manifest 'id' may only contain letters, digits, '-' and '_'.";
-        if (string.IsNullOrWhiteSpace(m.Version)) return "Manifest 'version' is required.";
-        if (string.IsNullOrWhiteSpace(m.EntryAssembly)) return "Manifest 'entryAssembly' is required.";
-        if (!m.EntryAssembly.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) return "Manifest 'entryAssembly' must be a .dll.";
+        if (string.IsNullOrWhiteSpace(m.Id)) return ("Manifest 'id' is required.", null);
+        if (m.Id.Any(c => !(char.IsLetterOrDigit(c) || c is '-' or '_'))) return ("Manifest 'id' may only contain letters, digits, '-' and '_'.", null);
+        if (string.IsNullOrWhiteSpace(m.Version)) return ("Manifest 'version' is required.", null);
+        if (string.IsNullOrWhiteSpace(m.EntryAssembly)) return ("Manifest 'entryAssembly' is required.", null);
+        if (!m.EntryAssembly.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) return ("Manifest 'entryAssembly' must be a .dll.", null);
 
-        // Major-version compatibility with the host plugin API.
-        var pluginMajor = m.MinHostApi.Split('.')[0];
-        var hostMajor = PluginHostApi.Version.Split('.')[0];
+        var (pluginMajor, pluginMinor) = ParseApiVersion(m.MinHostApi);
+        var (hostMajor, hostMinor) = ParseApiVersion(PluginHostApi.Version);
+
+        // A differing major is a breaking-contract mismatch — never load it.
         if (pluginMajor != hostMajor)
         {
-            return $"Plugin targets host API {m.MinHostApi}, but this host is {PluginHostApi.Version} — incompatible.";
+            return ($"Plugin targets host API {m.MinHostApi}, but this host is {PluginHostApi.Version} — incompatible.", null);
         }
-        return null;
+
+        // Same major, but the plugin needs a newer minor than this host provides: the contract is additive,
+        // so install anyway and warn that any feature this host predates won't be available to the plugin.
+        if (pluginMinor > hostMinor)
+        {
+            return (null, $"Plugin targets host API {m.MinHostApi}, but this host is {PluginHostApi.Version} — installing anyway; features newer than {PluginHostApi.Version} won't be available.");
+        }
+
+        return (null, null);
+    }
+
+    /// <summary>Parses a "major.minor" API version, tolerating a missing or malformed minor (treated as 0).</summary>
+    private static (int Major, int Minor) ParseApiVersion(string version)
+    {
+        var parts = (version ?? string.Empty).Split('.');
+        _ = int.TryParse(parts.ElementAtOrDefault(0), out var major);
+        _ = int.TryParse(parts.ElementAtOrDefault(1), out var minor);
+        return (major, minor);
     }
 
     /// <summary>Extracts a ZIP, rejecting any entry whose path escapes the target directory (zip-slip).</summary>

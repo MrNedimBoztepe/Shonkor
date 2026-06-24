@@ -122,6 +122,38 @@ public class PluginRegistryTests
     }
 
     [Fact]
+    public void Install_WarnsButSucceeds_WhenPluginNeedsNewerMinorThanHost()
+    {
+        var ws = NewWorkspace();
+        try
+        {
+            var registry = new PluginRegistry(ws);
+
+            // Plugin needs a higher MINOR than the host (same major). The contract is additive, so this
+            // installs — with a graceful warning — rather than failing like a major mismatch would.
+            var hostMajor = PluginHostApi.Version.Split('.')[0];
+            var newerMinor = MakeZip(ws,
+                $$"""{ "id": "future", "name": "Future", "version": "1.0.0", "entryAssembly": "Plugin.dll", "minHostApi": "{{hostMajor}}.99" }""");
+            var r = registry.InstallFromZip(newerMinor);
+
+            Assert.True(r.Success, r.Message);                // not rejected
+            Assert.Contains("installing anyway", r.Message);  // but warned
+            Assert.Equal(PluginState.Installed, r.Plugin!.State);
+
+            // A plugin targeting an OLDER minor installs cleanly, with no warning noise.
+            var olderMinor = MakeZip(ws,
+                """{ "id": "legacy", "name": "Legacy", "version": "1.0.0", "entryAssembly": "Plugin.dll", "minHostApi": "1.0" }""");
+            var r2 = registry.InstallFromZip(olderMinor);
+            Assert.True(r2.Success, r2.Message);
+            Assert.DoesNotContain("installing anyway", r2.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Install_RejectsZipSlipEntries()
     {
         var ws = NewWorkspace();
