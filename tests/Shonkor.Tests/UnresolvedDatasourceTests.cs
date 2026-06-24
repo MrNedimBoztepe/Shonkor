@@ -29,6 +29,9 @@ public class UnresolvedDatasourceTests
             => Incident.TryGetValue(nodeId, out var v)
                 ? Task.FromResult<(IReadOnlyList<GraphEdge>, IReadOnlyDictionary<string, GraphNode>)>((v.Edges, v.Neighbours))
                 : Task.FromResult<(IReadOnlyList<GraphEdge>, IReadOnlyDictionary<string, GraphNode>)>((new List<GraphEdge>(), new Dictionary<string, GraphNode>()));
+
+        public Task<IReadOnlyList<GraphEdge>> EdgesByRelationshipAsync(string relationship, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<GraphEdge>>(new List<GraphEdge>());
     }
 
     [Fact]
