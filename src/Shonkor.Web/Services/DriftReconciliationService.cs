@@ -117,7 +117,8 @@ public sealed class DriftReconciliationService : BackgroundService
                     : AssemblyPluginLoadResult.Empty;
                 activeParsers.AddRange(pluginLoad.Parsers);
 
-                var scanner = new GraphIndexScanner(storage, activeParsers, _logger, semanticCsharp, _compilationCache);
+                var scanner = new GraphIndexScanner(storage, activeParsers, _logger, semanticCsharp, _compilationCache,
+                    postProcessors: pluginLoad.PostProcessors);
                 var projectConfig = _projectManager.GetProjectConfig(project.Name);
 
                 var result = await scanner.ReconcileDriftAsync(project.Path, projectConfig.ExcludePatterns, cancellationToken).ConfigureAwait(false);
