@@ -110,4 +110,45 @@ public class AssemblyPluginLoaderTests
             try { Directory.Delete(ws, recursive: true); } catch { }
         }
     }
+
+    [Fact]
+    public void ActivatedPlugin_WhoseAssemblyIsTamperedAfterInstall_RefusesToLoad_AndIsMarkedFailed()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_plugintamper_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        try
+        {
+            var dll = Path.Combine(ws, "DemoPlugin.dll");
+            CompilePluginDll(dll);
+            var zip = Path.Combine(ws, "demo.zip");
+            using (var archive = ZipFile.Open(zip, ZipArchiveMode.Create))
+            {
+                var m = archive.CreateEntry("plugin.json");
+                using (var w = new StreamWriter(m.Open(), Encoding.UTF8))
+                {
+                    w.Write("""{ "id": "demo", "name": "Demo", "version": "1.0.0", "entryAssembly": "DemoPlugin.dll", "minHostApi": "1.0" }""");
+                }
+                archive.CreateEntryFromFile(dll, "DemoPlugin.dll");
+            }
+
+            var registry = new PluginRegistry(ws);
+            Assert.True(registry.InstallFromZip(zip).Success);
+            Assert.True(registry.Activate("demo").Success);
+
+            // Tamper: swap the installed assembly for different bytes AFTER install recorded its hash.
+            var installedDll = Path.Combine(ws, "plugins", "demo", "DemoPlugin.dll");
+            File.WriteAllText(installedDll, "this is not the assembly that was installed");
+
+            using var loaded = AssemblyPluginLoader.LoadActive(registry);
+            Assert.Empty(loaded.Parsers); // refused to load the tampered file
+
+            var entry = registry.List().Single(p => p.Manifest.Id == "demo");
+            Assert.Equal(Shonkor.Core.Models.PluginState.Failed, entry.State);
+            Assert.Contains("hash", entry.Error, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
 }

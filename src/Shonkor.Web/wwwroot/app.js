@@ -623,6 +623,67 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error("Failed to load dashboard:", e);
             showToast('Network error while loading the dashboard.');
         }
+        // Phase-2 post-processor diagnostics (independent of interactions; failures are non-fatal).
+        loadDiagnostics();
+    }
+
+    // Load graph diagnostics produced by active plugins' post-processors.
+    async function loadDiagnostics() {
+        const col = document.querySelector('#kanban-diagnostics .kanban-items');
+        if (!col) return;
+        col.innerHTML = '';
+        try {
+            const res = await fetch('/api/diagnostics', {
+                headers: { 'X-Project-Name': activeProjectName.textContent }
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            const diags = data.diagnostics || data.Diagnostics || [];
+
+            if (diags.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'kanban-empty';
+                empty.textContent = 'No diagnostics — nothing flagged by post-processors.';
+                col.appendChild(empty);
+                return;
+            }
+
+            diags.forEach(d => {
+                const sev = (d.severity || d.Severity || 'Info');
+                const code = d.code || d.Code || '';
+                const message = d.message || d.Message || '';
+                const where = d.filePath || d.FilePath || d.nodeId || d.NodeId || '';
+
+                const card = document.createElement('div');
+                card.className = 'kanban-card diagnostic-card';
+
+                const head = document.createElement('div');
+                head.className = 'kanban-card-title diagnostic-head';
+                const badge = document.createElement('span');
+                badge.className = 'diag-sev ' + sev.toLowerCase();
+                badge.textContent = sev;
+                const codeEl = document.createElement('code');
+                codeEl.textContent = code;
+                head.appendChild(badge);
+                head.appendChild(codeEl);
+
+                const msg = document.createElement('div');
+                msg.className = 'kanban-card-desc';
+                msg.textContent = message;
+
+                card.appendChild(head);
+                card.appendChild(msg);
+                if (where) {
+                    const w = document.createElement('div');
+                    w.className = 'diagnostic-where';
+                    w.textContent = where;
+                    card.appendChild(w);
+                }
+                col.appendChild(card);
+            });
+        } catch (e) {
+            console.error('Failed to load diagnostics:', e);
+        }
     }
 
     function renderKanban(items) {

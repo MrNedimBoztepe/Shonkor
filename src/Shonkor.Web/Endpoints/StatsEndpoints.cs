@@ -2,8 +2,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Shonkor.Core.Models;
 using Shonkor.Infrastructure.Services;
 
 using static Shonkor.Web.EndpointHelpers;
@@ -26,6 +28,41 @@ public static class StatsEndpoints
             catch (Exception ex)
             {
                 return Fail("Request failed.", ex);
+            }
+        });
+
+        // GET /api/diagnostics - phase-2 post-processor diagnostics for the active/selected project.
+        // Optional query: minSeverity=info|warning|error, code=<exact diagnostic code>.
+        app.MapGet("/api/diagnostics", async (HttpContext context, ProjectManager pm, CancellationToken ct) =>
+        {
+            try
+            {
+                var storage = await pm.GetStorageForRequestAsync(context, ct);
+
+                DiagnosticSeverity? minSeverity = context.Request.Query["minSeverity"].ToString().Trim().ToLowerInvariant() switch
+                {
+                    "error" => DiagnosticSeverity.Error,
+                    "warning" => DiagnosticSeverity.Warning,
+                    "info" => DiagnosticSeverity.Info,
+                    _ => null
+                };
+                var code = context.Request.Query["code"].ToString();
+                if (string.IsNullOrWhiteSpace(code)) code = null;
+
+                var diagnostics = await storage.GetDiagnosticsAsync(minSeverity, code, cancellationToken: ct);
+                var items = diagnostics.Select(d => new
+                {
+                    d.Code,
+                    Severity = d.Severity.ToString(),
+                    d.Message,
+                    d.NodeId,
+                    d.FilePath
+                });
+                return Results.Ok(new { Diagnostics = items, Total = diagnostics.Count });
+            }
+            catch (Exception ex)
+            {
+                return Fail("Failed to get diagnostics.", ex);
             }
         });
 

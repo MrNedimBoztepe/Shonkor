@@ -2,6 +2,7 @@
 
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 using Shonkor.Core.Interfaces;
 
 namespace Shonkor.Infrastructure.Services;
@@ -91,6 +92,19 @@ public static class AssemblyPluginLoader
                     continue;
                 }
 
+                // Tamper check: the on-disk assembly must match the SHA-256 recorded at install time, so a
+                // file swapped under an activated plugin's folder is caught BEFORE its code is loaded.
+                if (!string.IsNullOrEmpty(plugin.EntryAssemblySha256))
+                {
+                    var actualHash = Sha256OfFile(entryPath);
+                    if (!string.Equals(actualHash, plugin.EntryAssemblySha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        registry.MarkFailed(plugin.Manifest.Id,
+                            "Entry assembly hash does not match the value recorded at install — the file was modified after installation. Reinstall the plugin from a trusted package.");
+                        continue;
+                    }
+                }
+
                 var context = new PluginLoadContext(plugin.Manifest.Id, entryPath);
                 var assembly = context.LoadFromAssemblyPath(entryPath);
 
@@ -129,6 +143,12 @@ public static class AssemblyPluginLoader
         return parsers.Count == 0 && postProcessors.Count == 0
             ? AssemblyPluginLoadResult.Empty
             : new AssemblyPluginLoadResult(parsers, postProcessors, contexts);
+    }
+
+    private static string Sha256OfFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
     /// <summary>
