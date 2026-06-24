@@ -12,6 +12,6 @@ namespace Shonkor.Core.Interfaces;
 /// is genuinely required (e.g. the storage factory).
 /// </para>
 /// </summary>
-public interface IGraphStorageProvider : IGraphStore, IGraphSearch, ISemanticGraphStore
+public interface IGraphStorageProvider : IGraphStore, IGraphSearch, ISemanticGraphStore, IDiagnosticStore
 {
 }

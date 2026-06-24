@@ -5,28 +5,25 @@ using Shonkor.Core.Models;
 namespace Shonkor.Core.Interfaces;
 
 /// <summary>
-/// A read-only view of the assembled graph handed to an <see cref="IGraphPostProcessor"/>. Implementations
-/// are storage-backed (indexed queries), so a post-processor can look across the whole graph without the
-/// host materialising every node/edge in memory. Only indexed access patterns are exposed — there is
-/// deliberately no "give me everything" enumeration.
+/// A read-only, storage-backed view of the assembled graph handed to an <see cref="IGraphPostProcessor"/>.
+/// Exposes only indexed access patterns (by id, by type, by definition name, a node's incident edges) so a
+/// post-processor can query across the whole graph without the host materialising it in memory. Async
+/// because the backing store is async; broader query surfaces are added as features (F3/F8) need them.
 /// </summary>
 public interface IGraphView
 {
     /// <summary>The node with the given id, or <c>null</c> if none exists (the basis for unresolved-reference checks).</summary>
-    GraphNode? GetNode(string id);
+    Task<GraphNode?> GetNodeAsync(string id, CancellationToken cancellationToken = default);
 
     /// <summary>All nodes of a given <see cref="GraphNode.Type"/>.</summary>
-    IEnumerable<GraphNode> NodesByType(string type);
+    Task<IReadOnlyList<GraphNode>> NodesByTypeAsync(string type, CancellationToken cancellationToken = default);
 
-    /// <summary>Nodes whose dynamic <see cref="GraphNode.Properties"/> contain <paramref name="key"/> == <paramref name="value"/> (e.g. a C# type by its simple name).</summary>
-    IEnumerable<GraphNode> NodesByProperty(string key, string value);
+    /// <summary>
+    /// Resolves the given (simple) names to C# definition nodes (Class/Interface/Record/Struct/Enum), keyed
+    /// by name — the basis for reference resolvers (e.g. a config type string → its declaring class node).
+    /// </summary>
+    Task<IReadOnlyDictionary<string, IReadOnlyList<GraphNode>>> DefinitionsByNameAsync(IEnumerable<string> names, CancellationToken cancellationToken = default);
 
-    /// <summary>Edges originating at the given node id.</summary>
-    IEnumerable<GraphEdge> EdgesFrom(string sourceId);
-
-    /// <summary>Edges pointing at the given node id.</summary>
-    IEnumerable<GraphEdge> EdgesTo(string targetId);
-
-    /// <summary>All edges with the given <see cref="GraphEdge.Relationship"/> (e.g. all <c>REFERENCES</c> edges).</summary>
-    IEnumerable<GraphEdge> EdgesByRelationship(string relationship);
+    /// <summary>The edges incident to a node (where it is source or target), with the other-end nodes keyed by id.</summary>
+    Task<(IReadOnlyList<GraphEdge> Edges, IReadOnlyDictionary<string, GraphNode> Neighbours)> IncidentEdgesAsync(string nodeId, CancellationToken cancellationToken = default);
 }
