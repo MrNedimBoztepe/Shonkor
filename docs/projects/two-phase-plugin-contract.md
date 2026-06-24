@@ -116,7 +116,7 @@ Post-Processoren bekommen **Lesezugriff auf den ganzen Graphen** (mehr als per-D
 4. **Komplex:** F3 (Feldtyp), Helix-Verletzungen.
 5. (v2) Mutations-/Ketten-/Invalidierungs-Fähigkeiten, falls nötig.
 
-## 9. Zu entscheiden (vor Implementierung)
-- **Diagnostik-Oberfläche:** eigenes MCP-Tool + UI-Panel, oder Diagnostik als Graph-Knoten? (Vorschlag: eigener Typ + Tool.)
-- **`IGraphView` In-Memory vs. storage-gestützt** für v1 (Vorschlag: storage-gestützt, aber minimal — `GetNode`, `NodesByType`, `NodesByProperty`).
-- **Minor-Versions-Policy:** harte Ablehnung oder Warnung bei Host < Plugin-Minor?
+## 9. Entschieden
+- **Diagnostik-Oberfläche:** **eigener Typ (`GraphDiagnostic`) + eigenes MCP-Tool** (`get_diagnostics`) — nicht als Graph-Knoten vermischt.
+- **`IGraphView`:** **storage-gestützt**, minimaler Satz indizierter Zugriffe (`GetNode`, `NodesByType`, `NodesByProperty`, `EdgesFrom/To/ByRelationship`) — keine In-Memory-Vollkopie.
+- **Minor-Versions-Policy:** **graceful** — Plugin **wird geladen**, aber bei Host-Minor < Plugin-Minor eine **sichtbare Warnung** (Registry/Status), dass Post-Processor-Features inaktiv sind. Begründung: der `IFileParser`-Teil bleibt funktionsfähig; harte Ablehnung würde ihn unnötig mitverwerfen, stilles Ignorieren war der ursprüngliche Fehler.
