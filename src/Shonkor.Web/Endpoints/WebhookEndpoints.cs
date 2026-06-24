@@ -244,11 +244,11 @@ public static class WebhookEndpoints
                     {
                         var storage = await pm.GetStorageProviderAsync(project.Name, ct);
 
-                        // Load dynamic plugins only when explicitly enabled (RCE risk otherwise).
+                        // Load the workspace's ACTIVE plugins (pre-built assemblies; install is inert).
                         var activeParsers = new List<IFileParser>(parsers);
-                        using var pluginLoad = config.GetValue<bool>("Security:EnablePlugins")
-                            ? PluginLoader.LoadPlugins(System.IO.Path.Combine(pm.WorkspacePath, "plugins"))
-                            : PluginLoadResult.Empty;
+                        using var pluginLoad = config.GetValue("Security:EnablePlugins", true)
+                            ? AssemblyPluginLoader.LoadActive(pm.WorkspacePath)
+                            : AssemblyPluginLoadResult.Empty;
                         activeParsers.AddRange(pluginLoad.Parsers);
 
                         var scanner = new GraphIndexScanner(storage, activeParsers, webhookLogger,

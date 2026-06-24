@@ -16,6 +16,13 @@ public sealed class OptimizelyPlugin : IFileParser
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".cs" }.ToFrozenSet();
 
+    public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
+    {
+        new NodeTypeDescriptor("OptiPageType", "CMS", true),
+        new NodeTypeDescriptor("OptiBlockType", "CMS", true),
+        new NodeTypeDescriptor("OptiProperty", "CMS", true)
+    };
+
     public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(string filePath, string content)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(content);

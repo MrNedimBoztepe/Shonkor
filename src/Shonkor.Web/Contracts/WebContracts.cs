@@ -10,9 +10,6 @@ public record CapsuleRequest(string Query, int? Hops);
 /// <summary>Request to (re)index a directory; both fields fall back to the project defaults when null.</summary>
 public record IndexRequest(string? Directory, List<string>? ExcludePatterns);
 
-/// <summary>Request to scaffold a new dynamic plugin source file.</summary>
-public record PluginCreateRequest(string Name, string Extension);
-
 /// <summary>Request to update the status of an interaction node (Task/Decision/Question/Milestone).</summary>
 public record UpdateStatusRequest(string Id, string Status);
 

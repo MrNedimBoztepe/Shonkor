@@ -460,51 +460,47 @@
 
                 <!-- ========== PLUGINS TAB ========== -->
                 <div id="plugins-tab" class="modal-tab-content">
-                    <!-- LEFT: Plugin List -->
+                    <!-- LEFT: Installed Plugins -->
                     <div class="plugin-list-panel">
-                        <h3><i data-lucide="puzzle" class="section-icon"></i> Active Plugins</h3>
-                        <p class="section-desc" style="margin: 0 0 0.8rem;">Dynamic C# parsers loaded via Roslyn in-memory compilation.</p>
-                        
+                        <h3><i data-lucide="puzzle" class="section-icon"></i> Installed Plugins</h3>
+                        <p class="section-desc" style="margin: 0 0 0.8rem;">Pre-built parser assemblies. An installed plugin is inert until you activate it.</p>
+
                         <div class="plugin-list-wrapper">
                             <ul id="plugin-list" class="plugin-list">
                                 <!-- Dynamically populated -->
                             </ul>
                             <div id="plugin-list-empty" class="plugin-empty-state">
                                 <i data-lucide="puzzle" class="empty-icon"></i>
-                                <p>No plugins found.</p>
-                                <span>Create your first plugin using the wizard on the right.</span>
+                                <p>No plugins installed.</p>
+                                <span>Install one from a ZIP package using the panel on the right.</span>
                             </div>
                         </div>
                     </div>
-                    
-                    <!-- RIGHT: Plugin Creator Wizard -->
+
+                    <!-- RIGHT: Install a Plugin -->
                     <div class="plugin-creator-panel">
-                        <h3><i data-lucide="wand-2" class="section-icon"></i> Plugin Wizard</h3>
-                        <p class="section-desc" style="margin: 0 0 1rem;">Create a new IFileParser plugin for any file type. Shonkor generates a fully-functional C# boilerplate that compiles at runtime via Roslyn.</p>
-                        
+                        <h3><i data-lucide="package-plus" class="section-icon"></i> Install a Plugin</h3>
+                        <p class="section-desc" style="margin: 0 0 1rem;">Upload a plugin ZIP containing a <code>plugin.json</code> manifest and the parser assembly. It installs inert — activate it to load.</p>
+
                         <div class="plugin-create-form">
                             <div class="input-group">
-                                <label for="plugin-name">Language / Parser Name</label>
-                                <input type="text" id="plugin-name" placeholder="e.g. Python, Rust, TOML">
+                                <label for="plugin-zip">Plugin package (.zip)</label>
+                                <input type="file" id="plugin-zip" accept=".zip">
                             </div>
-                            <div class="input-group">
-                                <label for="plugin-extension">File Extension</label>
-                                <input type="text" id="plugin-extension" placeholder="e.g. .py, .rs, .toml">
-                            </div>
-                            
-                            <button id="create-plugin-btn" class="glow-btn plugin-create-btn">
-                                <i data-lucide="sparkles"></i> Create Plugin Template
+
+                            <button id="install-plugin-btn" class="glow-btn plugin-create-btn">
+                                <i data-lucide="upload"></i> Install Plugin
                             </button>
                         </div>
-                        
+
                         <div class="plugin-info-box glass-panel-sm">
                             <div class="info-box-header"><i data-lucide="info"></i> How Plugins Work</div>
                             <ul class="info-box-list">
-                                <li>Plugins are <code>.cs</code> files in <code>[project]/plugins/</code></li>
-                                <li>Each plugin implements <code>IFileParser</code></li>
-                                <li>Compiled in-memory via <strong>Roslyn</strong> — no SDK needed</li>
-                                <li>Automatically loaded on the next workspace scan</li>
-                                <li>Edit the generated file to customize extraction logic</li>
+                                <li>A plugin is a <strong>pre-built assembly</strong> in a ZIP with a <code>plugin.json</code></li>
+                                <li>Each parser implements <code>IFileParser</code></li>
+                                <li><strong>No runtime compilation</strong> — installing runs nothing</li>
+                                <li>Plugins are <strong>inert until activated</strong>; activation is the trust gate</li>
+                                <li>Active plugins load on the next workspace scan</li>
                             </ul>
                         </div>
                     </div>

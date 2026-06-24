@@ -46,8 +46,12 @@ public static class EndpointHelpers
         context.Connection.RemoteIpAddress != null &&
         IPAddress.IsLoopback(context.Connection.RemoteIpAddress);
 
-    /// <summary>Dynamic plugin compilation is effectively RCE and is therefore opt-in only.</summary>
-    public static bool PluginsEnabled(IConfiguration config) => config.GetValue<bool>("Security:EnablePlugins");
+    /// <summary>
+    /// Global kill-switch for the assembly-plugin system. The real trust gate is now per-plugin activation
+    /// (installing a plugin runs nothing), so this defaults to ON; set <c>Security:EnablePlugins=false</c>
+    /// to hard-disable loading every plugin regardless of its activation state.
+    /// </summary>
+    public static bool PluginsEnabled(IConfiguration config) => config.GetValue("Security:EnablePlugins", true);
 
     /// <summary>
     /// Whether to use exact semantic C# resolution when indexing <paramref name="project"/>: the
@@ -57,97 +61,4 @@ public static class EndpointHelpers
     public static bool UseSemanticCSharp(Project project, IConfiguration config) =>
         project.SemanticCSharp ?? config.GetValue<bool>("Indexing:SemanticCSharp");
 
-    /// <summary>Compiles workspace plugins into a collectible context; returns <see cref="PluginLoadResult.Empty"/> on any failure.</summary>
-    public static PluginLoadResult LoadWorkspacePlugins(string workspacePath)
-    {
-        try
-        {
-            var pluginsDir = Path.Combine(workspacePath, "plugins");
-            return PluginLoader.LoadPlugins(pluginsDir);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[Plugins] Failed to compile dynamic plugins. :: {ex}");
-            return PluginLoadResult.Empty;
-        }
-    }
-
-    /// <summary>
-    /// Generates a fully-functional C# source file implementing IFileParser
-    /// for runtime Roslyn compilation via PluginLoader.
-    /// </summary>
-    public static string GeneratePluginBoilerplate(string className, string extension, string languageName)
-    {
-        return $@"using System.Collections.Generic;
-using System.Threading.Tasks;
-using Shonkor.Core.Interfaces;
-using Shonkor.Core.Models;
-
-namespace Shonkor.Plugins;
-
-/// <summary>
-/// Dynamic {languageName} parser plugin for Shonkor.
-/// This file is compiled at runtime via the Roslyn Plugin Engine.
-/// Extend the ParseAsync method with your custom extraction logic.
-/// </summary>
-public class {className} : IFileParser
-{{
-    public IReadOnlySet<string> SupportedExtensions {{ get; }} = new HashSet<string> {{ ""{extension}"" }};
-
-    public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors {{ get; }} = new[]
-    {{
-        new NodeTypeDescriptor(""Method"", ""Code"", true),
-        // Add more descriptors here if you extract classes, structs, etc.
-    }};
-
-    public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(
-        string filePath, string content)
-    {{
-        var nodes = new List<GraphNode>();
-        var edges = new List<GraphEdge>();
-
-        // --- File-level node ---
-        var fileId = $""file::{{filePath}}"";
-        nodes.Add(new GraphNode
-        {{
-            Id = fileId,
-            Type = ""File"",
-            Name = System.IO.Path.GetFileName(filePath),
-            FilePath = filePath,
-            Content = content.Length > 10000 ? content[..10000] : content
-        }});
-
-        // --- Custom extraction logic ---
-        // TODO: Add your own parsing rules here.
-        // Example: Split content by lines, detect function definitions, classes, etc.
-        var lines = content.Split('\n');
-        for (int i = 0; i < lines.Length; i++)
-        {{
-            var line = lines[i].TrimStart();
-            // Placeholder: detect lines that look like function/method definitions
-            // Customize this regex or logic for {languageName} syntax
-            if (line.StartsWith(""def "") || line.StartsWith(""function "") || line.StartsWith(""fn ""))
-            {{
-                var funcName = line.Split(new[] {{ ' ', '(' }}, System.StringSplitOptions.RemoveEmptyEntries);
-                if (funcName.Length >= 2)
-                {{
-                    var name = funcName[1].TrimEnd(':', '(', ')');
-                    var funcId = $""func::{{filePath}}::{{name}}"";
-                    nodes.Add(new GraphNode
-                    {{
-                        Id = funcId,
-                        Type = ""Method"",
-                        Name = name,
-                        FilePath = filePath,
-                        StartLine = i + 1
-                    }});
-                    edges.Add(new GraphEdge {{ SourceId = fileId, TargetId = funcId, Relationship = ""CONTAINS"" }});
-                }}
-            }}
-        }}
-
-        return Task.FromResult<(IReadOnlyList<GraphNode>, IReadOnlyList<GraphEdge>)>((nodes, edges));
-    }}
-}}";
-    }
 }

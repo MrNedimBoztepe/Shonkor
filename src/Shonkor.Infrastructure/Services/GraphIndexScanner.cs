@@ -18,6 +18,7 @@ public sealed class GraphIndexScanner
 {
     private readonly IGraphStorageProvider _storage;
     private readonly IReadOnlyList<IFileParser> _parsers;
+    private readonly IReadOnlyList<IGraphPostProcessor> _postProcessors;
     private readonly ILogger? _logger;
 
     // Upper bound on the content stored on a File node (full content is still hashed).
@@ -36,13 +37,14 @@ public sealed class GraphIndexScanner
     private readonly bool _semanticCsharp;
     private readonly SemanticCompilationCache? _compilationCache;
 
-    public GraphIndexScanner(IGraphStorageProvider storage, IEnumerable<IFileParser> parsers, ILogger? logger = null, bool semanticCsharp = false, SemanticCompilationCache? compilationCache = null)
+    public GraphIndexScanner(IGraphStorageProvider storage, IEnumerable<IFileParser> parsers, ILogger? logger = null, bool semanticCsharp = false, SemanticCompilationCache? compilationCache = null, IEnumerable<IGraphPostProcessor>? postProcessors = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(parsers);
 
         _storage = storage;
         _parsers = parsers.ToList();
+        _postProcessors = postProcessors?.ToList() ?? new List<IGraphPostProcessor>();
         _logger = logger;
         _semanticCsharp = semanticCsharp;
         _compilationCache = compilationCache;
@@ -226,6 +228,33 @@ public sealed class GraphIndexScanner
             // A full scan re-read the whole tree; drop any cached compilation so the next incremental
             // reconcile rebuilds from the current sources rather than swapping onto a stale base.
             _compilationCache?.Invalidate(directoryPath);
+        }
+
+        // 5.5 Phase 2: graph-aware post-processors observe the assembled graph and add enrichment
+        //     (nodes/edges) + diagnostics. Additive and isolated — a failing post-processor is logged and
+        //     skipped. Whole-graph concern, so it runs on full scans only (not single-file reindex).
+        if (_postProcessors.Count > 0)
+        {
+            var view = new StorageBackedGraphView(_storage);
+            foreach (var postProcessor in _postProcessors)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var enrichment = await postProcessor.ProcessAsync(view).ConfigureAwait(false);
+                    if (enrichment.Nodes.Count > 0)
+                        await _storage.UpsertNodesAsync(enrichment.Nodes, cancellationToken).ConfigureAwait(false);
+                    if (enrichment.Edges.Count > 0)
+                        await _storage.UpsertEdgesAsync(enrichment.Edges, cancellationToken).ConfigureAwait(false);
+                    // Replace exactly this post-processor's diagnostics (tagged by its Name) so a re-scan
+                    // refreshes them without touching others.
+                    await _storage.ReplaceDiagnosticsAsync(postProcessor.Name, enrichment.Diagnostics, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Warn($"Post-processor '{postProcessor.Name}' failed: {ex.Message}");
+                }
+            }
         }
 
         // 6. Stamp the graph with the current node-id scheme — the whole tree was just (re)built under it,

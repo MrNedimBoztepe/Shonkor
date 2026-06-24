@@ -94,7 +94,7 @@ public sealed class DriftReconciliationService : BackgroundService
         var projects = _projectManager.GetProjects();
         if (projects.Count == 0) return;
 
-        var enablePlugins = _configuration.GetValue<bool>("Security:EnablePlugins");
+        var enablePlugins = _configuration.GetValue("Security:EnablePlugins", true);
 
         foreach (var project in projects)
         {
@@ -113,8 +113,8 @@ public sealed class DriftReconciliationService : BackgroundService
 
                 var activeParsers = new List<IFileParser>(_parsers);
                 using var pluginLoad = enablePlugins
-                    ? PluginLoader.LoadPlugins(Path.Combine(_projectManager.WorkspacePath, "plugins"))
-                    : PluginLoadResult.Empty;
+                    ? AssemblyPluginLoader.LoadActive(_projectManager.WorkspacePath)
+                    : AssemblyPluginLoadResult.Empty;
                 activeParsers.AddRange(pluginLoad.Parsers);
 
                 var scanner = new GraphIndexScanner(storage, activeParsers, _logger, semanticCsharp, _compilationCache);

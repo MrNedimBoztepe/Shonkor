@@ -412,9 +412,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Plugin Management DOM
     const pluginListEl = document.getElementById('plugin-list');
     const pluginEmptyState = document.getElementById('plugin-list-empty');
-    const pluginNameInput = document.getElementById('plugin-name');
-    const pluginExtensionInput = document.getElementById('plugin-extension');
-    const createPluginBtn = document.getElementById('create-plugin-btn');
+    const pluginZipInput = document.getElementById('plugin-zip');
+    const installPluginBtn = document.getElementById('install-plugin-btn');
 
     // Toast DOM
     const toast = document.getElementById('toast');
@@ -3088,148 +3087,132 @@ document.addEventListener('DOMContentLoaded', () => {
     // PLUGIN MANAGEMENT FUNCTIONS
     // ============================
 
-    // Load plugins list from API
+    // Load installed plugins from the registry API
     async function loadPluginsList() {
         if (!pluginListEl) return;
-        
         pluginListEl.innerHTML = '';
-        
         try {
             const res = await fetch('/api/plugins');
-            if (!res.ok) {
-                showToast('Failed to load plugins list.');
-                return;
-            }
-            
+            if (!res.ok) { showToast('Failed to load plugins.'); return; }
+
             const data = await res.json();
             const plugins = data.plugins || [];
-            
+
             if (plugins.length === 0) {
                 pluginListEl.style.display = 'none';
                 if (pluginEmptyState) pluginEmptyState.style.display = 'flex';
             } else {
                 pluginListEl.style.display = 'flex';
                 if (pluginEmptyState) pluginEmptyState.style.display = 'none';
-                
+
                 plugins.forEach(plugin => {
                     const li = document.createElement('li');
                     li.className = 'plugin-item';
-                    
-                    const statusClass = plugin.status === 'loaded' ? 'loaded' 
-                                      : plugin.status === 'error' ? 'error' 
-                                      : 'unknown';
-                    const statusLabel = plugin.status === 'loaded' ? 'Loaded' 
-                                      : plugin.status === 'error' ? 'Error' 
-                                      : 'Pending';
-                    
-                    const sizeKb = plugin.sizeBytes ? (plugin.sizeBytes / 1024).toFixed(1) + ' KB' : '';
-                    const modDate = plugin.lastModified 
-                        ? new Date(plugin.lastModified).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) 
-                        : '';
-                    
+
+                    const state = plugin.state || 'Installed';
+                    const isActive = plugin.active === true || state === 'Active';
+                    const statusClass = isActive ? 'loaded' : (state === 'Failed' ? 'error' : 'unknown');
+                    const exts = Array.isArray(plugin.extensions) && plugin.extensions.length ? plugin.extensions.join(' ') : '';
+
                     li.innerHTML = `
                         <div class="plugin-item-info">
-                            <span class="plugin-item-name">${plugin.fileName}</span>
+                            <span class="plugin-item-name">${plugin.name || plugin.id}</span>
                             <div class="plugin-item-meta">
-                                <span class="plugin-status-dot ${statusClass}" title="${statusLabel}${plugin.error ? ': ' + plugin.error : ''}"></span>
-                                <span>${statusLabel}</span>
-                                ${sizeKb ? `<span>${sizeKb}</span>` : ''}
-                                ${modDate ? `<span>${modDate}</span>` : ''}
+                                <span class="plugin-status-dot ${statusClass}" title="${state}${plugin.error ? ': ' + plugin.error : ''}"></span>
+                                <span>${state}</span>
+                                <span>v${plugin.version || '?'}</span>
+                                ${exts ? `<span>${exts}</span>` : ''}
                             </div>
                         </div>
                         <div class="plugin-item-actions">
-                            <button class="plugin-delete-btn" data-filename="${plugin.fileName}" title="Delete plugin">
+                            <button class="plugin-toggle-btn" data-id="${plugin.id}" title="${isActive ? 'Deactivate' : 'Activate'}">
+                                <i data-lucide="${isActive ? 'pause' : 'play'}"></i>
+                            </button>
+                            <button class="plugin-delete-btn" data-id="${plugin.id}" title="Uninstall plugin">
                                 <i data-lucide="trash-2"></i>
                             </button>
                         </div>
                     `;
-                    
-                    // Wire delete button
-                    const deleteBtn = li.querySelector('.plugin-delete-btn');
-                    deleteBtn.addEventListener('click', async (e) => {
+
+                    li.querySelector('.plugin-toggle-btn').addEventListener('click', async (e) => {
                         e.stopPropagation();
-                        await deletePlugin(plugin.fileName);
+                        await togglePlugin(plugin.id, !isActive);
                     });
-                    
+                    li.querySelector('.plugin-delete-btn').addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        await uninstallPlugin(plugin.id);
+                    });
+
                     pluginListEl.appendChild(li);
                 });
             }
-            
+
             if (window.lucide) window.lucide.createIcons();
-            
         } catch (err) {
             console.error('Error loading plugins:', err);
-            showToast('Error loading plugins list.');
+            showToast('Error loading plugins.');
         }
     }
 
-    // Create a new plugin via the wizard
-    async function handleCreatePlugin() {
-        const name = pluginNameInput ? pluginNameInput.value.trim() : '';
-        const ext = pluginExtensionInput ? pluginExtensionInput.value.trim() : '';
-        
-        if (!name || !ext) {
-            showToast('Please enter both a plugin name and file extension.');
-            return;
-        }
-        
-        if (createPluginBtn) createPluginBtn.disabled = true;
-        showToast('Creating plugin template...');
-        
+    // Install a plugin from an uploaded ZIP package (inert until activated)
+    async function handleInstallPlugin() {
+        const file = pluginZipInput && pluginZipInput.files ? pluginZipInput.files[0] : null;
+        if (!file) { showToast('Choose a plugin .zip to install.'); return; }
+
+        if (installPluginBtn) installPluginBtn.disabled = true;
+        showToast('Installing plugin…');
         try {
-            const res = await fetch('/api/plugins/create', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, extension: ext })
-            });
-            
+            const form = new FormData();
+            form.append('package', file);
+            const res = await fetch('/api/plugins/install', { method: 'POST', body: form });
+            const result = await res.json().catch(() => null);
             if (res.ok) {
-                const result = await res.json();
-                showToast(`âœ¨ Plugin '${result.fileName}' created! Edit the file to customize your parser logic.`, 6000);
-                
-                // Clear inputs
-                if (pluginNameInput) pluginNameInput.value = '';
-                if (pluginExtensionInput) pluginExtensionInput.value = '';
-                
-                // Reload plugins list
+                showToast(result?.message || 'Plugin installed (inactive). Activate it to enable.', 5000);
+                if (pluginZipInput) pluginZipInput.value = '';
                 await loadPluginsList();
             } else {
-                const errData = await res.json().catch(() => null);
-                showToast(errData?.detail || errData?.message || 'Failed to create plugin template.');
+                showToast(result?.message || result?.detail || 'Failed to install plugin.');
             }
         } catch (err) {
-            console.error('Error creating plugin:', err);
-            showToast('Error creating plugin template.');
+            console.error('Error installing plugin:', err);
+            showToast('Error installing plugin.');
         } finally {
-            if (createPluginBtn) createPluginBtn.disabled = false;
+            if (installPluginBtn) installPluginBtn.disabled = false;
         }
     }
 
-    // Delete a plugin file
-    async function deletePlugin(fileName) {
-        if (!confirm(`Delete plugin '${fileName}'? This action cannot be undone.`)) return;
-        
-        showToast(`Deleting plugin '${fileName}'...`);
-        
+    // Activate or deactivate a plugin
+    async function togglePlugin(id, activate) {
+        const action = activate ? 'activate' : 'deactivate';
+        showToast(`${activate ? 'Activating' : 'Deactivating'} '${id}'…`);
         try {
-            const res = await fetch(`/api/plugins/${encodeURIComponent(fileName)}`, {
-                method: 'DELETE'
-            });
-            
-            if (res.ok) {
-                showToast(`Plugin '${fileName}' deleted.`);
-                await loadPluginsList();
-            } else {
-                showToast('Failed to delete plugin.');
-            }
+            const res = await fetch(`/api/plugins/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+            const result = await res.json().catch(() => null);
+            if (res.ok) { showToast(result?.message || `Plugin '${id}' ${action}d.`); await loadPluginsList(); }
+            else { showToast(result?.message || `Failed to ${action} plugin.`); }
         } catch (err) {
-            console.error('Error deleting plugin:', err);
-            showToast('Error deleting plugin.');
+            console.error('Error toggling plugin:', err);
+            showToast('Error changing plugin state.');
         }
     }
 
-    // Wire up plugin create button
-    if (createPluginBtn) {
-        createPluginBtn.addEventListener('click', handleCreatePlugin);
+    // Uninstall a plugin (removes files + registry entry)
+    async function uninstallPlugin(id) {
+        if (!confirm(`Uninstall plugin '${id}'? This removes its files.`)) return;
+        showToast(`Uninstalling '${id}'…`);
+        try {
+            const res = await fetch(`/api/plugins/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            const result = await res.json().catch(() => null);
+            if (res.ok) { showToast(result?.message || `Plugin '${id}' uninstalled.`); await loadPluginsList(); }
+            else { showToast(result?.message || 'Failed to uninstall plugin.'); }
+        } catch (err) {
+            console.error('Error uninstalling plugin:', err);
+            showToast('Error uninstalling plugin.');
+        }
+    }
+
+    // Wire up the install button
+    if (installPluginBtn) {
+        installPluginBtn.addEventListener('click', handleInstallPlugin);
     }
 });

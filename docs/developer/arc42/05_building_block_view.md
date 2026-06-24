@@ -40,7 +40,7 @@ graph TD
 * **Responsibility**: Provides the console interface and the MCP server.
 * **Important Building Blocks**:
   * `Program.cs`: Processes arguments for `init`, `index`, `search`, `capsule`, and `mcp` (+`mcp install`) and outputs formatted reports.
-  * `McpServer`: JSON-RPC-over-stdio server that exposes the graph to AI assistants. Token-efficient outputs across find/read/analyze/edit-loop tools (`locate`, `search_graph`, `search_semantic`, `get_source`, `get_subgraph`, `impact_of`, `depends_on`, `find_usages`, `find_path`, `verify_exists`, `reindex_file`); derives the context project from the working directory.
+  * `McpServer`: JSON-RPC-over-stdio server that exposes the graph to AI assistants. Token-efficient outputs across find/read/analyze/edit-loop tools (`locate`, `search_graph`, `get_source`, `get_subgraph`, `references`, `find_usages`, `find_path`, `verify_exists`, `reindex_file`); derives the context project from the working directory.
   * `McpInstaller`: Writes the client configuration (Claude Desktop, Antigravity).
 
 ### 4. Shonkor.Web (Presentation Layer)

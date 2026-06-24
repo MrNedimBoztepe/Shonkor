@@ -16,6 +16,13 @@ public sealed class KenticoPlugin : IFileParser
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".cs" }.ToFrozenSet();
 
+    public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
+    {
+        new NodeTypeDescriptor("KenticoPageType", "CMS", true),
+        new NodeTypeDescriptor("KenticoModule", "CMS", true),
+        new NodeTypeDescriptor("KenticoFormComponent", "CMS", true)
+    };
+
     public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(string filePath, string content)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(content);

@@ -4,10 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Hosting;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 using Shonkor.Infrastructure.Services;
@@ -16,47 +15,35 @@ using static Shonkor.Web.EndpointHelpers;
 
 namespace Shonkor.Web.Endpoints;
 
-/// <summary>Dynamic plugin management (list/create/delete) and the aggregated node-type catalog.</summary>
+/// <summary>
+/// Assembly-plugin management: list installed plugins, install one from an uploaded ZIP (inert),
+/// activate/deactivate, and uninstall — plus the aggregated node-type catalog. Installing or changing a
+/// plugin's state is a local-trust action (loopback only). Installation never loads code; only activation
+/// does (see <see cref="PluginRegistry"/> / <see cref="AssemblyPluginLoader"/>).
+/// </summary>
 public static class PluginEndpoints
 {
     public static void MapPluginEndpoints(this WebApplication app)
     {
-        // GET /api/plugins - list dynamic plugin files and whether they currently load.
-        app.MapGet("/api/plugins", (IConfiguration config, ProjectManager pm) =>
+        // GET /api/plugins - list installed plugins with their lifecycle state.
+        app.MapGet("/api/plugins", (ProjectManager pm) =>
         {
             try
             {
-                var pluginsDir = Path.Combine(pm.WorkspacePath, "plugins");
-                if (!Directory.Exists(pluginsDir))
+                var registry = new PluginRegistry(pm.WorkspacePath);
+                var plugins = registry.List().Select(p => new
                 {
-                    return Results.Ok(new { Plugins = Array.Empty<object>(), PluginsDirectory = pluginsDir });
-                }
-
-                var pluginFiles = Directory.GetFiles(pluginsDir, "*.cs");
-
-                // Compile the whole directory ONCE (only when plugins are enabled); the collectible
-                // context is unloaded right after.
-                var pluginsEnabled = PluginsEnabled(config);
-                var loadedCount = 0;
-                if (pluginsEnabled)
-                {
-                    using var trialLoad = LoadWorkspacePlugins(pm.WorkspacePath);
-                    loadedCount = trialLoad.Parsers.Count;
-                }
-
-                var anyLoaded = loadedCount > 0;
-                var plugins = pluginFiles.Select(file => new
-                {
-                    FileName = Path.GetFileName(file),
-                    Name = Path.GetFileNameWithoutExtension(file),
-                    FullPath = file,
-                    Status = !pluginsEnabled ? "disabled" : (anyLoaded ? "loaded" : "no-parser"),
-                    Error = "",
-                    LastModified = File.GetLastWriteTimeUtc(file).ToString("o"),
-                    SizeBytes = new FileInfo(file).Length
+                    p.Manifest.Id,
+                    p.Manifest.Name,
+                    p.Manifest.Version,
+                    p.Manifest.Description,
+                    State = p.State.ToString(),
+                    Active = p.State == PluginState.Active,
+                    Extensions = p.Manifest.TargetExtensions,
+                    p.InstalledAtUtc,
+                    p.Error
                 }).ToList();
-
-                return Results.Ok(new { Plugins = plugins, PluginsDirectory = pluginsDir, PluginsEnabled = pluginsEnabled });
+                return Results.Ok(new { Plugins = plugins, PluginsDirectory = Path.Combine(pm.WorkspacePath, "plugins") });
             }
             catch (Exception ex)
             {
@@ -64,85 +51,67 @@ public static class PluginEndpoints
             }
         });
 
-        // POST /api/plugins/create - scaffold a boilerplate C# plugin (local-trust, plugins-enabled only).
-        app.MapPost("/api/plugins/create", (PluginCreateRequest req, HttpContext context, IConfiguration config, IHostEnvironment env, ProjectManager pm) =>
+        // POST /api/plugins/install - upload a plugin ZIP (multipart field 'package'). Inert until activated.
+        app.MapPost("/api/plugins/install", async (HttpContext context, ProjectManager pm) =>
         {
+            if (!context.IsLoopback())
+            {
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            }
+            if (!context.Request.HasFormContentType)
+            {
+                return Results.BadRequest("Upload the plugin ZIP as multipart/form-data (field 'package').");
+            }
+
+            var form = await context.Request.ReadFormAsync();
+            var file = form.Files["package"] ?? form.Files.FirstOrDefault();
+            if (file == null || file.Length == 0)
+            {
+                return Results.BadRequest("No plugin ZIP uploaded.");
+            }
+
+            var temp = Path.Combine(Path.GetTempPath(), $"shonkor_plugin_{Guid.NewGuid():N}.zip");
             try
             {
-                // Writing a plugin only makes sense if plugins can run, and authoring is a local-trust action.
-                var allowAuthoring = config.GetValue<bool?>("Security:AllowFilesystemBrowse") ?? env.IsDevelopment();
-                if (!PluginsEnabled(config) || !allowAuthoring || !context.IsLoopback())
+                await using (var fs = File.Create(temp))
                 {
-                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                    await file.CopyToAsync(fs);
                 }
-
-                if (string.IsNullOrWhiteSpace(req.Name) || string.IsNullOrWhiteSpace(req.Extension))
-                {
-                    return Results.BadRequest("Plugin Name and file Extension are required.");
-                }
-
-                var pluginsDir = Path.Combine(pm.WorkspacePath, "plugins");
-                Directory.CreateDirectory(pluginsDir);
-
-                // Sanitize name for C# class: PascalCase, no spaces.
-                var className = string.Concat(req.Name.Split(' ', '-', '_', '.')
-                    .Where(s => s.Length > 0)
-                    .Select(s => char.ToUpperInvariant(s[0]) + s[1..])) + "Parser";
-
-                var ext = req.Extension.StartsWith(".") ? req.Extension : "." + req.Extension;
-                var filePath = Path.Combine(pluginsDir, $"{className}.cs");
-
-                if (File.Exists(filePath))
-                {
-                    return Results.BadRequest($"Plugin file '{className}.cs' already exists.");
-                }
-
-                File.WriteAllText(filePath, GeneratePluginBoilerplate(className, ext, req.Name));
-
-                return Results.Ok(new
-                {
-                    Message = $"Plugin '{className}' created successfully at {filePath}.",
-                    FileName = $"{className}.cs",
-                    FullPath = filePath,
-                    Extension = ext
-                });
+                var result = new PluginRegistry(pm.WorkspacePath).InstallFromZip(temp);
+                return result.Success
+                    ? Results.Ok(new { result.Message, Plugin = result.Plugin })
+                    : Results.BadRequest(result.Message);
             }
             catch (Exception ex)
             {
-                return Fail("Failed to create plugin.", ex);
+                return Fail("Failed to install plugin.", ex);
+            }
+            finally
+            {
+                try { File.Delete(temp); } catch { /* best effort */ }
             }
         });
 
-        // DELETE /api/plugins/{fileName} - delete a plugin source file.
-        app.MapDelete("/api/plugins/{fileName}", (string fileName, ProjectManager pm) =>
-        {
-            try
-            {
-                var filePath = Path.Combine(pm.WorkspacePath, "plugins", fileName);
-                if (!File.Exists(filePath))
-                {
-                    return Results.NotFound($"Plugin file '{fileName}' not found.");
-                }
+        // POST /api/plugins/{id}/activate - load this plugin on subsequent indexing.
+        app.MapPost("/api/plugins/{id}/activate", (string id, HttpContext context, ProjectManager pm) =>
+            RunTransition(context, pm, r => r.Activate(id)));
 
-                File.Delete(filePath);
-                return Results.Ok(new { Message = $"Plugin '{fileName}' deleted successfully." });
-            }
-            catch (Exception ex)
-            {
-                return Fail("Failed to delete plugin.", ex);
-            }
-        });
+        // POST /api/plugins/{id}/deactivate - stop loading this plugin.
+        app.MapPost("/api/plugins/{id}/deactivate", (string id, HttpContext context, ProjectManager pm) =>
+            RunTransition(context, pm, r => r.Deactivate(id)));
 
-        // GET /api/node-types - aggregate node types across core parsers, dynamic plugins, and system types.
-        app.MapGet("/api/node-types", (IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> coreParsers) =>
+        // DELETE /api/plugins/{id} - uninstall (remove files + registry entry).
+        app.MapDelete("/api/plugins/{id}", (string id, HttpContext context, ProjectManager pm) =>
+            RunTransition(context, pm, r => r.Uninstall(id)));
+
+        // GET /api/node-types - aggregate node types across core parsers, active plugins, and system types.
+        app.MapGet("/api/node-types", (ProjectManager pm, IEnumerable<IFileParser> coreParsers) =>
         {
             try
             {
                 var allParsers = new List<IFileParser>(coreParsers);
 
-                using var pluginLoad = PluginsEnabled(config)
-                    ? LoadWorkspacePlugins(pm.WorkspacePath)
-                    : PluginLoadResult.Empty;
+                using var pluginLoad = AssemblyPluginLoader.LoadActive(pm.WorkspacePath);
                 allParsers.AddRange(pluginLoad.Parsers);
 
                 var types = allParsers
@@ -166,5 +135,22 @@ public static class PluginEndpoints
                 return Fail("Failed to get node types.", ex);
             }
         });
+    }
+
+    private static IResult RunTransition(HttpContext context, ProjectManager pm, Func<PluginRegistry, PluginOperationResult> op)
+    {
+        if (!context.IsLoopback())
+        {
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        }
+        try
+        {
+            var result = op(new PluginRegistry(pm.WorkspacePath));
+            return result.Success ? Results.Ok(new { result.Message }) : Results.BadRequest(result.Message);
+        }
+        catch (Exception ex)
+        {
+            return Fail("Plugin operation failed.", ex);
+        }
     }
 }

@@ -22,13 +22,13 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 * **Token-Optimized Context Capsule Synthesizer**: Generates prompt-ready Markdown files including automatic **Mermaid.js** architecture diagrams.
 * **MCP Server (Model Context Protocol)**: Provides the graph directly to AI assistants like **Claude** and **Antigravity** with a token-efficient toolset that closes the agentic edit loop:
   * **Start here**: `orient` (one-call session bootstrap — graph size, tool palette, the edit loop). Run `shonkor agents` to print an AGENTS.md/CLAUDE.md snippet so assistants reach for the graph reflexively.
-  * **Find**: `search_graph` (FTS5), `search_semantic` (vector/meaning), `locate`.
+  * **Find**: `search_graph` (FTS5), `locate`, `search_semantic` (vector/meaning — only listed when an embedding backend is wired).
   * **Read**: `signature` (signature only), `get_source` (exact symbol body + `file:start-end`), `outline` (file structure), `get_subgraph`, `generate_capsule`, `architecture` (arc42 building-block view + Mermaid module-dependency diagram, for docs/onboarding).
-  * **Analyze**: `impact_of` (who references it), `depends_on` (what it uses), `dependency_tree` (transitive reference tree), `call_hierarchy` (method-level callers/callees over `CALLS`; semantic mode), `blast_radius` (transitive ranked impact of a change, with affected tests flagged), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).
+  * **Analyze**: `references` (`direction=used_by` = who references it / `uses` = what it uses; `depth=1` flat, `depth>1` transitive — ranked blast radius with affected tests flagged, or a dependency tree), `call_hierarchy` (method-level callers/callees over `CALLS`; semantic mode), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).
   * **Plan & apply**: `edit_plan` (a concrete edit checklist), `rename_plan` (overload-precise rename sites from the graph's exact edges, not name-grep), `related_tests` (transitive test impact — exactly what to run after a change), `reindex_file` (refresh one file after editing — relinks its `REFERENCES_TYPE` edges), `check_edit` (compile-check a C# file after editing — Roslyn syntax + semantic errors, self-contained, no `dotnet build`).
   * **Review**: `review` (a code-review briefing for a set of changed files — per-file compile check + aggregated transitive impact + the tests to run + top risks).
-  * **Freshness (anti-drift)**: `is_fresh` (is one file's graph in sync with disk?), `stale_files` (project-wide drift report: changed / new / deleted). The analysis/read tools also **auto-flag** a result whose underlying file changed since indexing (`⚠ … EDITED since indexing — run reindex_file`), so an agent never silently trusts stale data.
-  * **Memory**: `get_open_threads`, `record_decision`/`milestone`/`task`/`question`.
+  * **Freshness (anti-drift)**: `freshness` (with a `path` = one file's sync state; without = project-wide drift report: changed / new / deleted). The analysis/read tools also **auto-flag** a result whose underlying file changed since indexing (`⚠ … EDITED since indexing — run reindex_file`), so an agent never silently trusts stale data.
+  * **Memory**: `get_open_threads`, `record` (`type` = decision / milestone / task / question).
   * See the [LLM Integration Manual](docs/user/llm_integration.md) for the full reference.
 * **Visual Web Dashboard**: A glassmorphic web interface with interactive 2D force-directed graph visualization (`force-graph`, WebGL Canvas), live physics, code preview (Prism.js), capsule creator, project and plugin management.
   * **Dual Search Modes**: Toggle between FTS5 Keyword Search (Network icon) and Vector-based Semantic Search (Brain icon).
@@ -57,7 +57,8 @@ The project follows a clean **Clean Architecture** structure:
 ```
 src/
   ├── Shonkor.Core/          # Domain models, interfaces, AST parser & capsule synthesizer
-  ├── Shonkor.Infrastructure/# SQLite graph storage, crawler (SHA256), plugin loader, cross-tech linker
+  ├── Shonkor.Infrastructure/# SQLite graph storage, crawler (SHA256), assembly-plugin registry/loader, cross-tech linker
+  ├── Shonkor.Plugin.Cms/    # Example first-party plugin (Optimizely/Kentico/Sitecore parsers) — built & installed as a ZIP
   ├── Shonkor.CLI/           # Console interface (init, index, search, capsule, mcp) + MCP server
   └── Shonkor.Web/           # Minimal APIs, API key middleware & glassmorphic web dashboard (wwwroot)
 tests/
@@ -148,7 +149,7 @@ Shonkor is primarily designed as a **local** tool. For operation behind a proxy 
 * **API keys / user tokens are stored SHA-256 hashed**, never in plaintext — `projects.json` holds only the hash, comparison is constant-time (`FixedTimeEquals`), and any legacy plaintext is auto-migrated to a hash on load. A new user's token is shown **once** at creation.
 * **API Keys & Secrets** do **not** belong in `appsettings.json` or `projects.json` (both are gitignored), but in user secrets / environment variables (`ApiKeys__<key>=<projectName>`, `GitHub__WebhookSecret=…`).
 * The **Loopback Auth Bypass** is only active in `Development`; in production, the API key check always applies.
-* **Dynamic Plugins** (runtime compilation of C#) are an RCE vector and are therefore **disabled by default** – opt-in via `Security:EnablePlugins=true`.
+* **Plugins are pre-built assemblies**, installed from a ZIP and **inert until explicitly activated** — there is no runtime compilation of source (the old C#-source/Roslyn plugin path, an RCE vector, has been removed). Manage them with `shonkor plugin install <zip> | activate <id> | deactivate <id> | list | uninstall <id>` (or the loopback-only web API). `Security:EnablePlugins` is now an opt-OUT kill switch (default on); per-plugin activation is the trust gate. See the example plugin in `src/Shonkor.Plugin.Cms` (CMS content-model parsers).
 * **Webhooks** verify `X-Hub-Signature-256` (HMAC) and fail without a configured secret (fail-closed).
 * `/api/browse` (file system browser) is only accessible locally/in development.
 

@@ -12,9 +12,4 @@
     <PackageReference Include="YamlDotNet" Version="18.0.0" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Compile Remove="StandardPlugins\**\*.cs" />
-    <EmbeddedResource Include="StandardPlugins\**\*.cs" />
-  </ItemGroup>
-
 </Project>

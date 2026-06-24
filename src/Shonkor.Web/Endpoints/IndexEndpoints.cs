@@ -52,17 +52,18 @@ public static class IndexEndpoints
 
                 try
                 {
-                    // Dynamic plugins loading from central workspace.
-                    // SECURITY: compiling/executing arbitrary .cs is RCE; only do it when explicitly enabled.
+                    // Load the workspace's ACTIVE plugins (pre-built assemblies; no compilation). Installation
+                    // is inert — only plugins the user explicitly activated load here.
                     var activeParsers = new List<IFileParser>(parsers);
                     using var pluginLoad = PluginsEnabled(config)
-                        ? LoadWorkspacePlugins(pm.WorkspacePath)
-                        : PluginLoadResult.Empty;
+                        ? AssemblyPluginLoader.LoadActive(pm.WorkspacePath)
+                        : AssemblyPluginLoadResult.Empty;
                     activeParsers.AddRange(pluginLoad.Parsers);
 
                     var storage = await pm.GetStorageProviderAsync(project.Name, ct);
                     var scanner = new GraphIndexScanner(storage, activeParsers, loggerFactory.CreateLogger("Shonkor.Index"),
-                        semanticCsharp: UseSemanticCSharp(project, config), compilationCache: compilationCache);
+                        semanticCsharp: UseSemanticCSharp(project, config), compilationCache: compilationCache,
+                        postProcessors: pluginLoad.PostProcessors);
 
                     var result = await scanner.ScanDirectoryAsync(targetDir, exclusions, ct);
                     var stats = await storage.GetStatisticsAsync(ct);
