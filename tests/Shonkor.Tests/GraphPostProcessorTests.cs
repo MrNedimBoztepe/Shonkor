@@ -33,6 +33,9 @@ public class GraphPostProcessorTests
 
         public Task<(IReadOnlyList<GraphEdge> Edges, IReadOnlyDictionary<string, GraphNode> Neighbours)> IncidentEdgesAsync(string nodeId, CancellationToken ct = default)
             => throw new NotImplementedException();
+
+        public Task<IReadOnlyList<GraphEdge>> EdgesByRelationshipAsync(string relationship, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<GraphEdge>>(new List<GraphEdge>());
     }
 
     private static GraphNode Clr(string full) =>

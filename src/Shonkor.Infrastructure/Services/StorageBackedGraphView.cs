@@ -30,4 +30,7 @@ public sealed class StorageBackedGraphView : IGraphView
 
     public Task<(IReadOnlyList<GraphEdge> Edges, IReadOnlyDictionary<string, GraphNode> Neighbours)> IncidentEdgesAsync(string nodeId, CancellationToken cancellationToken = default)
         => _storage.GetIncidentEdgesAsync(nodeId, cancellationToken);
+
+    public Task<IReadOnlyList<GraphEdge>> EdgesByRelationshipAsync(string relationship, CancellationToken cancellationToken = default)
+        => _storage.GetEdgesByRelationshipAsync(relationship, cancellationToken);
 }

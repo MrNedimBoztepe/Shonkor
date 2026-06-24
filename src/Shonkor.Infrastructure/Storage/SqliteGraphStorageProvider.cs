@@ -561,6 +561,30 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<GraphEdge>> GetEdgesByRelationshipAsync(string relationship, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relationship);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT SourceId, TargetId, RelationType
+            FROM Edges
+            WHERE RelationType = @rel;
+            """;
+        command.Parameters.AddWithValue("@rel", relationship);
+
+        var edges = new List<GraphEdge>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            edges.Add(SqliteRowMapper.ReadEdge(reader));
+        }
+        return edges;
+    }
+
+    /// <inheritdoc />
     public async Task DeleteByFilePathAsync(string filePath, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);

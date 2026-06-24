@@ -36,4 +36,11 @@ public interface IGraphSearch
     /// filtering its whole neighbourhood.
     /// </summary>
     Task<(IReadOnlyList<GraphEdge> Edges, IReadOnlyDictionary<string, GraphNode> Neighbours)> GetIncidentEdgesAsync(string nodeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns every edge of a given relationship type across the whole graph. Used by global structural
+    /// analyses (e.g. Helix layer-dependency checks over the C# coupling relationships) that reason over a
+    /// relationship as a whole rather than around a single node.
+    /// </summary>
+    Task<IReadOnlyList<GraphEdge>> GetEdgesByRelationshipAsync(string relationship, CancellationToken cancellationToken = default);
 }
