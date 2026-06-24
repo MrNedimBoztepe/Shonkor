@@ -26,4 +26,11 @@ public interface IGraphView
 
     /// <summary>The edges incident to a node (where it is source or target), with the other-end nodes keyed by id.</summary>
     Task<(IReadOnlyList<GraphEdge> Edges, IReadOnlyDictionary<string, GraphNode> Neighbours)> IncidentEdgesAsync(string nodeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// All edges of a given <see cref="GraphEdge.Relationship"/> across the whole graph — the basis for
+    /// structural rules that reason over a relationship globally (e.g. Helix layer-dependency checks over
+    /// the C# coupling edges). Returns dangling edges too; resolve endpoints via <see cref="GetNodeAsync"/>.
+    /// </summary>
+    Task<IReadOnlyList<GraphEdge>> EdgesByRelationshipAsync(string relationship, CancellationToken cancellationToken = default);
 }

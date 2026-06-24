@@ -43,8 +43,10 @@ public sealed record PluginManifest
     public string EntryAssembly { get; init; } = string.Empty;
 
     /// <summary>
-    /// The host plugin-API version this plugin targets (e.g. "1.0"). The host rejects activation when its
-    /// own <see cref="PluginHostApi.Version"/> major differs, so an incompatible plugin never loads.
+    /// The minimum host plugin-API version this plugin needs (e.g. "1.1"). A differing <b>major</b> from the
+    /// host's <see cref="PluginHostApi.Version"/> is incompatible and rejected. A higher <b>minor</b> than the
+    /// host (same major) means the plugin may rely on additive contract features this older host lacks — the
+    /// host installs it with a graceful warning rather than failing, since the contract is additive.
     /// </summary>
     public string MinHostApi { get; init; } = "1.0";
 
@@ -55,8 +57,12 @@ public sealed record PluginManifest
 /// <summary>The host's plugin contract version. Plugins declare a compatible <see cref="PluginManifest.MinHostApi"/>.</summary>
 public static class PluginHostApi
 {
-    /// <summary>Current host plugin-API version. Bump the major on a breaking contract change.</summary>
-    public const string Version = "1.0";
+    /// <summary>
+    /// Current host plugin-API version. Bump the <b>major</b> on a breaking contract change; bump the
+    /// <b>minor</b> on an additive one. History: 1.0 = IFileParser only; 1.1 = added the phase-2
+    /// <c>IGraphPostProcessor</c> / <c>IGraphView</c> contract (additive — 1.0 plugins still load).
+    /// </summary>
+    public const string Version = "1.1";
 }
 
 /// <summary>
