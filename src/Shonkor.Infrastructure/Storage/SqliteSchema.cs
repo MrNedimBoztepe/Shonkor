@@ -81,6 +81,23 @@ internal static class SqliteSchema
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_typerefs_name ON TypeReferences(TypeName);", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_typerefs_file ON TypeReferences(FilePath);", cancellationToken).ConfigureAwait(false);
 
+        // Diagnostics produced by graph post-processors (phase 2). Grouped by Source (the post-processor's
+        // name) so a re-run replaces exactly its own rows. Kept out of the graph so issues stay visible
+        // without polluting nodes/edges. Severity is the DiagnosticSeverity enum value.
+        await ExecuteAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS Diagnostics (
+                Source   TEXT NOT NULL,
+                Code     TEXT NOT NULL,
+                Severity INTEGER NOT NULL,
+                Message  TEXT NOT NULL,
+                NodeId   TEXT,
+                FilePath TEXT
+            );
+            """,
+            cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_diagnostics_source ON Diagnostics(Source);", cancellationToken).ConfigureAwait(false);
+
         await ExecuteAsync(connection,
             """
             CREATE VIRTUAL TABLE IF NOT EXISTS NodesFts USING fts5(

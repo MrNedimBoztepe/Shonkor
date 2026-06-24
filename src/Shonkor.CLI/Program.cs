@@ -254,7 +254,7 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
 
             // Opt-in semantic C# linking (exact REFERENCES_TYPE/IMPLEMENTS/EXTENDS/CALLS via Roslyn).
             var semanticCsharp = string.Equals(Environment.GetEnvironmentVariable("SHONKOR_SEMANTIC_CSHARP"), "true", StringComparison.OrdinalIgnoreCase);
-            var scanner = new GraphIndexScanner(storage, parsers, semanticCsharp: semanticCsharp);
+            var scanner = new GraphIndexScanner(storage, parsers, semanticCsharp: semanticCsharp, postProcessors: pluginLoad.PostProcessors);
 
             Console.WriteLine("Scanning and indexing files... (this may take a few moments)");
             var result = await scanner.ScanDirectoryAsync(absoluteDir, config.ExcludePatterns);

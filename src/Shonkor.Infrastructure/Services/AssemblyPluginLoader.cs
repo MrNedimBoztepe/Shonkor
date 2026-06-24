@@ -16,13 +16,17 @@ public sealed class AssemblyPluginLoadResult : IDisposable
 
     public IReadOnlyList<IFileParser> Parsers { get; }
 
-    internal AssemblyPluginLoadResult(IReadOnlyList<IFileParser> parsers, List<AssemblyLoadContext> contexts)
+    /// <summary>The graph-aware "phase 2" post-processors loaded from the active plugin assemblies.</summary>
+    public IReadOnlyList<IGraphPostProcessor> PostProcessors { get; }
+
+    internal AssemblyPluginLoadResult(IReadOnlyList<IFileParser> parsers, IReadOnlyList<IGraphPostProcessor> postProcessors, List<AssemblyLoadContext> contexts)
     {
         Parsers = parsers;
+        PostProcessors = postProcessors;
         _contexts = contexts;
     }
 
-    public static AssemblyPluginLoadResult Empty { get; } = new(Array.Empty<IFileParser>(), new List<AssemblyLoadContext>());
+    public static AssemblyPluginLoadResult Empty { get; } = new(Array.Empty<IFileParser>(), Array.Empty<IGraphPostProcessor>(), new List<AssemblyLoadContext>());
 
     public void Dispose()
     {
@@ -73,6 +77,7 @@ public static class AssemblyPluginLoader
         if (active.Count == 0) return AssemblyPluginLoadResult.Empty;
 
         var parsers = new List<IFileParser>();
+        var postProcessors = new List<IGraphPostProcessor>();
         var contexts = new List<AssemblyLoadContext>();
 
         foreach (var plugin in active)
@@ -92,10 +97,16 @@ public static class AssemblyPluginLoader
                 var found = 0;
                 foreach (var type in assembly.GetTypes())
                 {
-                    if (typeof(IFileParser).IsAssignableFrom(type) && !type.IsInterface && !type.IsAbstract
-                        && Activator.CreateInstance(type) is IFileParser parser)
+                    if (type.IsInterface || type.IsAbstract) continue;
+
+                    if (typeof(IFileParser).IsAssignableFrom(type) && Activator.CreateInstance(type) is IFileParser parser)
                     {
                         parsers.Add(parser);
+                        found++;
+                    }
+                    else if (typeof(IGraphPostProcessor).IsAssignableFrom(type) && Activator.CreateInstance(type) is IGraphPostProcessor postProcessor)
+                    {
+                        postProcessors.Add(postProcessor);
                         found++;
                     }
                 }
@@ -103,7 +114,7 @@ public static class AssemblyPluginLoader
                 if (found == 0)
                 {
                     context.Unload();
-                    registry.MarkFailed(plugin.Manifest.Id, "Assembly loaded but contains no IFileParser implementation.");
+                    registry.MarkFailed(plugin.Manifest.Id, "Assembly loaded but contains no IFileParser or IGraphPostProcessor implementation.");
                     continue;
                 }
 
@@ -115,9 +126,9 @@ public static class AssemblyPluginLoader
             }
         }
 
-        return parsers.Count == 0
+        return parsers.Count == 0 && postProcessors.Count == 0
             ? AssemblyPluginLoadResult.Empty
-            : new AssemblyPluginLoadResult(parsers, contexts);
+            : new AssemblyPluginLoadResult(parsers, postProcessors, contexts);
     }
 
     /// <summary>

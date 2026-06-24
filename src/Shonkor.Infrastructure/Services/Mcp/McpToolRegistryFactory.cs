@@ -51,5 +51,6 @@ public static class McpToolRegistryFactory
         // Group 6 — meta
         new OrientTool(),
         new SetProjectTool(),
+        new GetDiagnosticsTool(),
     };
 }

@@ -1080,6 +1080,79 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         return null;
     }
 
+    /// <inheritdoc />
+    public async Task ReplaceDiagnosticsAsync(string source, IEnumerable<GraphDiagnostic> diagnostics, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.CommandText = "DELETE FROM Diagnostics WHERE Source = @Source;";
+            delete.Parameters.AddWithValue("@Source", source);
+            await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var insert = connection.CreateCommand();
+        insert.CommandText =
+            "INSERT INTO Diagnostics (Source, Code, Severity, Message, NodeId, FilePath) VALUES (@Source, @Code, @Severity, @Message, @NodeId, @FilePath);";
+        var pSource = insert.Parameters.Add("@Source", SqliteType.Text);
+        var pCode = insert.Parameters.Add("@Code", SqliteType.Text);
+        var pSeverity = insert.Parameters.Add("@Severity", SqliteType.Integer);
+        var pMessage = insert.Parameters.Add("@Message", SqliteType.Text);
+        var pNodeId = insert.Parameters.Add("@NodeId", SqliteType.Text);
+        var pFilePath = insert.Parameters.Add("@FilePath", SqliteType.Text);
+        await insert.PrepareAsync(cancellationToken).ConfigureAwait(false);
+
+        foreach (var d in diagnostics)
+        {
+            pSource.Value = source;
+            pCode.Value = d.Code;
+            pSeverity.Value = (int)d.Severity;
+            pMessage.Value = d.Message;
+            pNodeId.Value = (object?)d.NodeId ?? DBNull.Value;
+            pFilePath.Value = (object?)d.FilePath ?? DBNull.Value;
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<GraphDiagnostic>> GetDiagnosticsAsync(DiagnosticSeverity? minSeverity = null, string? code = null, int maxResults = 200, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT Code, Severity, Message, NodeId, FilePath
+            FROM Diagnostics
+            WHERE (@MinSeverity IS NULL OR Severity >= @MinSeverity)
+              AND (@Code IS NULL OR Code = @Code)
+            ORDER BY Severity DESC
+            LIMIT @Max;
+            """;
+        command.Parameters.AddWithValue("@MinSeverity", minSeverity is null ? DBNull.Value : (int)minSeverity.Value);
+        command.Parameters.AddWithValue("@Code", (object?)code ?? DBNull.Value);
+        command.Parameters.AddWithValue("@Max", maxResults);
+
+        var result = new List<GraphDiagnostic>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(new GraphDiagnostic(
+                reader.GetString(0),
+                (DiagnosticSeverity)reader.GetInt32(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4)));
+        }
+        return result;
+    }
+
     /// <inheritdoc cref="IDisposable.Dispose"/>
     public void Dispose()
     {
