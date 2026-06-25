@@ -109,6 +109,57 @@
     font-family:var(--mono); font-size:11px; color:var(--ink-2); background:rgba(231,221,200,.6)}
   footer b{color:var(--ink); font-weight:500}
   footer .r{margin-left:auto; display:flex; gap:16px}
+
+  /* project switcher dropdown */
+  .projmenu{position:absolute; right:20px; top:54px; min-width:220px; background:var(--paper); border:1px solid var(--line-2); box-shadow:0 8px 24px rgba(28,26,20,.16); z-index:30; display:none}
+  .projmenu.open{display:block}
+  .projmenu .pm-h{font-family:var(--mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); padding:9px 12px 4px}
+  .projmenu .pm-i{display:flex; align-items:center; gap:9px; padding:8px 12px; cursor:pointer; font-family:var(--mono); font-size:12px}
+  .projmenu .pm-i:hover{background:var(--paper-2)}
+  .projmenu .pm-i.sel{color:var(--teal)} .projmenu .pm-i.sel::before{content:"●"; font-size:8px}
+  .projmenu .pm-i:not(.sel)::before{content:"○"; font-size:8px; color:var(--line-2)}
+
+  /* station overlay */
+  .station{position:absolute; inset:0; background:var(--paper); z-index:6; display:none; flex-direction:column; overflow:hidden}
+  .station.open{display:flex}
+  .station .sh{display:flex; align-items:center; gap:12px; padding:16px 20px 12px; border-bottom:1px solid var(--line-2)}
+  .station .sh h1{font-family:var(--serif); font-weight:500; font-size:26px}
+  .station .sh .sub{font-family:var(--mono); font-size:11px; color:var(--ink-2); letter-spacing:.04em}
+  .station .sh .x{margin-left:auto; width:32px; height:32px; border:1px solid var(--line-2); background:var(--paper); color:var(--ink-2); font-family:var(--mono); cursor:pointer; font-size:15px}
+  .station .sh .x:hover{color:var(--ink); background:var(--paper-2)}
+  .station .sbody{flex:1; overflow:auto; padding:18px 20px}
+  .sin{display:flex; gap:8px; margin-bottom:14px}
+  .sin input{flex:1; font-family:var(--sans); font-size:14px; border:1px solid var(--line-2); background:var(--paper); padding:9px 12px; outline:none; color:var(--ink)}
+  .sin input:focus{border-color:var(--ink-2)}
+  .sin button{font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; background:var(--ink); color:var(--paper); border:none; padding:0 18px; cursor:pointer}
+  .chips{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px}
+  .chip{font-family:var(--mono); font-size:10px; letter-spacing:.05em; text-transform:uppercase; border:1px solid var(--line-2); padding:5px 10px; cursor:pointer; color:var(--ink-2); background:var(--paper)}
+  .chip:hover{border-color:var(--ink-2)} .chip.on{background:var(--ink); color:var(--paper); border-color:var(--ink)}
+  .hitrow{display:flex; align-items:baseline; gap:12px; border:1px solid var(--line); border-left-width:3px; padding:9px 12px; margin-bottom:6px; cursor:pointer; background:var(--paper)}
+  .hitrow:hover{border-color:var(--ink-2)}
+  .hitrow .hn{font-size:14px; font-weight:500; word-break:break-word}
+  .hitrow .ht{font-family:var(--mono); font-size:10px; color:var(--ink-2)}
+  .hitrow .hl{font-family:var(--mono); font-size:10px; color:var(--ink-3); margin-left:auto; white-space:nowrap}
+  .pcard{border:1px solid var(--line-2); border-left-width:3px; padding:13px 15px; margin-bottom:10px; background:var(--paper)}
+  .pcard .ph{display:flex; align-items:center; gap:10px}
+  .pcard .pname{font-family:var(--serif); font-size:17px; font-weight:500}
+  .pcard .pver{font-family:var(--mono); font-size:10px; color:var(--ink-3)}
+  .pbadge{font-family:var(--mono); font-size:9px; letter-spacing:.08em; text-transform:uppercase; padding:2px 8px; border:1px solid currentColor}
+  .pbadge.active{color:var(--teal)} .pbadge.installed{color:var(--gold)} .pbadge.failed{color:var(--err)} .pbadge.disabled{color:var(--ink-3)}
+  .pcard .pdesc{font-size:13px; color:var(--ink-2); margin:7px 0; line-height:1.5}
+  .pcard .pext{font-family:var(--mono); font-size:10px; color:var(--ink-3)}
+  .pcard .pacts{display:flex; gap:6px; margin-top:11px}
+  .pcard .pacts button{font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:uppercase; border:1px solid var(--line-2); background:var(--paper); color:var(--ink-2); padding:6px 12px; cursor:pointer}
+  .pcard .pacts button:hover{color:var(--ink); border-color:var(--ink-2)}
+  .pcard .pacts button.primary{background:var(--teal); color:var(--paper); border-color:var(--teal)}
+  .pcard .pacts button.danger:hover{color:var(--err); border-color:var(--err)}
+  .drop{border:1.5px dashed var(--line-2); padding:22px; text-align:center; font-family:var(--mono); font-size:12px; color:var(--ink-2); margin-bottom:16px; cursor:pointer; background:var(--paper-2)}
+  .drop:hover{border-color:var(--russet); color:var(--ink)}
+  .drop b{color:var(--russet)}
+  .toast{position:fixed; left:50%; bottom:46px; transform:translateX(-50%); background:var(--ink); color:var(--paper); font-family:var(--mono); font-size:12px; padding:9px 16px; z-index:50; opacity:0; transition:opacity .2s; pointer-events:none}
+  .toast.show{opacity:1}
+  .smd pre{font-family:var(--mono); font-size:11.5px; line-height:1.55; background:var(--paper); border:1px solid var(--line-2); padding:14px; white-space:pre-wrap; word-break:break-word; max-height:52vh; overflow:auto}
+  .sempty{font-family:var(--mono); font-size:12px; color:var(--ink-3); text-align:center; padding:40px 0}
 </style>
 </head>
 <body>
@@ -129,6 +180,7 @@
       <kbd>⌘K</kbd></label>
     <div class="proj" id="proj"><span class="dot"></span> <span id="proj-name">—</span> <span style="opacity:.5">▾</span></div>
   </header>
+  <div class="projmenu" id="projmenu"></div>
 
   <main>
     <nav class="rail">
@@ -157,6 +209,13 @@
         <div class="territories" id="territories"></div>
         <p style="margin-top:18px;opacity:.7">Search a symbol to chart its territory — or click a card.</p>
       </div>
+      <div class="station" id="station">
+        <div class="sh">
+          <h1 id="st-title">Station</h1><span class="sub" id="st-sub"></span>
+          <button class="x" id="st-close" title="Back to Atlas" aria-label="Close station">✕</button>
+        </div>
+        <div class="sbody" id="st-body"></div>
+      </div>
     </section>
 
     <aside class="insp" id="insp">
@@ -178,6 +237,7 @@
     </div>
   </footer>
 </div>
+<div class="toast" id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 <script>
@@ -195,8 +255,10 @@ function escapeHtml(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').repl
 async function boot(){
   try{
     const p = await (await fetch('/api/projects')).json();
-    state.project = p.activeProject || (p.projects?.[0]?.name) || '';
+    state.projects = p.projects || p.Projects || [];
+    state.project = p.activeProject || p.ActiveProject || (state.projects[0]?.name) || '';
     $('#proj-name').textContent = state.project || 'none';
+    renderProjMenu();
   }catch(e){ $('#proj-name').textContent = 'offline'; }
   loadStats(); loadDiagnostics();
 }
@@ -208,7 +270,8 @@ async function loadStats(){
     $('#f-calls').textContent = calls > 0 ? 'semantic · CALLS' : 'syntactic mode';
     $('#f-sem').textContent = calls > 0 ? 'semantic ✓' : 'semantic ✗';
     $('#es-sub').textContent = `${fmt(s.totalNodes)} nodes · ${fmt(s.totalEdges)} edges`;
-    renderTerritories(s.nodesByType || {});
+    state.byType = s.nodesByType || {};
+    renderTerritories(state.byType);
   }catch(e){ $('#es-sub').textContent = 'Could not load graph stats.'; }
 }
 function renderTerritories(byType){
@@ -555,8 +618,188 @@ async function loadCapsule(n){
   }catch(e){ d.innerHTML='<div class="loc" style="color:var(--ink-3)">Capsule synthesis failed.</div>'; }
 }
 
+/* ===================== TOAST ===================== */
+let _toastT;
+function toast(msg, ms=2400){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(_toastT); _toastT=setTimeout(()=>t.classList.remove('show'), ms); }
+
+/* ===================== PROJECT SWITCHER ===================== */
+function renderProjMenu(){
+  const m=$('#projmenu');
+  m.innerHTML = `<div class="pm-h">Projects</div>` + (state.projects||[]).map(p=>{
+    const nm=p.name||p.Name||p; const sel=nm===state.project?'sel':'';
+    return `<div class="pm-i ${sel}" data-p="${escapeHtml(nm)}">${escapeHtml(nm)}</div>`;
+  }).join('') || '<div class="pm-i">No projects</div>';
+  m.querySelectorAll('.pm-i[data-p]').forEach(el=>el.onclick=()=>switchProject(el.getAttribute('data-p')));
+}
+$('#proj').onclick = e=>{ e.stopPropagation(); $('#projmenu').classList.toggle('open'); };
+document.addEventListener('click', ()=>$('#projmenu').classList.remove('open'));
+function switchProject(name){
+  if(!name || name===state.project){ $('#projmenu').classList.remove('open'); return; }
+  state.project = name; $('#proj-name').textContent = name; $('#projmenu').classList.remove('open');
+  G.setData([],[]); $('#emptyStage').style.display=''; $('#es-title').textContent='Atlas'; $('#q').value='';
+  $('#insp').innerHTML = `<div class="kind">inspector</div><div class="empty">Search for a symbol or click a node to inspect it.</div><div class="lbl">Diagnostics</div><div id="diaglist"><div class="empty">Loading…</div></div>`;
+  loadStats(); loadDiagnostics();
+  if($('#station').classList.contains('open')) openStation(_station);
+  toast(`Switched to ${name}`);
+}
+
+/* ===================== STATIONS ===================== */
+let _station='atlas';
+document.querySelectorAll('.rail .st').forEach(el=>{
+  el.onclick=()=>{ const v=el.getAttribute('data-view'); v==='atlas' ? closeStation() : openStation(v); };
+});
+$('#st-close').onclick=closeStation;
+function setRail(v){ document.querySelectorAll('.rail .st').forEach(s=>s.classList.toggle('active', s.getAttribute('data-view')===v)); }
+function closeStation(){ _station='atlas'; setRail('atlas'); $('#station').classList.remove('open'); }
+function openStation(v){
+  _station=v; setRail(v); const st=$('#station'); st.classList.add('open');
+  const body=$('#st-body');
+  if(v==='hunt'){ $('#st-title').textContent='Hunt'; $('#st-sub').textContent='full-text search across the graph'; renderHunt(body); }
+  else if(v==='capsule'){ $('#st-title').textContent='Capsule'; $('#st-sub').textContent='synthesize token-optimised context'; renderCapsuleStation(body); }
+  else if(v==='diag'){ $('#st-title').textContent='Diagnostics'; $('#st-sub').textContent='graph integrity findings'; renderDiagStation(body); }
+  else if(v==='plugins'){ $('#st-title').textContent='Plugins'; $('#st-sub').textContent='assembly extensions — install · activate'; renderPlugins(body); }
+}
+
+/* --- Hunt --- */
+let _huntT=[], _huntType='';
+function renderHunt(body){
+  const types=Object.keys(state.byType||{}).sort((a,b)=>(state.byType[b]||0)-(state.byType[a]||0)).slice(0,10);
+  body.innerHTML = `
+    <div class="sin"><input id="hunt-q" type="text" placeholder="Search symbols, methods, docs…" autocomplete="off"><button id="hunt-go">Search</button></div>
+    <div class="chips" id="hunt-chips">
+      <span class="chip ${_huntType===''?'on':''}" data-t="">all</span>
+      ${types.map(t=>`<span class="chip ${_huntType===t?'on':''}" data-t="${escapeHtml(t)}">${escapeHtml(t)} <span style="opacity:.6">${state.byType[t]}</span></span>`).join('')}
+    </div>
+    <div id="hunt-res"><div class="sempty">Type a query and hit Search to hunt the graph.</div></div>`;
+  body.querySelector('#hunt-go').onclick=runHunt;
+  body.querySelector('#hunt-q').onkeydown=e=>{ if(e.key==='Enter') runHunt(); };
+  body.querySelectorAll('#hunt-chips .chip').forEach(c=>c.onclick=()=>{ _huntType=c.getAttribute('data-t'); body.querySelectorAll('.chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); runHunt(); });
+  setTimeout(()=>body.querySelector('#hunt-q')?.focus(), 40);
+}
+async function runHunt(){
+  const q=$('#hunt-q').value.trim(); const res=$('#hunt-res'); if(q.length<2){ res.innerHTML='<div class="sempty">Enter at least 2 characters.</div>'; return; }
+  res.innerHTML='<div class="sempty">Hunting…</div>';
+  try{
+    const url=`/api/search?q=${encodeURIComponent(q)}&limit=60${_huntType?`&type=${encodeURIComponent(_huntType)}`:''}`;
+    const hits=await (await fetch(url,{headers:H()})).json();
+    const items=(Array.isArray(hits)?hits:[]).map(r=>r.node||r.Node||r);
+    _huntT=items;
+    res.innerHTML = items.length===0 ? '<div class="sempty">No matches.</div>' :
+      items.map((n,i)=>{ const f=n.filePath||n.FilePath||''; const base=f?f.split(/[\\/]/).pop():''; const ln=n.startLine||n.StartLine;
+        return `<div class="hitrow" style="border-left-color:var(--teal)" onclick="huntPick(${i})">
+          <div><div class="hn">${escapeHtml(n.name||n.Name||n.id||n.Id)}</div><div class="ht">${escapeHtml(n.type||n.Type||'')}</div></div>
+          <div class="hl">${escapeHtml(base)}${ln?':'+ln:''}</div></div>`; }).join('');
+  }catch(e){ res.innerHTML='<div class="sempty">Search failed.</div>'; }
+}
+function huntPick(i){ const n=_huntT[i]; if(!n) return; const id=n.id||n.Id; closeStation(); focusNode(id, {name:n.name||n.Name, type:n.type||n.Type, filePath:n.filePath||n.FilePath, startLine:n.startLine||n.StartLine, summary:n.summary||n.Summary}); }
+
+/* --- Capsule station --- */
+function renderCapsuleStation(body){
+  body.innerHTML = `
+    <div class="sin"><input id="cap-q" type="text" placeholder="Describe what you need context for…" autocomplete="off"><button id="cap-go">Synthesize</button></div>
+    <div id="cap-out"><div class="sempty">Enter a query to synthesize a context capsule (seeds from the best matches).</div></div>`;
+  body.querySelector('#cap-go').onclick=runCapStation;
+  body.querySelector('#cap-q').onkeydown=e=>{ if(e.key==='Enter') runCapStation(); };
+  setTimeout(()=>body.querySelector('#cap-q')?.focus(), 40);
+}
+async function runCapStation(){
+  const q=$('#cap-q').value.trim(); const out=$('#cap-out'); if(q.length<2){ out.innerHTML='<div class="sempty">Enter at least 2 characters.</div>'; return; }
+  out.innerHTML='<div class="sempty">Synthesizing…</div>';
+  try{
+    const r=await (await fetch('/api/capsule',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify({Query:q, Hops:1})})).json();
+    const md=r.markdown||r.Markdown||''; window.__capmd2=md;
+    out.innerHTML = `<div class="grp">${r.nodeCount??r.NodeCount??0} nodes · ${r.edgeCount??r.EdgeCount??0} edges · ${(md.length/1024).toFixed(1)} KB</div>
+      <div class="smd"><pre>${escapeHtml(md)}</pre></div>
+      <button class="copybtn" style="margin-top:8px" onclick="navigator.clipboard.writeText(window.__capmd2).then(()=>{this.textContent='copied ✓'})">copy markdown</button>`;
+  }catch(e){ out.innerHTML='<div class="sempty">Capsule synthesis failed.</div>'; }
+}
+
+/* --- Diagnostics station --- */
+let _diagSev='warning';
+function renderDiagStation(body){
+  body.innerHTML = `
+    <div class="chips" id="diag-tabs">
+      ${['info','warning','error'].map(s=>`<span class="chip ${_diagSev===s?'on':''}" data-s="${s}">${s}+</span>`).join('')}
+    </div>
+    <div id="diag-full"><div class="sempty">Loading…</div></div>`;
+  body.querySelectorAll('#diag-tabs .chip').forEach(c=>c.onclick=()=>{ _diagSev=c.getAttribute('data-s'); body.querySelectorAll('#diag-tabs .chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); loadDiagFull(); });
+  loadDiagFull();
+}
+async function loadDiagFull(){
+  const el=$('#diag-full'); el.innerHTML='<div class="sempty">Loading…</div>';
+  try{
+    const d=await (await fetch(`/api/diagnostics?minSeverity=${_diagSev}`,{headers:H()})).json();
+    const list=d.diagnostics||[];
+    el.innerHTML = `<div class="grp">${fmt(d.total??list.length)} finding(s) at ${_diagSev}+ </div>` + (list.length===0 ? '<div class="sempty">Clean — nothing flagged at this level.</div>' :
+      list.map(x=>{ const sv=(x.severity||'Info').toLowerCase(); const node=x.nodeId||x.NodeId;
+        return `<div class="diag ${sv}"><span class="sv">${escapeHtml(x.severity||'')}</span> <span class="cd">${escapeHtml(x.code||'')}</span>${node?` <span class="cd" style="opacity:.7">${escapeHtml(node)}</span>`:''}<div class="ms">${escapeHtml(x.message||'')}</div></div>`;
+      }).join(''));
+  }catch(e){ el.innerHTML='<div class="sempty">Diagnostics unavailable.</div>'; }
+}
+
+/* --- Plugins station --- */
+let _plugins=[];
+function badgeClass(state){ const s=(state||'').toLowerCase(); return s==='active'?'active':s==='failed'?'failed':s==='disabled'?'disabled':'installed'; }
+function renderPlugins(body){
+  body.innerHTML = `
+    <div class="drop" id="pdrop"><b>Drop a plugin .zip here</b> or click to browse — installs inert, you activate it explicitly.
+      <input type="file" id="pfile" accept=".zip" style="display:none"></div>
+    <div id="plist"><div class="sempty">Loading plugins…</div></div>`;
+  const drop=body.querySelector('#pdrop'), file=body.querySelector('#pfile');
+  drop.onclick=()=>file.click();
+  file.onchange=()=>{ if(file.files[0]) installPlugin(file.files[0]); };
+  drop.ondragover=e=>{ e.preventDefault(); drop.style.borderColor='var(--russet)'; };
+  drop.ondragleave=()=>drop.style.borderColor='';
+  drop.ondrop=e=>{ e.preventDefault(); drop.style.borderColor=''; const f=e.dataTransfer.files[0]; if(f) installPlugin(f); };
+  loadPlugins();
+}
+async function loadPlugins(){
+  const el=$('#plist'); el.innerHTML='<div class="sempty">Loading plugins…</div>';
+  try{
+    const d=await (await fetch('/api/plugins',{headers:H()})).json();
+    _plugins=d.plugins||d.Plugins||[];
+    el.innerHTML = _plugins.length===0 ? '<div class="sempty">No plugins installed. Drop a .zip above to add one.</div>' :
+      _plugins.map((p,i)=>{ const st=p.state||p.State||''; const bc=badgeClass(st); const active=(p.active??p.Active)||st.toLowerCase()==='active';
+        const ext=(p.extensions||p.Extensions||[]).join(', ');
+        return `<div class="pcard" style="border-left-color:var(--${bc==='active'?'teal':bc==='failed'?'err':bc==='disabled'?'ink-3':'gold'})">
+          <div class="ph"><span class="pname">${escapeHtml(p.name||p.Name||p.id)}</span><span class="pver">v${escapeHtml(p.version||p.Version||'?')}</span><span class="pbadge ${bc}" style="margin-left:auto">${escapeHtml(st)}</span></div>
+          ${(p.description||p.Description)?`<div class="pdesc">${escapeHtml(p.description||p.Description)}</div>`:''}
+          ${ext?`<div class="pext">handles: ${escapeHtml(ext)}</div>`:''}
+          ${(p.error||p.Error)?`<div class="pext" style="color:var(--err)">${escapeHtml(p.error||p.Error)}</div>`:''}
+          <div class="pacts">
+            ${active?`<button onclick="pluginOp('deactivate',${i})">deactivate</button>`:`<button class="primary" onclick="pluginOp('activate',${i})">activate</button>`}
+            <button class="danger" onclick="pluginOp('uninstall',${i})">uninstall</button>
+          </div></div>`; }).join('');
+  }catch(e){ el.innerHTML='<div class="sempty">Could not load plugins.</div>'; }
+}
+async function installPlugin(f){
+  if(!/\.zip$/i.test(f.name)){ toast('Please upload a .zip package'); return; }
+  toast('Installing '+f.name+'…', 4000);
+  const fd=new FormData(); fd.append('package', f);
+  try{
+    const r=await fetch('/api/plugins/install',{method:'POST', body:fd});
+    const j=await r.json().catch(()=>({}));
+    toast(r.ok ? (j.message||'Installed — activate it to load') : (j||'Install failed'), 3200);
+  }catch(e){ toast('Install failed'); }
+  loadPlugins();
+}
+async function pluginOp(op, i){
+  const p=_plugins[i]; if(!p) return; const id=p.id||p.Id;
+  if(op==='uninstall' && !confirm(`Uninstall “${p.name||p.Name||id}”? This removes its files.`)) return;
+  toast(`${op}…`);
+  try{
+    const r = op==='uninstall'
+      ? await fetch(`/api/plugins/${encodeURIComponent(id)}`,{method:'DELETE'})
+      : await fetch(`/api/plugins/${encodeURIComponent(id)}/${op}`,{method:'POST'});
+    const j=await r.json().catch(()=>({}));
+    toast(j.message || (r.ok?`${op} ok`:`${op} failed`));
+  }catch(e){ toast(`${op} failed`); }
+  loadPlugins();
+}
+
 document.addEventListener('keydown', e => {
-  if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); $('#q').focus(); }
+  if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); closeStation(); $('#q').focus(); }
+  if(e.key==='Escape'){ if($('#station').classList.contains('open')) closeStation(); }
 });
 boot();
 </script>
