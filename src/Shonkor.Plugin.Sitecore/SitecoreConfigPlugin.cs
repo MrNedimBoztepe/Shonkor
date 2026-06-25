@@ -8,7 +8,7 @@ using System.Xml.Linq;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 
-namespace Shonkor.Plugins;
+namespace Shonkor.Plugin.Sitecore;
 
 /// <summary>
 /// Sitecore configuration / patch parser (App_Config Include *.config). Models what each config file

@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 
-namespace Shonkor.Plugins;
+namespace Shonkor.Plugin.Sitecore;
 
 /// <summary>
 /// Phase-2 diagnostic: enforces the Sitecore Helix layer-dependency rule over the C# coupling graph.

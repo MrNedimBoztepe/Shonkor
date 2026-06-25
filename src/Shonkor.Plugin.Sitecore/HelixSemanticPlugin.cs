@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 
-namespace Shonkor.Plugins;
+namespace Shonkor.Plugin.Sitecore;
 
 /// <summary>
 /// Extracts Sitecore Helix architectural concepts (Feature / Foundation / Project) from file paths

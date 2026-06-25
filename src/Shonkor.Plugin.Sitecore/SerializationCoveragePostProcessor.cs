@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 
-namespace Shonkor.Plugins;
+namespace Shonkor.Plugin.Sitecore;
 
 /// <summary>
 /// Phase-2 diagnostic (F7): surfaces serialization-coverage gaps — items the serialized set <i>references</i>

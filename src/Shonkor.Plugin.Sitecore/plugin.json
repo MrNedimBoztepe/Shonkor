@@ -1,0 +1,9 @@
+{
+  "id": "shonkor-sitecore",
+  "name": "Sitecore (Unicorn, XM Cloud/JSS, Config, Helix)",
+  "version": "1.0.0",
+  "description": "First-party Sitecore parsers and post-processors: Unicorn (.yml: items, presentation, template inheritance), XM Cloud (JSS), config patches (.config: pipelines/DI/events), Helix architecture (Feature/Foundation/Project), plus CLR-type, field-type, datasource and serialization-coverage resolvers.",
+  "entryAssembly": "Shonkor.Plugin.Sitecore.dll",
+  "minHostApi": "1.0",
+  "targetExtensions": [".yml", ".yaml", ".config", ".json", ".ts", ".tsx", ".js", ".jsx", ".xml", ".html", ".cshtml"]
+}

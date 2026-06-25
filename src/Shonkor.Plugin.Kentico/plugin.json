@@ -1,0 +1,9 @@
+{
+  "id": "shonkor-kentico",
+  "name": "Kentico (Page types, modules, form components)",
+  "version": "1.0.0",
+  "description": "First-party Kentico content-model parser: [RegisterModule] registrations, TreeNode page types, and FormComponent declarations from C# source.",
+  "entryAssembly": "Shonkor.Plugin.Kentico.dll",
+  "minHostApi": "1.0",
+  "targetExtensions": [".cs"]
+}
