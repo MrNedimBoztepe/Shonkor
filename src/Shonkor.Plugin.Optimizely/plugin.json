@@ -1,0 +1,9 @@
+{
+  "id": "shonkor-optimizely",
+  "name": "Optimizely (Content types)",
+  "version": "1.0.0",
+  "description": "First-party Optimizely content-model parser: [ContentType] declarations from C# source.",
+  "entryAssembly": "Shonkor.Plugin.Optimizely.dll",
+  "minHostApi": "1.0",
+  "targetExtensions": [".cs"]
+}

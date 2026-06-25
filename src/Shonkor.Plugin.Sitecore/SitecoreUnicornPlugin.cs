@@ -10,7 +10,7 @@ using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 using YamlDotNet.Serialization;
 
-namespace Shonkor.Plugins;
+namespace Shonkor.Plugin.Sitecore;
 
 public sealed class SitecoreUnicornPlugin : IFileParser
 {

@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    First-party Shonkor plugin: Kentico content-model parser ([RegisterModule], TreeNode page types,
+    FormComponent). It is NOT part of the host app — it builds a single assembly installed via a ZIP
+    that only runs once activated. The host provides the contract (Shonkor.Core) and shared libraries
+    (Roslyn) at runtime, so the package ships only this project's DLL.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- A plugin ships only its own assembly; the host supplies the rest. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Contract + shared libs are provided by the host; reference for compile only (Private=false). -->
+    <ProjectReference Include="..\Shonkor.Core\Shonkor.Core.csproj">
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Package the installable plugin ZIP (manifest + the single assembly) into the build output. -->
+  <Target Name="PackPluginZip" AfterTargets="Build">
+    <PropertyGroup>
+      <PluginStage>$(IntermediateOutputPath)pluginpack\</PluginStage>
+      <PluginZip>$(OutDir)$(AssemblyName).zip</PluginZip>
+    </PropertyGroup>
+    <RemoveDir Directories="$(PluginStage)" />
+    <MakeDir Directories="$(PluginStage)" />
+    <Copy SourceFiles="plugin.json" DestinationFolder="$(PluginStage)" />
+    <Copy SourceFiles="$(OutDir)$(AssemblyName).dll" DestinationFolder="$(PluginStage)" />
+    <Delete Files="$(PluginZip)" />
+    <ZipDirectory SourceDirectory="$(PluginStage)" DestinationFile="$(PluginZip)" />
+    <Message Importance="high" Text="Plugin package: $(PluginZip)" />
+  </Target>
+
+</Project>

@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
-using Shonkor.Plugins;
+using Shonkor.Plugin.Sitecore;
 using Xunit;
 
 namespace Shonkor.Tests;

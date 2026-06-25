@@ -28,7 +28,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The CMS parsers live in the example plugin project; reference it so the test can exercise the type. -->
-    <ProjectReference Include="..\..\src\Shonkor.Plugin.Cms\Shonkor.Plugin.Cms.csproj" />
+    <!-- The CMS parsers live in the example plugin projects; reference them so the tests can exercise the types. -->
+    <ProjectReference Include="..\..\src\Shonkor.Plugin.Sitecore\Shonkor.Plugin.Sitecore.csproj" />
+    <ProjectReference Include="..\..\src\Shonkor.Plugin.Kentico\Shonkor.Plugin.Kentico.csproj" />
+    <ProjectReference Include="..\..\src\Shonkor.Plugin.Optimizely\Shonkor.Plugin.Optimizely.csproj" />
   </ItemGroup>
 </Project>

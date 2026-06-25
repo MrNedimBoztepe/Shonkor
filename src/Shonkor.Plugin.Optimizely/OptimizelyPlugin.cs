@@ -9,7 +9,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-namespace Shonkor.Plugins;
+namespace Shonkor.Plugin.Optimizely;
 
 public sealed class OptimizelyPlugin : IFileParser
 {

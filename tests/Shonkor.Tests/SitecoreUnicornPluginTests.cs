@@ -1,6 +1,6 @@
 using System.Linq;
 using System.Threading.Tasks;
-using Shonkor.Plugins;
+using Shonkor.Plugin.Sitecore;
 using Xunit;
 
 namespace Shonkor.Tests;

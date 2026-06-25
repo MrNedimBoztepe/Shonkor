@@ -1,10 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Example first-party Shonkor plugin: CMS content-model parsers (Optimizely, Kentico, Sitecore).
-    It is NOT part of the host app — it builds a single assembly that is installed via a ZIP and only
-    runs once activated. The host provides the contract (Shonkor.Core) and shared libraries (Roslyn,
-    YamlDotNet) at runtime, so the package ships only this project's own DLL.
+    First-party Shonkor plugin: Sitecore content-model parsers and post-processors (Unicorn .yml,
+    XM Cloud/JSS, config patches, Helix architecture, plus the CLR-type / field-type / datasource /
+    serialization-coverage resolvers). It is NOT part of the host app — it builds a single assembly
+    installed via a ZIP that only runs once activated. The host provides the contract (Shonkor.Core)
+    and shared libraries (Roslyn, YamlDotNet) at runtime, so the package ships only this project's DLL.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
