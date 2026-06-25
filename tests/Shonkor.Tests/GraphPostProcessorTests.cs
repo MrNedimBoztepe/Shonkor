@@ -72,6 +72,20 @@ public class GraphPostProcessorTests
     }
 
     [Fact]
+    public async Task ClrTypeResolver_DowngradesUnresolvedFrameworkTypeToInfo()
+    {
+        var view = new FakeGraphView();
+        // A real Sitecore platform type — lives in Sitecore.Kernel.dll, never in indexed source.
+        view.ClrTypeNodes.Add(Clr("Sitecore.Pipelines.ConvertToRuntimeHtml.ConvertWebControls"));
+
+        var enrichment = await new ClrTypeResolverPostProcessor().ProcessAsync(view);
+
+        Assert.Empty(enrichment.Edges);
+        Assert.DoesNotContain(enrichment.Diagnostics, d => d.Severity == DiagnosticSeverity.Warning);
+        Assert.Contains(enrichment.Diagnostics, d => d.Code == "sitecore.clrtype-external" && d.Severity == DiagnosticSeverity.Info);
+    }
+
+    [Fact]
     public async Task ClrTypeResolver_FlagsAmbiguousMatches()
     {
         var view = new FakeGraphView();
