@@ -76,6 +76,26 @@
   .insp .act{display:flex; gap:6px; margin-top:14px}
   .insp .act button{flex:1; font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:uppercase; background:var(--paper); border:1px solid var(--line-2); color:var(--ink-2); padding:7px 4px; cursor:pointer}
   .insp .act button:hover{color:var(--ink); border-color:var(--ink-2)}
+  .insp .act button.on{color:var(--russet); border-color:var(--russet); background:#f3e3d8}
+  .detail{margin-top:6px}
+  .grp{font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-2); margin:14px 0 6px; display:flex; gap:7px; align-items:center}
+  .grp .n{color:var(--russet)}
+  .ref{display:block; width:100%; text-align:left; border:1px solid var(--line); border-left-width:3px; padding:6px 9px; margin-bottom:5px; background:var(--paper); cursor:pointer}
+  .ref:hover{border-color:var(--ink-2)}
+  .ref .rel{font-family:var(--mono); font-size:9px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-2)}
+  .ref .rn{font-size:13px; font-weight:500; word-break:break-word}
+  .ref .rt{font-family:var(--mono); font-size:10px; color:var(--ink-3)}
+  .hint{font-family:var(--mono); font-size:11px; color:var(--russet); background:#f3e3d8; border:1px solid var(--line-2); padding:7px 9px; margin-top:6px}
+  .step{position:relative; padding:5px 9px 5px 16px; border-left:2px solid var(--line-2); margin-left:5px; cursor:pointer}
+  .step:hover{background:var(--paper)}
+  .step::before{content:""; position:absolute; left:-4px; top:11px; width:6px; height:6px; border-radius:50%; background:var(--russet)}
+  .step .sd{font-family:var(--mono); font-size:9px; letter-spacing:.06em; text-transform:uppercase; color:var(--teal)}
+  .step .sn{font-size:13px; font-weight:500; word-break:break-word}
+  .step .st-t{font-family:var(--mono); font-size:10px; color:var(--ink-3)}
+  .capsule{margin-top:8px}
+  .capsule pre{font-family:var(--mono); font-size:11px; line-height:1.5; background:var(--paper); border:1px solid var(--line-2); padding:11px; max-height:340px; overflow:auto; white-space:pre-wrap; word-break:break-word}
+  .copybtn{font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:uppercase; background:var(--ink); color:var(--paper); border:none; padding:6px 12px; cursor:pointer; margin-top:7px}
+  .spin{font-family:var(--mono); font-size:11px; color:var(--ink-2); margin-top:8px}
   .lbl{font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2); margin:18px 0 8px}
   .diag{border:1px solid var(--line-2); border-left-width:3px; padding:8px 10px; margin-bottom:7px; background:var(--paper)}
   .diag .sv{font-family:var(--mono); font-size:9px; font-weight:500; text-transform:uppercase; letter-spacing:.08em}
@@ -382,7 +402,7 @@ const G = (() => {
   canvas.addEventListener('click', e=>{
     if(moved) return;
     const r=canvas.getBoundingClientRect(); const n=nodeAt(e.clientX-r.left,e.clientY-r.top);
-    if(n) inspect(n);
+    if(n) pickNode(n);
   });
   canvas.addEventListener('dblclick', e=>{
     const r=canvas.getBoundingClientRect(); const n=nodeAt(e.clientX-r.left,e.clientY-r.top);
@@ -435,20 +455,104 @@ async function expand(n){
 }
 
 function shortLoc(n){ const f=n.filePath||''; const base=f?f.split(/[\\/]/).pop():n.id; return n.startLine?`${base}:${n.startLine}`:base; }
+
+// Single entry for graph-node clicks: routes to trace target when tracing, else inspect.
+function pickNode(n){
+  if(window.__traceMode){ runTrace(window.__traceFrom, n); return; }
+  inspect(n);
+}
+
 function inspect(n){
+  window.__sel = n;
   $('#insp').innerHTML = `
     <div class="kind">${escapeHtml(n.type||'node')} · ${escapeHtml(n.mod||'')}</div>
     <h2>${escapeHtml(n.name||'—')}</h2>
     <div class="loc">${escapeHtml(shortLoc(n))}</div>
     ${ n.summary ? `<div class="sum">${escapeHtml(n.summary)}</div>` : '' }
     <div class="act">
-      <button onclick="expand(window.__sel)">⟲ expand</button>
-      <button onclick="alert('references — next build')">↳ references</button>
-      <button onclick="alert('capsule — next build')">▢ capsule</button>
+      <button id="b-exp" onclick="expand(window.__sel)">⟲ expand</button>
+      <button id="b-ref" onclick="loadReferences(window.__sel)">↳ references</button>
+      <button id="b-trc" onclick="armTrace(window.__sel)">⤳ trace</button>
+      <button id="b-cap" onclick="loadCapsule(window.__sel)">▢ capsule</button>
     </div>
-    <div class="lbl">Connections</div>
-    <div class="loc" style="color:var(--ink-3)">${n.deg||0} edge(s) in the current view.</div>`;
-  window.__sel = n;
+    <div class="detail" id="detail">
+      <div class="grp">Connections</div>
+      <div class="loc" style="color:var(--ink-3)">${n.deg||0} edge(s) in the current view. Use <b>references</b> for the full picture.</div>
+    </div>`;
+}
+
+// Load a node into the inspector by id; pull it into the graph first if it isn't charted yet.
+async function focusNode(id, meta){
+  if(G.nodes.has(id)){ inspect(G.nodes.get(id)); return; }
+  setLoading(true,'loading node…');
+  try{
+    const sg = await (await fetch(`/api/subgraph?seeds=${encodeURIComponent(id)}&hops=1`,{headers:H()})).json();
+    G.addEdgesNodes([...(sg.nodes||sg.Nodes||[])], (sg.edges||sg.Edges||[]));
+  }catch(e){}
+  setLoading(false);
+  inspect(G.nodes.get(id) || { id, name:meta?.name||id, type:meta?.type||'', filePath:meta?.filePath, startLine:meta?.startLine, summary:meta?.summary, deg:0 });
+}
+
+// Index-based navigation targets — avoids fragile JSON-in-onclick escaping.
+let _navT = [];
+function goNav(i){ const x=_navT[i]; if(x) focusNode(x.id, x); }
+async function loadReferences(n){
+  const d=$('#detail'); d.innerHTML='<div class="spin">Loading references…</div>';
+  try{
+    const r = await (await fetch(`/api/node/references?id=${encodeURIComponent(n.id)}`,{headers:H()})).json();
+    const inc=r.incoming||[], out=r.outgoing||[];
+    _navT = [...inc, ...out];
+    const row = (x,i) => `<button class="ref" style="border-left-color:var(--teal)" onclick="goNav(${i})">
+      <div class="rel">${escapeHtml(x.relation||'')}</div><div class="rn">${escapeHtml(x.name||x.id)}</div><div class="rt">${escapeHtml(x.type||'')}</div></button>`;
+    d.innerHTML = `
+      <div class="grp">Incoming <span class="n">${inc.length}</span></div>
+      ${inc.length? inc.map((x,i)=>row(x,i)).join('') : '<div class="loc" style="color:var(--ink-3)">No incoming references.</div>'}
+      <div class="grp">Outgoing <span class="n">${out.length}</span></div>
+      ${out.length? out.map((x,i)=>row(x,inc.length+i)).join('') : '<div class="loc" style="color:var(--ink-3)">No outgoing references.</div>'}`;
+  }catch(e){ d.innerHTML='<div class="loc" style="color:var(--ink-3)">References unavailable.</div>'; }
+}
+
+function armTrace(n){
+  window.__traceFrom = n; window.__traceMode = true;
+  document.getElementById('b-trc')?.classList.add('on');
+  $('#detail').innerHTML = `<div class="grp">Trace path</div>
+    <div class="hint">From <b>${escapeHtml(n.name||n.id)}</b> — now click any node in the map to trace the shortest connection. <a href="#" onclick="cancelTrace();return false" style="color:var(--ink-2)">cancel</a></div>`;
+}
+function cancelTrace(){ window.__traceMode=false; document.getElementById('b-trc')?.classList.remove('on'); if(window.__sel) inspect(window.__sel); }
+async function runTrace(from, to){
+  window.__traceMode=false; document.getElementById('b-trc')?.classList.remove('on');
+  if(!from || !to || from.id===to.id){ if(window.__sel) inspect(window.__sel); return; }
+  const d=$('#detail'); d.innerHTML=`<div class="grp">Trace path</div><div class="spin">Finding path from <b>${escapeHtml(from.name||from.id)}</b>…</div>`;
+  // Path search is BFS over a dense graph — cap hops and abort gracefully so the UI never hangs.
+  const ac=new AbortController(); const to_=setTimeout(()=>ac.abort(), 12000);
+  try{
+    const r = await (await fetch(`/api/path?from=${encodeURIComponent(from.id)}&to=${encodeURIComponent(to.id)}&maxHops=2`,{headers:H(),signal:ac.signal})).json();
+    clearTimeout(to_);
+    if(!r.found){ d.innerHTML=`<div class="grp">Trace path</div><div class="loc" style="color:var(--ink-3)">${escapeHtml(r.message||'No direct path within 2 hops — these symbols connect only indirectly.')}</div>`; return; }
+    const arrow = s => s.direction==null?'◉':(s.direction==='forward'?'→':'←');
+    _navT = (r.steps||[]).slice();
+    d.innerHTML = `<div class="grp">Path <span class="n">${r.hops} hop${r.hops===1?'':'s'}</span></div>` +
+      (r.steps||[]).map((s,i)=>`<div class="step" onclick="goNav(${i})">
+        <div class="sd">${arrow(s)} ${escapeHtml(s.relation||'start')}</div><div class="sn">${escapeHtml(s.name||s.id)}</div><div class="st-t">${escapeHtml(s.type||'')}</div></div>`).join('');
+  }catch(e){ clearTimeout(to_);
+    d.innerHTML = e.name==='AbortError'
+      ? '<div class="grp">Trace path</div><div class="loc" style="color:var(--ink-3)">Path search timed out — these nodes are likely far apart. Try tracing between closer symbols.</div>'
+      : '<div class="loc" style="color:var(--ink-3)">Trace failed.</div>'; }
+}
+
+async function loadCapsule(n){
+  const d=$('#detail'); d.innerHTML='<div class="spin">Synthesizing capsule…</div>';
+  try{
+    // Hops=1 keeps capsules focused — hub nodes at hops=2 synthesize megabytes of markdown.
+    const r = await (await fetch('/api/capsule',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify({Query:n.name||n.id, Hops:1})})).json();
+    const md = r.markdown||r.Markdown||''; window.__capmd = md;
+    const big = md.length > 24000;
+    const shown = big ? md.slice(0,24000) : md;
+    d.innerHTML = `<div class="grp">Context capsule <span class="n">${r.nodeCount??r.NodeCount??0} nodes</span></div>
+      ${big?`<div class="loc" style="color:var(--ink-3);margin-bottom:6px">Large capsule (${(md.length/1024|0)} KB) — preview truncated; copy gives the full text.</div>`:''}
+      <div class="capsule"><pre id="capmd">${escapeHtml(shown)}${big?'\n\n… (truncated)':''}</pre>
+      <button class="copybtn" onclick="navigator.clipboard.writeText(window.__capmd).then(()=>{this.textContent='copied ✓'})">copy markdown</button></div>`;
+  }catch(e){ d.innerHTML='<div class="loc" style="color:var(--ink-3)">Capsule synthesis failed.</div>'; }
 }
 
 document.addEventListener('keydown', e => {
