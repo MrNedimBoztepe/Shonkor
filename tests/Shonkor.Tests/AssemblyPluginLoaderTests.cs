@@ -45,8 +45,11 @@ public class AssemblyPluginLoaderTests
     /// <summary>Compiles the demo plugin source into a real .dll on disk (test setup only, not runtime).</summary>
     private static void CompilePluginDll(string dllPath)
     {
+        // File.Exists guard: a previously-run test may have loaded a plugin .dll from a temp dir that is
+        // now deleted; that assembly can still linger in the AppDomain, and CreateFromFile would throw on
+        // its missing path. Reference only assemblies whose backing file is still on disk.
         var refs = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && System.IO.File.Exists(a.Location))
             .Select(a => (MetadataReference)MetadataReference.CreateFromFile(a.Location))
             .ToList();
 
