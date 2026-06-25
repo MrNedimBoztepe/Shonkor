@@ -31,8 +31,14 @@
   .proj{display:flex;align-items:center;gap:8px; font-family:var(--mono); font-size:12px;
     border:1px solid var(--line-2); padding:0 12px; height:38px; background:var(--paper-2); cursor:pointer}
   .proj .dot{width:7px;height:7px;border-radius:50%;background:var(--teal)}
+  .reidx{font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; height:38px; padding:0 14px;
+    border:1px solid var(--line-2); background:var(--paper); color:var(--ink-2); cursor:pointer; display:flex; align-items:center; gap:6px}
+  .reidx:hover{color:var(--russet); border-color:var(--russet)}
+  .reidx.busy{color:var(--ink-3); border-color:var(--line-2); cursor:default; pointer-events:none}
+  .reidx.busy span::after{content:""}
   main{display:grid; grid-template-columns:62px 1fr 326px; overflow:hidden}
   .rail{border-right:1px solid var(--line-2); display:flex; flex-direction:column; align-items:center; padding-top:14px; gap:4px; background:rgba(231,221,200,.5)}
+  .rail-sp{flex:1}
   .st{width:44px;height:46px; display:flex;flex-direction:column;align-items:center;justify-content:center; gap:3px;
      font-family:var(--mono); font-size:8px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-2); cursor:pointer; border-radius:3px}
   .st svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.4}
@@ -122,6 +128,11 @@
   .projmenu .pm-i:hover{background:var(--paper-2)}
   .projmenu .pm-i.sel{color:var(--teal)} .projmenu .pm-i.sel::before{content:"●"; font-size:8px}
   .projmenu .pm-i:not(.sel)::before{content:"○"; font-size:8px; color:var(--line-2)}
+  .projmenu .pm-sep{height:1px; background:var(--line-2); margin:4px 0}
+  .projmenu .pm-act{padding:9px 12px; cursor:pointer; font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--russet)}
+  .projmenu .pm-act:hover{background:var(--paper-2)}
+  .projmenu .pm-act.busy{color:var(--ink-3); cursor:default; background:none}
+  .projmenu .pm-act .sub{display:block; font-family:var(--sans); text-transform:none; letter-spacing:0; color:var(--ink-3); font-size:10px; margin-top:2px}
 
   /* station overlay */
   .station{position:absolute; inset:0; background:var(--paper); z-index:6; display:none; flex-direction:column; overflow:hidden}
@@ -160,6 +171,29 @@
   .drop{border:1.5px dashed var(--line-2); padding:22px; text-align:center; font-family:var(--mono); font-size:12px; color:var(--ink-2); margin-bottom:16px; cursor:pointer; background:var(--paper-2)}
   .drop:hover{border-color:var(--russet); color:var(--ink)}
   .drop b{color:var(--russet)}
+  /* settings */
+  .seg{display:flex; gap:0; margin-bottom:18px; border:1px solid var(--line-2); width:fit-content}
+  .seg button{font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; background:var(--paper); border:none; border-right:1px solid var(--line-2); color:var(--ink-2); padding:8px 18px; cursor:pointer}
+  .seg button:last-child{border-right:none}
+  .seg button.on{background:var(--ink); color:var(--paper)}
+  .secthead{font-family:var(--serif); font-size:19px; font-weight:500; margin:6px 0 10px}
+  .prj{border:1px solid var(--line-2); border-left-width:3px; padding:13px 15px; margin-bottom:10px; background:var(--paper)}
+  .prj.act{border-left-color:var(--teal)}
+  .prj .ph{display:flex; align-items:center; gap:10px}
+  .prj .pn{font-family:var(--serif); font-size:17px; font-weight:500}
+  .prj .pbadge{margin-left:auto}
+  .prj .pp{font-family:var(--mono); font-size:10px; color:var(--ink-3); margin-top:3px; overflow-wrap:anywhere}
+  .prj .prow{display:flex; align-items:center; gap:10px; margin-top:11px; flex-wrap:wrap}
+  .prj .seglbl{font-family:var(--mono); font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3)}
+  .prj select{font-family:var(--mono); font-size:11px; border:1px solid var(--line-2); background:var(--paper); color:var(--ink); padding:4px 7px; cursor:pointer}
+  .prj .pbtns{margin-left:auto; display:flex; gap:6px}
+  .prj .pbtns button{font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:uppercase; border:1px solid var(--line-2); background:var(--paper); color:var(--ink-2); padding:6px 12px; cursor:pointer}
+  .prj .pbtns button:hover{color:var(--ink); border-color:var(--ink-2)}
+  .prj .pbtns button.danger:hover{color:var(--err); border-color:var(--err)}
+  .addprj{border:1px dashed var(--line-2); padding:14px 15px; margin-bottom:18px; background:var(--paper-2)}
+  .addprj .af{display:flex; gap:8px; margin-top:9px} .addprj .af input{flex:1; font-family:var(--sans); font-size:13px; border:1px solid var(--line-2); background:var(--paper); padding:8px 11px; outline:none}
+  .addprj .af input:focus{border-color:var(--ink-2)}
+  .addprj button{font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; background:var(--teal); color:var(--paper); border:none; padding:0 16px; cursor:pointer}
   .toast{position:fixed; left:50%; bottom:46px; transform:translateX(-50%); background:var(--ink); color:var(--paper); font-family:var(--mono); font-size:12px; padding:9px 16px; z-index:50; opacity:0; transition:opacity .2s; pointer-events:none}
   .toast.show{opacity:1}
   .smd pre{font-family:var(--mono); font-size:11.5px; line-height:1.55; background:var(--paper); border:1px solid var(--line-2); padding:14px; white-space:pre-wrap; word-break:break-word; max-height:52vh; overflow:auto}
@@ -195,6 +229,7 @@
     <label class="cmdk"><span style="font-family:var(--mono)">⌕</span>
       <input id="q" type="text" placeholder="Find a symbol — it charts the territory…" autocomplete="off" aria-label="Search the graph"/>
       <kbd>⌘K</kbd></label>
+    <button class="reidx" id="reidx" title="Reindex the active project">⟳ <span id="reidx-l">Reindex</span></button>
     <div class="proj" id="proj"><span class="dot"></span> <span id="proj-name">—</span> <span style="opacity:.5">▾</span></div>
   </header>
   <div class="projmenu" id="projmenu"></div>
@@ -205,8 +240,9 @@
       <div class="st" data-view="hunt" title="Hunt"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 20 20"/></svg>Hunt</div>
       <div class="st" data-view="capsule" title="Capsule"><svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="1.5"/><path d="M8 9h8 M8 13h6"/></svg>Capsule</div>
       <div class="st" data-view="diag" title="Diagnostics"><svg viewBox="0 0 24 24"><path d="M12 4 21 19 3 19 Z"/><path d="M12 10v4 M12 16.5v.2"/></svg>Diag</div>
-      <div class="st" data-view="plugins" title="Plugins"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="6" height="6" rx="1"/><rect x="13" y="13" width="6" height="6" rx="1"/><path d="M11 8h4v5"/></svg>Plugins</div>
       <div class="st" data-view="journal" title="Journal — decisions, milestones, tasks, questions"><svg viewBox="0 0 24 24"><path d="M6 4h10l3 3v13H6z"/><path d="M9 9h7 M9 12.5h7 M9 16h4"/></svg>Journal</div>
+      <div class="rail-sp"></div>
+      <div class="st" data-view="settings" title="Settings — projects, indexing, plugins"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3 M12 18v3 M3 12h3 M18 12h3 M5.6 5.6l2 2 M16.4 16.4l2 2 M18.4 5.6l-2 2 M7.6 16.4l-2 2"/></svg>Settings</div>
     </nav>
 
     <section class="stage" id="stage">
@@ -276,7 +312,8 @@ async function boot(){
   try{
     const p = await (await fetch('/api/projects')).json();
     state.projects = p.projects || p.Projects || [];
-    state.project = p.activeProject || p.ActiveProject || (state.projects[0]?.name) || '';
+    state.activeProject = p.activeProject || p.ActiveProject || '';
+    state.project = state.activeProject || (state.projects[0]?.name) || '';
     $('#proj-name').textContent = state.project || 'none';
     renderProjMenu();
   }catch(e){ $('#proj-name').textContent = 'offline'; }
@@ -646,13 +683,16 @@ function toast(msg, ms=2400){ const t=$('#toast'); t.textContent=msg; t.classLis
 /* ===================== PROJECT SWITCHER ===================== */
 function renderProjMenu(){
   const m=$('#projmenu');
-  m.innerHTML = `<div class="pm-h">Projects</div>` + (state.projects||[]).map(p=>{
+  const items = (state.projects||[]).map(p=>{
     const nm=p.name||p.Name||p; const sel=nm===state.project?'sel':'';
     return `<div class="pm-i ${sel}" data-p="${escapeHtml(nm)}">${escapeHtml(nm)}</div>`;
   }).join('') || '<div class="pm-i">No projects</div>';
+  m.innerHTML = `<div class="pm-h">Projects</div>${items}<div class="pm-sep"></div>` +
+    `<div class="pm-act" id="pm-settings">⚙ Manage projects<span class="sub">add · semantic · plugins in Settings</span></div>`;
   m.querySelectorAll('.pm-i[data-p]').forEach(el=>el.onclick=()=>switchProject(el.getAttribute('data-p')));
+  const sb=m.querySelector('#pm-settings'); if(sb) sb.onclick=e=>{ e.stopPropagation(); m.classList.remove('open'); openStation('settings'); };
 }
-$('#proj').onclick = e=>{ e.stopPropagation(); $('#projmenu').classList.toggle('open'); };
+$('#proj').onclick = e=>{ e.stopPropagation(); const m=$('#projmenu'); const open=!m.classList.contains('open'); if(open) renderProjMenu(); m.classList.toggle('open', open); };
 document.addEventListener('click', ()=>$('#projmenu').classList.remove('open'));
 function switchProject(name){
   if(!name || name===state.project){ $('#projmenu').classList.remove('open'); return; }
@@ -663,6 +703,35 @@ function switchProject(name){
   if($('#station').classList.contains('open')) openStation(_station);
   toast(`Switched to ${name}`);
 }
+
+// Reindex (re-scan source into the graph) the active project. Incremental — only changed files
+// are reparsed — but still a long-running scan on big projects; the call resolves when it finishes.
+let _indexing=false;
+function setReindexBusy(on){
+  const b=$('#reidx'); if(!b) return;
+  b.classList.toggle('busy', on); $('#reidx-l').textContent = on ? 'Reindexing…' : 'Reindex';
+}
+async function reindexProject(){
+  if(_indexing || !state.project) return;
+  _indexing=true; setReindexBusy(true);
+  toast(`Reindexing ${state.project}… this can take a while`, 600000);
+  try{
+    const r=await fetch('/api/index',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:'{}'});
+    if(r.status===409){ toast('An index scan is already running for this project.', 4000); }
+    else {
+      const j=await r.json().catch(()=>({}));
+      if(r.ok){
+        const st=j.stats||j.Stats||{}; const res=j.result||j.Result||{};
+        const scanned=(res.filesScanned??res.FilesScanned);
+        toast(`Reindexed ${state.project} — ${fmt(st.totalNodes||0)} nodes${scanned!=null?` · ${fmt(scanned)} files scanned`:''}`, 5000);
+        loadStats(); loadDiagnostics();
+        if($('#station').classList.contains('open') && (_station==='diag'||_station==='journal'||_station==='settings')) openStation(_station);
+      } else toast(typeof j==='string'?j:'Reindex failed', 4000);
+    }
+  }catch(e){ toast('Reindex failed — is the project reachable?', 4000); }
+  _indexing=false; setReindexBusy(false);
+}
+$('#reidx').onclick = reindexProject;
 
 /* ===================== STATIONS ===================== */
 let _station='atlas';
@@ -678,8 +747,8 @@ function openStation(v){
   if(v==='hunt'){ $('#st-title').textContent='Hunt'; $('#st-sub').textContent='full-text search across the graph'; renderHunt(body); }
   else if(v==='capsule'){ $('#st-title').textContent='Capsule'; $('#st-sub').textContent='synthesize token-optimised context'; renderCapsuleStation(body); }
   else if(v==='diag'){ $('#st-title').textContent='Diagnostics'; $('#st-sub').textContent='graph integrity findings'; renderDiagStation(body); }
-  else if(v==='plugins'){ $('#st-title').textContent='Plugins'; $('#st-sub').textContent='assembly extensions — install · activate'; renderPlugins(body); }
   else if(v==='journal'){ $('#st-title').textContent='Journal'; $('#st-sub').textContent='decisions · milestones · tasks · questions'; renderJournal(body); }
+  else if(v==='settings'){ $('#st-title').textContent='Settings'; $('#st-sub').textContent='projects · indexing · plugins'; renderSettings(body); }
 }
 
 /* --- Hunt --- */
@@ -817,6 +886,102 @@ async function pluginOp(op, i){
     toast(j.message || (r.ok?`${op} ok`:`${op} failed`));
   }catch(e){ toast(`${op} failed`); }
   loadPlugins();
+}
+
+/* --- Settings (projects · indexing · plugins) --- */
+let _setTab='projects';
+function renderSettings(body){
+  body.innerHTML = `<div class="seg" id="set-seg">
+      <button data-t="projects" class="${_setTab==='projects'?'on':''}">Projects</button>
+      <button data-t="plugins" class="${_setTab==='plugins'?'on':''}">Plugins</button>
+    </div><div id="set-body"></div>`;
+  body.querySelectorAll('#set-seg button').forEach(b=>b.onclick=()=>{ _setTab=b.getAttribute('data-t'); renderSettings(body); });
+  const sb=$('#set-body');
+  if(_setTab==='plugins') renderPlugins(sb); else renderSettingsProjects(sb);
+}
+function semLabel(v){ return v===true?'Semantic (exact)':v===false?'Syntactic (fast)':'Global default'; }
+function renderSettingsProjects(c){
+  c.innerHTML = `
+    <div class="addprj">
+      <div class="secthead" style="margin:0">Add a project</div>
+      <div class="seglbl" style="margin-top:2px">Point Shonkor at a source directory to index it into its own graph.</div>
+      <div class="af"><input id="ap-name" placeholder="Name (e.g. MyApp)"><input id="ap-path" placeholder="Absolute path to the source root"><button id="ap-go">Add</button></div>
+    </div>
+    <div class="secthead">Projects <span class="seglbl">${(state.projects||[]).length}</span></div>
+    <div id="prj-list"><div class="sempty">Loading…</div></div>`;
+  c.querySelector('#ap-go').onclick=addProject;
+  c.querySelector('#ap-path').onkeydown=e=>{ if(e.key==='Enter') addProject(); };
+  paintProjects();
+}
+function paintProjects(){
+  const el=$('#prj-list'); if(!el) return;
+  const list=state.projects||[];
+  el.innerHTML = list.length===0 ? '<div class="sempty">No projects registered yet.</div>' :
+    list.map((p,i)=>{ const nm=p.name||p.Name; const path=p.path||p.Path||''; const active=nm===state.activeProject;
+      const sem=(p.semanticCSharp ?? p.SemanticCSharp); const isCur=nm===state.project;
+      const opt=(val,lbl)=>`<option value="${val}" ${String(sem)===val?'selected':''}>${lbl}</option>`;
+      return `<div class="prj ${active?'act':''}">
+        <div class="ph"><span class="pn">${escapeHtml(nm)}</span>${active?'<span class="pbadge active">active</span>':isCur?'<span class="pbadge installed">viewing</span>':''}</div>
+        <div class="pp">${escapeHtml(path)}</div>
+        <div class="prow">
+          <span class="seglbl">Indexing</span>
+          <select onchange="setSemantic(${i}, this.value)">
+            ${opt('null','Global default')}${opt('true','Semantic (exact)')}${opt('false','Syntactic (fast)')}
+          </select>
+          <div class="pbtns">
+            ${active?'':`<button onclick="setActiveProjectUI(${i})">set active</button>`}
+            ${isCur?'':`<button onclick="viewProject(${i})">view</button>`}
+            <button class="danger" onclick="deleteProjectUI(${i})">delete</button>
+          </div>
+        </div>
+      </div>`; }).join('');
+}
+async function refreshProjects(){
+  try{ const p=await (await fetch('/api/projects')).json();
+    state.projects=p.projects||p.Projects||[]; state.activeProject=p.activeProject||p.ActiveProject||'';
+  }catch(e){}
+}
+async function addProject(){
+  const name=$('#ap-name').value.trim(), path=$('#ap-path').value.trim();
+  if(!name || !path){ toast('Name and path are required'); return; }
+  toast(`Adding ${name}…`);
+  try{
+    const r=await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Name:name, Path:path})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ toast(j.message||`Added ${name}`); await refreshProjects(); renderProjMenu(); paintProjects();
+      $('#ap-name').value=''; $('#ap-path').value=''; }
+    else toast(typeof j==='string'?j:'Add failed — check the path exists', 4000);
+  }catch(e){ toast('Add failed'); }
+}
+async function setSemantic(i, value){
+  const p=(state.projects||[])[i]; if(!p) return; const nm=p.name||p.Name;
+  const body = value==='true' ? {SemanticCSharp:true} : value==='false' ? {SemanticCSharp:false} : {SemanticCSharp:null};
+  try{
+    const r=await fetch(`/api/projects/${encodeURIComponent(nm)}/semantic`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ if('semanticCSharp' in p) p.semanticCSharp=body.SemanticCSharp; p.SemanticCSharp=body.SemanticCSharp;
+      toast(j.message||`${nm}: ${semLabel(body.SemanticCSharp)} — reindex to apply`, 4500); }
+    else toast('Update failed');
+  }catch(e){ toast('Update failed'); }
+}
+async function setActiveProjectUI(i){
+  const p=(state.projects||[])[i]; if(!p) return; const nm=p.name||p.Name;
+  try{
+    const r=await fetch('/api/projects/active',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Name:nm})});
+    if(r.ok){ state.activeProject=nm; toast(`${nm} is now the active project`); switchProject(nm); paintProjects(); }
+    else toast('Could not set active');
+  }catch(e){ toast('Could not set active'); }
+}
+function viewProject(i){ const p=(state.projects||[])[i]; if(p) switchProject(p.name||p.Name); paintProjects(); }
+async function deleteProjectUI(i){
+  const p=(state.projects||[])[i]; if(!p) return; const nm=p.name||p.Name;
+  if(!confirm(`Remove project “${nm}” from Shonkor? (Its source files are untouched; only the registry entry + graph DB reference are removed.)`)) return;
+  try{
+    const r=await fetch(`/api/projects/${encodeURIComponent(nm)}`,{method:'DELETE'});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ toast(j.message||`Removed ${nm}`); await refreshProjects(); renderProjMenu(); paintProjects(); }
+    else toast('Delete failed');
+  }catch(e){ toast('Delete failed'); }
 }
 
 /* --- Journal (interaction records, kept out of the graph) --- */

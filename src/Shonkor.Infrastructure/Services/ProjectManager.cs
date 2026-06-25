@@ -41,6 +41,9 @@ public class Project
 
 public record ActiveProjectRequest(string Name);
 
+/// <summary>Toggle a project's semantic-C# override. Null clears it (use the global default).</summary>
+public record SemanticRequest(bool? SemanticCSharp);
+
 public class WebConfig
 {
     public string DatabasePath { get; set; } = "shonkor.db";
@@ -192,6 +195,21 @@ public partial class ProjectManager
                 _activeProjectName = name;
             }
 
+            SaveProjects();
+        }
+    }
+
+    /// <summary>
+    /// Set (or clear, with null) a project's per-project semantic-C# override and persist it.
+    /// null means "fall back to the global Indexing:SemanticCSharp default".
+    /// </summary>
+    public void SetProjectSemantic(string name, bool? semanticCsharp)
+    {
+        lock (_lock)
+        {
+            var project = _projects.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new ArgumentException($"Project '{name}' not found.");
+            project.SemanticCSharp = semanticCsharp;
             SaveProjects();
         }
     }
