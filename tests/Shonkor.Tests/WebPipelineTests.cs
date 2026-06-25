@@ -70,11 +70,16 @@ public class WebPipelineTests : IClassFixture<WebPipelineTests.AppFactory>
     }
 
     [Fact]
-    public async Task Root_ServesDashboardShell_WithoutKey()
+    public async Task Root_RedirectsToAtlas_AndAtlasServesShell_WithoutKey()
     {
-        // Static files are served before the API-key middleware, so the public shell loads.
-        var res = await _client.GetAsync("/");
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        // The bare root now 302-redirects to the ATLAS UI; the redirect itself needs no API key.
+        var redirect = await _client.GetAsync("/");
+        Assert.Equal(HttpStatusCode.Redirect, redirect.StatusCode);
+        Assert.Equal("/atlas/", redirect.Headers.Location?.OriginalString);
+
+        // The ATLAS shell is a static asset served before the API-key middleware, so it loads publicly.
+        var atlas = await _client.GetAsync("/atlas/");
+        Assert.Equal(HttpStatusCode.OK, atlas.StatusCode);
     }
 
     [Fact]

@@ -12,6 +12,7 @@
     --paper:#efe7d6; --paper-2:#e7ddc8; --paper-3:#e2d7bf; --ink:#1c1a14; --ink-2:#4a463a; --ink-3:#736e5d;
     --line:#cdc1a6; --line-2:#bcae8c;
     --russet:#b14a26; --teal:#1f4d44; --gold:#a9803a; --project:#5a5230;
+    --ok:#3f7a3a; --ok-soft:#e3ecd6;
     --warn:#b14a26; --err:#8f1d1d; --info:#1f4d44;
     --sans:'Hanken Grotesk',sans-serif; --serif:'Fraunces',serif; --mono:'Spline Sans Mono',monospace;
   }
@@ -30,7 +31,7 @@
   .cmdk kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line-2); padding:1px 6px; color:var(--ink-2)}
   .proj{display:flex;align-items:center;gap:8px; font-family:var(--mono); font-size:12px;
     border:1px solid var(--line-2); padding:0 12px; height:38px; background:var(--paper-2); cursor:pointer}
-  .proj .dot{width:7px;height:7px;border-radius:50%;background:var(--teal)}
+  .proj .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
   .reidx{font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; height:38px; padding:0 14px;
     border:1px solid var(--line-2); background:var(--paper); color:var(--ink-2); cursor:pointer; display:flex; align-items:center; gap:6px}
   .reidx:hover{color:var(--russet); border-color:var(--russet)}
@@ -160,7 +161,7 @@
   .pcard .pname{font-family:var(--serif); font-size:17px; font-weight:500}
   .pcard .pver{font-family:var(--mono); font-size:10px; color:var(--ink-3)}
   .pbadge{font-family:var(--mono); font-size:9px; letter-spacing:.08em; text-transform:uppercase; padding:2px 8px; border:1px solid currentColor}
-  .pbadge.active{color:var(--teal)} .pbadge.installed{color:var(--gold)} .pbadge.failed{color:var(--err)} .pbadge.disabled{color:var(--ink-3)}
+  .pbadge.active{color:var(--paper); background:var(--ok); border-color:var(--ok)} .pbadge.installed{color:var(--gold)} .pbadge.failed{color:var(--paper); background:var(--err); border-color:var(--err)} .pbadge.disabled{color:var(--ink-3)} .pbadge.view{color:var(--ink-3)}
   .pcard .pdesc{font-size:13px; color:var(--ink-2); margin:7px 0; line-height:1.5}
   .pcard .pext{font-family:var(--mono); font-size:10px; color:var(--ink-3)}
   .pcard .pacts{display:flex; gap:6px; margin-top:11px}
@@ -171,14 +172,18 @@
   .drop{border:1.5px dashed var(--line-2); padding:22px; text-align:center; font-family:var(--mono); font-size:12px; color:var(--ink-2); margin-bottom:16px; cursor:pointer; background:var(--paper-2)}
   .drop:hover{border-color:var(--russet); color:var(--ink)}
   .drop b{color:var(--russet)}
-  /* settings */
-  .seg{display:flex; gap:0; margin-bottom:18px; border:1px solid var(--line-2); width:fit-content}
-  .seg button{font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; background:var(--paper); border:none; border-right:1px solid var(--line-2); color:var(--ink-2); padding:8px 18px; cursor:pointer}
-  .seg button:last-child{border-right:none}
-  .seg button.on{background:var(--ink); color:var(--paper)}
+  /* settings — vertical left menu + content */
+  .setwrap{display:flex; gap:24px; align-items:flex-start}
+  .setnav{flex:0 0 148px; display:flex; flex-direction:column; gap:2px; border-right:1px solid var(--line-2); padding-right:14px; position:sticky; top:0}
+  .setnav .nh{font-family:var(--mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); padding:2px 10px 6px}
+  .setnav button{display:flex; align-items:center; gap:8px; text-align:left; font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; background:none; border:none; color:var(--ink-2); padding:9px 10px; cursor:pointer; border-left:2px solid transparent}
+  .setnav button svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.5}
+  .setnav button:hover{color:var(--ink); background:var(--paper-2)}
+  .setnav button.on{color:var(--russet); border-left-color:var(--russet); background:var(--paper-2)}
+  .setmain{flex:1; min-width:0}
   .secthead{font-family:var(--serif); font-size:19px; font-weight:500; margin:6px 0 10px}
   .prj{border:1px solid var(--line-2); border-left-width:3px; padding:13px 15px; margin-bottom:10px; background:var(--paper)}
-  .prj.act{border-left-color:var(--teal)}
+  .prj.act{border-left-color:var(--ok)}
   .prj .ph{display:flex; align-items:center; gap:10px}
   .prj .pn{font-family:var(--serif); font-size:17px; font-weight:500}
   .prj .pbadge{margin-left:auto}
@@ -194,6 +199,27 @@
   .addprj .af{display:flex; gap:8px; margin-top:9px} .addprj .af input{flex:1; font-family:var(--sans); font-size:13px; border:1px solid var(--line-2); background:var(--paper); padding:8px 11px; outline:none}
   .addprj .af input:focus{border-color:var(--ink-2)}
   .addprj button{font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; background:var(--teal); color:var(--paper); border:none; padding:0 16px; cursor:pointer}
+  /* Ask — chat */
+  .chat{display:flex; flex-direction:column; height:100%}
+  .chat-msgs{flex:1; overflow:auto; display:flex; flex-direction:column; gap:12px; padding-bottom:8px}
+  .chat-empty{margin:auto; max-width:420px; text-align:center; font-family:var(--mono); font-size:12px; color:var(--ink-3); line-height:1.7}
+  .cmsg{max-width:82%; padding:10px 13px; line-height:1.55; font-size:13.5px; overflow-wrap:anywhere}
+  .cmsg.user{align-self:flex-end; background:var(--ink); color:var(--paper)}
+  .cmsg.assistant{align-self:flex-start; background:var(--paper); border:1px solid var(--line-2); border-left:3px solid var(--teal)}
+  .cmsg.error{align-self:flex-start; background:#f3e3d8; border:1px solid var(--line-2); border-left:3px solid var(--err); color:var(--ink); font-family:var(--mono); font-size:12px}
+  .cmsg p{margin:0 0 8px} .cmsg p:last-child{margin:0}
+  .cmsg code{font-family:var(--mono); font-size:12px; background:var(--paper-3); padding:1px 5px}
+  .cmsg pre{font-family:var(--mono); font-size:12px; background:var(--paper-3); border:1px solid var(--line-2); padding:9px 11px; overflow:auto; white-space:pre-wrap; margin:0 0 8px}
+  .cmsg pre code{background:none; padding:0}
+  .cmsg .think{display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:12px; color:var(--ink-2)}
+  .cmsg .dots{width:14px;height:14px;border:2px solid var(--line-2); border-top-color:var(--teal); border-radius:50%; animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .chat-ctx{font-family:var(--mono); font-size:10px; color:var(--ink-3); padding:6px 2px}
+  .chat-in{display:flex; gap:8px; border-top:1px solid var(--line-2); padding-top:12px}
+  .chat-in textarea{flex:1; resize:none; font-family:var(--sans); font-size:14px; border:1px solid var(--line-2); background:var(--paper); padding:10px 12px; outline:none; color:var(--ink); max-height:140px; line-height:1.4}
+  .chat-in textarea:focus{border-color:var(--ink-2)}
+  .chat-in button{font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; background:var(--teal); color:var(--paper); border:none; padding:0 18px; cursor:pointer}
+  .chat-in button:disabled{background:var(--ink-3); cursor:default}
   .toast{position:fixed; left:50%; bottom:46px; transform:translateX(-50%); background:var(--ink); color:var(--paper); font-family:var(--mono); font-size:12px; padding:9px 16px; z-index:50; opacity:0; transition:opacity .2s; pointer-events:none}
   .toast.show{opacity:1}
   .smd pre{font-family:var(--mono); font-size:11.5px; line-height:1.55; background:var(--paper); border:1px solid var(--line-2); padding:14px; white-space:pre-wrap; word-break:break-word; max-height:52vh; overflow:auto}
@@ -203,7 +229,7 @@
   .rec .rh{display:flex; align-items:center; gap:10px}
   .rec .rname{font-family:var(--serif); font-size:16px; font-weight:500; word-break:break-word}
   .rec .rstatus{margin-left:auto; font-family:var(--mono); font-size:9px; letter-spacing:.07em; text-transform:uppercase; padding:2px 8px; border:1px solid var(--line-2); color:var(--ink-2); white-space:nowrap}
-  .rec .rstatus[data-st="done"],.rec .rstatus[data-st="resolved"],.rec .rstatus[data-st="accepted"]{color:var(--teal); border-color:var(--teal)}
+  .rec .rstatus[data-st="done"],.rec .rstatus[data-st="resolved"],.rec .rstatus[data-st="accepted"]{color:var(--paper); background:var(--ok); border-color:var(--ok)}
   .rec .rstatus[data-st="open"]{color:var(--russet); border-color:var(--russet)}
   .rec .rstatus[data-st="superseded"]{color:var(--ink-3); text-decoration:line-through}
   .rec .rsum{font-family:var(--serif); font-style:italic; font-size:13.5px; color:var(--ink-2); margin:7px 0; line-height:1.5}
@@ -241,6 +267,7 @@
       <div class="st" data-view="capsule" title="Capsule"><svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="1.5"/><path d="M8 9h8 M8 13h6"/></svg>Capsule</div>
       <div class="st" data-view="diag" title="Diagnostics"><svg viewBox="0 0 24 24"><path d="M12 4 21 19 3 19 Z"/><path d="M12 10v4 M12 16.5v.2"/></svg>Diag</div>
       <div class="st" data-view="journal" title="Journal — decisions, milestones, tasks, questions"><svg viewBox="0 0 24 24"><path d="M6 4h10l3 3v13H6z"/><path d="M9 9h7 M9 12.5h7 M9 16h4"/></svg>Journal</div>
+      <div class="st" data-view="ask" title="Ask — chat with the graph (Ollama)"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-4 4v-4H4z"/><path d="M8.5 10.5h.2 M12 10.5h.2 M15.5 10.5h.2"/></svg>Ask</div>
       <div class="rail-sp"></div>
       <div class="st" data-view="settings" title="Settings — projects, indexing, plugins"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3 M12 18v3 M3 12h3 M18 12h3 M5.6 5.6l2 2 M16.4 16.4l2 2 M18.4 5.6l-2 2 M7.6 16.4l-2 2"/></svg>Settings</div>
     </nav>
@@ -748,6 +775,7 @@ function openStation(v){
   else if(v==='capsule'){ $('#st-title').textContent='Capsule'; $('#st-sub').textContent='synthesize token-optimised context'; renderCapsuleStation(body); }
   else if(v==='diag'){ $('#st-title').textContent='Diagnostics'; $('#st-sub').textContent='graph integrity findings'; renderDiagStation(body); }
   else if(v==='journal'){ $('#st-title').textContent='Journal'; $('#st-sub').textContent='decisions · milestones · tasks · questions'; renderJournal(body); }
+  else if(v==='ask'){ $('#st-title').textContent='Ask'; $('#st-sub').textContent='chat with the graph · grounded by Ollama'; renderAsk(body); }
   else if(v==='settings'){ $('#st-title').textContent='Settings'; $('#st-sub').textContent='projects · indexing · plugins'; renderSettings(body); }
 }
 
@@ -852,7 +880,7 @@ async function loadPlugins(){
     el.innerHTML = _plugins.length===0 ? '<div class="sempty">No plugins installed. Drop a .zip above to add one.</div>' :
       _plugins.map((p,i)=>{ const st=p.state||p.State||''; const bc=badgeClass(st); const active=(p.active??p.Active)||st.toLowerCase()==='active';
         const ext=(p.extensions||p.Extensions||[]).join(', ');
-        return `<div class="pcard" style="border-left-color:var(--${bc==='active'?'teal':bc==='failed'?'err':bc==='disabled'?'ink-3':'gold'})">
+        return `<div class="pcard" style="border-left-color:var(--${bc==='active'?'ok':bc==='failed'?'err':bc==='disabled'?'ink-3':'gold'})">
           <div class="ph"><span class="pname">${escapeHtml(p.name||p.Name||p.id)}</span><span class="pver">v${escapeHtml(p.version||p.Version||'?')}</span><span class="pbadge ${bc}" style="margin-left:auto">${escapeHtml(st)}</span></div>
           ${(p.description||p.Description)?`<div class="pdesc">${escapeHtml(p.description||p.Description)}</div>`:''}
           ${ext?`<div class="pext">handles: ${escapeHtml(ext)}</div>`:''}
@@ -890,12 +918,18 @@ async function pluginOp(op, i){
 
 /* --- Settings (projects · indexing · plugins) --- */
 let _setTab='projects';
+const SET_SECTIONS=[
+  {t:'projects', label:'Projects', icon:'<rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="9" width="8" height="11" rx="1"/><path d="M7 11v4h6"/>'},
+  {t:'plugins',  label:'Plugins',  icon:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="13" y="13" width="6" height="6" rx="1"/><path d="M10 7h5v6"/>'}
+];
 function renderSettings(body){
-  body.innerHTML = `<div class="seg" id="set-seg">
-      <button data-t="projects" class="${_setTab==='projects'?'on':''}">Projects</button>
-      <button data-t="plugins" class="${_setTab==='plugins'?'on':''}">Plugins</button>
-    </div><div id="set-body"></div>`;
-  body.querySelectorAll('#set-seg button').forEach(b=>b.onclick=()=>{ _setTab=b.getAttribute('data-t'); renderSettings(body); });
+  body.innerHTML = `<div class="setwrap">
+    <nav class="setnav" id="set-nav"><div class="nh">Settings</div>
+      ${SET_SECTIONS.map(s=>`<button data-t="${s.t}" class="${_setTab===s.t?'on':''}"><svg viewBox="0 0 24 24">${s.icon}</svg>${s.label}</button>`).join('')}
+    </nav>
+    <div class="setmain" id="set-body"></div>
+  </div>`;
+  body.querySelectorAll('#set-nav button').forEach(b=>b.onclick=()=>{ _setTab=b.getAttribute('data-t'); renderSettings(body); });
   const sb=$('#set-body');
   if(_setTab==='plugins') renderPlugins(sb); else renderSettingsProjects(sb);
 }
@@ -921,7 +955,7 @@ function paintProjects(){
       const sem=(p.semanticCSharp ?? p.SemanticCSharp); const isCur=nm===state.project;
       const opt=(val,lbl)=>`<option value="${val}" ${String(sem)===val?'selected':''}>${lbl}</option>`;
       return `<div class="prj ${active?'act':''}">
-        <div class="ph"><span class="pn">${escapeHtml(nm)}</span>${active?'<span class="pbadge active">active</span>':isCur?'<span class="pbadge installed">viewing</span>':''}</div>
+        <div class="ph"><span class="pn">${escapeHtml(nm)}</span>${active?'<span class="pbadge active">active</span>':isCur?'<span class="pbadge view">viewing</span>':''}</div>
         <div class="pp">${escapeHtml(path)}</div>
         <div class="prow">
           <span class="seglbl">Indexing</span>
@@ -982,6 +1016,76 @@ async function deleteProjectUI(i){
     if(r.ok){ toast(j.message||`Removed ${nm}`); await refreshProjects(); renderProjMenu(); paintProjects(); }
     else toast('Delete failed');
   }catch(e){ toast('Delete failed'); }
+}
+
+/* --- Ask (AI chat grounded in the graph, via Ollama /api/ask) --- */
+let _chatHist=[], _chatBusy=false;
+function mdLite(s){
+  let h=escapeHtml(s);
+  h=h.replace(/```([\s\S]*?)```/g,(m,c)=>`<pre><code>${c.replace(/^\n/,'')}</code></pre>`);
+  h=h.replace(/`([^`]+)`/g,'<code>$1</code>');
+  h=h.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  return h.split(/\n{2,}/).map(p=>/<pre>/.test(p)?p:`<p>${p.replace(/\n/g,'<br>')}</p>`).join('');
+}
+function renderAsk(body){
+  body.innerHTML = `<div class="chat">
+    <div class="chat-msgs" id="chat-msgs"></div>
+    <div class="chat-ctx" id="chat-ctx"></div>
+    <form class="chat-in" id="chat-form">
+      <textarea id="chat-q" rows="1" placeholder="Ask anything about ${escapeHtml(state.project||'this project')}…" autocomplete="off"></textarea>
+      <button type="submit" id="chat-send">Send</button>
+    </form></div>`;
+  const msgs=$('#chat-msgs');
+  if(_chatHist.length===0){
+    msgs.innerHTML=`<div class="chat-empty">Ask about <b>${escapeHtml(state.project||'this project')}</b> — answers are grounded in the indexed graph and generated locally by Ollama.<br><br>e.g. “How does authentication work?” · “What calls the indexer?”</div>`;
+  } else { _chatHist.forEach(m=>appendChat(m.role, m.role==='user'?escapeHtml(m.text):mdLite(m.text))); }
+  const ta=$('#chat-q');
+  ta.oninput=()=>{ ta.style.height='auto'; ta.style.height=Math.min(140,ta.scrollHeight)+'px'; };
+  ta.onkeydown=e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); $('#chat-form').requestSubmit(); } };
+  $('#chat-form').onsubmit=e=>{ e.preventDefault(); sendChat(); };
+  setTimeout(()=>ta.focus(),40);
+}
+function appendChat(role, html){
+  const el=document.createElement('div'); el.className='cmsg '+role; el.innerHTML=html;
+  const m=$('#chat-msgs'); m.appendChild(el); m.scrollTop=m.scrollHeight; return el;
+}
+const CHAT_STOP=new Set(['how','does','do','did','the','a','an','is','are','was','were','what','why','when','where','which','who','of','to','in','on','for','and','or','with','this','that','these','those','it','its','can','should','would','could','project','code','codebase','work','works','working','use','uses','using','about','from','into','within','tell','me','show','explain','my']);
+function chatKeywords(q){ return [...new Set(q.toLowerCase().replace(/[^a-z0-9_\s]/g,' ').split(/\s+/).filter(w=>w.length>=3 && !CHAT_STOP.has(w)))]; }
+// Ground each question in the most relevant nodes: the selection + current map + keyword search hits.
+async function gatherContext(q){
+  const ids=new Set();
+  if(window.__sel?.id) ids.add(window.__sel.id);
+  for(const n of G.nodes.values()){ ids.add(n.id); if(ids.size>=6) break; }
+  const kws=chatKeywords(q); const terms=(kws.length?kws:[q.trim()]).slice(0,4);
+  for(const t of terms){
+    if(ids.size>=14) break;
+    try{ const hits=await (await fetch(`/api/search?q=${encodeURIComponent(t)}&limit=6`,{headers:H()})).json();
+      (Array.isArray(hits)?hits:[]).forEach(r=>{ const n=r.node||r.Node||r; const id=n.id||n.Id; if(id) ids.add(id); });
+    }catch(e){}
+  }
+  return [...ids].slice(0,14);
+}
+async function sendChat(){
+  if(_chatBusy) return;
+  const ta=$('#chat-q'); const q=(ta.value||'').trim(); if(!q) return;
+  const empty=$('#chat-msgs .chat-empty'); if(empty) empty.remove();
+  appendChat('user', escapeHtml(q)); _chatHist.push({role:'user',text:q});
+  ta.value=''; ta.style.height='auto';
+  _chatBusy=true; $('#chat-send').disabled=true;
+  const thinking=appendChat('assistant', '<div class="think"><span class="dots"></span>Thinking…</div>');
+  $('#chat-ctx').textContent='Gathering context…';
+  const ids=await gatherContext(q);
+  if(ids.length===0){ thinking.className='cmsg error'; thinking.textContent='No graph context found — index this project first (the Reindex button, top-right).'; _chatBusy=false; $('#chat-send').disabled=false; return; }
+  $('#chat-ctx').textContent=`Grounded in ${ids.length} node(s).`;
+  const recent=_chatHist.slice(-6);
+  const composed=recent.length>1 ? recent.map(m=>`${m.role==='user'?'User':'Assistant'}: ${m.text}`).join('\n') : q;
+  try{
+    const r=await fetch('/api/ask',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify({query:composed, nodeIds:ids})});
+    if(r.ok){ const d=await r.json(); const ans=d.response||d.Response||'No answer.'; _chatHist.push({role:'assistant',text:ans}); thinking.className='cmsg assistant'; thinking.innerHTML=mdLite(ans); }
+    else { thinking.className='cmsg error'; thinking.textContent = r.status>=500 ? "Couldn't reach the AI backend. Make sure Ollama is running with the configured model, then try again." : `Error: ${await r.text().catch(()=>r.status)}`; }
+  }catch(e){ thinking.className='cmsg error'; thinking.textContent="Couldn't reach the AI backend. Make sure Ollama is running, then try again."; }
+  $('#chat-msgs').scrollTop=$('#chat-msgs').scrollHeight;
+  _chatBusy=false; $('#chat-send').disabled=false;
 }
 
 /* --- Journal (interaction records, kept out of the graph) --- */
