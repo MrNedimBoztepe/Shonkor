@@ -96,6 +96,10 @@
   .capsule pre{font-family:var(--mono); font-size:11px; line-height:1.5; background:var(--paper); border:1px solid var(--line-2); padding:11px; max-height:340px; overflow:auto; white-space:pre-wrap; word-break:break-word}
   .copybtn{font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:uppercase; background:var(--ink); color:var(--paper); border:none; padding:6px 12px; cursor:pointer; margin-top:7px}
   .spin{font-family:var(--mono); font-size:11px; color:var(--ink-2); margin-top:8px}
+  /* reliable wrapping for long ids / relations / paths inside the inspector boxes */
+  .insp .kind, .ref, .ref .rel, .ref .rn, .ref .rt, .step, .step .sd, .step .sn, .step .st-t,
+  .diag .cd, .diag .ms, .detail .loc, .detail .hint{overflow-wrap:anywhere; word-break:break-word}
+  .grp{flex-wrap:wrap}
   .lbl{font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2); margin:18px 0 8px}
   .diag{border:1px solid var(--line-2); border-left-width:3px; padding:8px 10px; margin-bottom:7px; background:var(--paper)}
   .diag .sv{font-family:var(--mono); font-size:9px; font-weight:500; text-transform:uppercase; letter-spacing:.08em}
