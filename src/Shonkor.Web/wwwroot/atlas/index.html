@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shonkor · Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400&family=Hanken+Grotesk:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#efe7d6; --paper-2:#e7ddc8; --paper-3:#e2d7bf; --ink:#1c1a14; --ink-2:#4a463a; --ink-3:#736e5d;
+    --line:#cdc1a6; --line-2:#bcae8c;
+    --russet:#b14a26; --teal:#1f4d44; --gold:#a9803a; --project:#5a5230;
+    --warn:#b14a26; --err:#8f1d1d; --info:#1f4d44;
+    --sans:'Hanken Grotesk',sans-serif; --serif:'Fraunces',serif; --mono:'Spline Sans Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--sans); color:var(--ink); background:var(--paper);
+    background-image:linear-gradient(var(--line) .5px,transparent .5px),linear-gradient(90deg,var(--line) .5px,transparent .5px);
+    background-size:34px 34px; background-position:-1px -1px; -webkit-font-smoothing:antialiased; overflow:hidden}
+  .app{display:grid; grid-template-rows:60px 1fr 30px; height:100vh}
+  header{display:flex; align-items:center; gap:18px; padding:0 20px; border-bottom:1px solid var(--line-2); background:rgba(239,231,214,.9)}
+  .brand{display:flex; align-items:center; gap:11px}
+  .wordmark{font-family:var(--serif); font-weight:500; font-size:22px}
+  .tagline{font-family:var(--mono); font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-2)}
+  .spacer{flex:1}
+  .cmdk{display:flex;align-items:center;gap:10px; font-size:13px; color:var(--ink-2);
+    border:1px solid var(--line-2); padding:0 12px; height:38px; min-width:300px; background:var(--paper)}
+  .cmdk input{border:none;background:none;outline:none;font:inherit;color:var(--ink);width:100%}
+  .cmdk kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line-2); padding:1px 6px; color:var(--ink-2)}
+  .proj{display:flex;align-items:center;gap:8px; font-family:var(--mono); font-size:12px;
+    border:1px solid var(--line-2); padding:0 12px; height:38px; background:var(--paper-2); cursor:pointer}
+  .proj .dot{width:7px;height:7px;border-radius:50%;background:var(--teal)}
+  main{display:grid; grid-template-columns:62px 1fr 326px; overflow:hidden}
+  .rail{border-right:1px solid var(--line-2); display:flex; flex-direction:column; align-items:center; padding-top:14px; gap:4px; background:rgba(231,221,200,.5)}
+  .st{width:44px;height:46px; display:flex;flex-direction:column;align-items:center;justify-content:center; gap:3px;
+     font-family:var(--mono); font-size:8px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-2); cursor:pointer; border-radius:3px}
+  .st svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.4}
+  .st:hover{background:var(--paper-2); color:var(--ink)}
+  .st.active{color:var(--russet); background:var(--paper-2); box-shadow:inset 2px 0 0 var(--russet)}
+
+  .stage{position:relative; overflow:auto; padding:26px 30px}
+  .stage h1{font-family:var(--serif); font-weight:500; font-size:30px; line-height:1.1}
+  .stage .sub{font-family:var(--mono); font-size:11px; color:var(--ink-2); margin-top:3px}
+  .placeholder{margin-top:18px; border:1px dashed var(--line-2); padding:10px 14px; font-family:var(--mono); font-size:11px; color:var(--ink-3); background:rgba(231,221,200,.4)}
+
+  .territories{display:flex; flex-wrap:wrap; gap:16px; margin-top:22px}
+  .terr{position:relative; min-width:200px; flex:1 1 220px; border:1px solid var(--line-2); padding:16px 18px; background:rgba(239,231,214,.6)}
+  .terr::before{content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--c)}
+  .terr .nm{font-family:var(--serif); font-style:italic; font-size:20px; color:var(--c)}
+  .terr .ct{font-family:var(--serif); font-weight:500; font-size:30px; line-height:1.1; margin-top:6px}
+  .terr .lb{font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-2)}
+  .terr .bar{height:5px; background:var(--paper-3); margin-top:12px}
+  .terr .bar i{display:block; height:100%; background:var(--c)}
+
+  .results{margin-top:8px}
+  .res{display:flex; align-items:baseline; gap:12px; padding:9px 10px; border-bottom:1px solid var(--line); cursor:pointer}
+  .res:hover{background:rgba(231,221,200,.6)}
+  .res .ty{font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--teal); min-width:74px}
+  .res .nm{font-weight:500}
+  .res .lo{font-family:var(--mono); font-size:11px; color:var(--ink-2); margin-left:auto}
+
+  .insp{border-left:1px solid var(--line-2); padding:18px; overflow:auto; background:rgba(231,221,200,.4)}
+  .insp .empty{font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:6px}
+  .insp .kind{font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--russet)}
+  .insp h2{font-family:var(--serif); font-weight:500; font-size:24px; line-height:1.15; margin:3px 0 2px; word-break:break-word}
+  .insp .loc{font-family:var(--mono); font-size:11px; color:var(--ink-2); word-break:break-all}
+  .insp .sum{font-family:var(--serif); font-style:italic; font-size:14px; color:var(--ink-2); margin-top:12px; line-height:1.5}
+  .lbl{font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2); margin:18px 0 8px}
+  .diag{border:1px solid var(--line-2); border-left-width:3px; padding:8px 10px; margin-bottom:7px; background:var(--paper)}
+  .diag .sv{font-family:var(--mono); font-size:9px; font-weight:500; text-transform:uppercase; letter-spacing:.08em}
+  .diag .cd{font-family:var(--mono); font-size:10px; color:var(--ink-2)}
+  .diag .ms{font-size:12.5px; line-height:1.45; margin-top:3px}
+  .diag.warning{border-left-color:var(--warn)} .diag.warning .sv{color:var(--warn)}
+  .diag.error{border-left-color:var(--err)} .diag.error .sv{color:var(--err)}
+  .diag.info{border-left-color:var(--info)} .diag.info .sv{color:var(--info)}
+
+  footer{display:flex; align-items:center; gap:18px; padding:0 20px; border-top:1px solid var(--line-2);
+    font-family:var(--mono); font-size:11px; color:var(--ink-2); background:rgba(231,221,200,.6)}
+  footer b{color:var(--ink); font-weight:500}
+  footer .r{margin-left:auto; display:flex; gap:16px}
+  .skel{opacity:.4}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="17" r="11.2" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
+        <path d="M6 12 Q16 3 26 12" fill="none" stroke="var(--russet)" stroke-width="2.1" stroke-linecap="round"/>
+        <circle cx="16" cy="17" r="3.4" fill="var(--ink)"/>
+        <path d="M16 17 L25 26 M16 17 L7 26 M16 17 L16 30" stroke="var(--ink)" stroke-width="1.1"/>
+      </svg>
+      <div><span class="wordmark">Shonkor</span> &nbsp;<span class="tagline">precision graph atlas</span></div>
+    </div>
+    <div class="spacer"></div>
+    <label class="cmdk"><span style="font-family:var(--mono)">⌕</span>
+      <input id="q" type="text" placeholder="Find a symbol, ask the graph…" autocomplete="off" aria-label="Search the graph"/>
+      <kbd>⌘K</kbd></label>
+    <div class="proj" id="proj"><span class="dot"></span> <span id="proj-name">—</span> <span style="opacity:.5">▾</span></div>
+  </header>
+
+  <main>
+    <nav class="rail">
+      <div class="st active" data-view="atlas" title="Atlas"><svg viewBox="0 0 24 24"><circle cx="7" cy="8" r="2.2"/><circle cx="17" cy="7" r="2.2"/><circle cx="12" cy="16" r="2.2"/><path d="M9 9 16 8 M8.5 10 11.5 14 M15 9 13 14"/></svg>Atlas</div>
+      <div class="st" data-view="hunt" title="Hunt"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 20 20"/></svg>Hunt</div>
+      <div class="st" data-view="capsule" title="Capsule"><svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="1.5"/><path d="M8 9h8 M8 13h6"/></svg>Capsule</div>
+      <div class="st" data-view="diag" title="Diagnostics"><svg viewBox="0 0 24 24"><path d="M12 4 21 19 3 19 Z"/><path d="M12 10v4 M12 16.5v.2"/></svg>Diag</div>
+      <div class="st" data-view="plugins" title="Plugins"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="6" height="6" rx="1"/><rect x="13" y="13" width="6" height="6" rx="1"/><path d="M11 8h4v5"/></svg>Plugins</div>
+    </nav>
+
+    <section class="stage" id="stage">
+      <h1 id="stage-title">Atlas</h1>
+      <div class="sub" id="stage-sub">Loading the survey…</div>
+      <div class="placeholder">Interactive graph engine arrives in the next build — this overview is live from the indexed graph.</div>
+      <div class="territories" id="territories"></div>
+      <div class="results" id="results"></div>
+    </section>
+
+    <aside class="insp" id="insp">
+      <div class="kind">inspector</div>
+      <div class="empty">Search for a symbol or pick a node to inspect it. Diagnostics for this project appear below.</div>
+      <div class="lbl">Diagnostics</div>
+      <div id="diaglist"><div class="empty skel">Loading…</div></div>
+    </aside>
+  </main>
+
+  <footer>
+    <span><b id="f-nodes">—</b> nodes</span><span>·</span>
+    <span><b id="f-edges">—</b> edges</span><span>·</span>
+    <span id="f-calls">—</span>
+    <div class="r">
+      <span id="f-diag">— diagnostics</span>
+      <span id="f-sem">—</span>
+    </div>
+  </footer>
+</div>
+
+<script>
+const state = { project: '' };
+const H = () => ({ 'X-Project-Name': state.project || '' });
+const $ = s => document.querySelector(s);
+const fmt = n => (n ?? 0).toLocaleString('en-US');
+const TERR = [
+  { key:'Class', nm:'Classes', c:'#1f4d44' },
+  { key:'Method', nm:'Methods', c:'#b14a26' },
+  { key:'Interface', nm:'Interfaces', c:'#5a5230' },
+  { key:'MarkdownSection', nm:'Docs', c:'#a9803a' }
+];
+
+async function boot(){
+  try{
+    const p = await (await fetch('/api/projects')).json();
+    state.project = p.activeProject || (p.projects?.[0]?.name) || '';
+    $('#proj-name').textContent = state.project || 'none';
+  }catch(e){ $('#proj-name').textContent = 'offline'; }
+  loadStats(); loadDiagnostics();
+}
+
+async function loadStats(){
+  try{
+    const s = await (await fetch('/api/stats',{headers:H()})).json();
+    $('#f-nodes').textContent = fmt(s.totalNodes);
+    $('#f-edges').textContent = fmt(s.totalEdges);
+    const calls = (s.edgesByRelation && s.edgesByRelation.CALLS) || 0;
+    $('#f-calls').textContent = calls > 0 ? 'semantic · CALLS indexed' : 'syntactic mode';
+    $('#f-sem').textContent = calls > 0 ? 'semantic ✓' : 'semantic ✗';
+    $('#stage-sub').textContent = `${fmt(s.totalNodes)} nodes · ${fmt(s.totalEdges)} edges · territories by node type`;
+    renderTerritories(s.nodesByType || {});
+  }catch(e){ $('#stage-sub').textContent = 'Could not load graph stats.'; }
+}
+
+function renderTerritories(byType){
+  const max = Math.max(1, ...TERR.map(t => byType[t.key] || 0));
+  $('#territories').innerHTML = TERR.map(t => {
+    const n = byType[t.key] || 0;
+    return `<div class="terr" style="--c:${t.c}">
+      <div class="nm">${t.nm}</div>
+      <div class="ct">${fmt(n)}</div>
+      <div class="lb">${t.key}</div>
+      <div class="bar"><i style="width:${Math.round(n/max*100)}%"></i></div>
+    </div>`;
+  }).join('');
+}
+
+async function loadDiagnostics(){
+  try{
+    const d = await (await fetch('/api/diagnostics?minSeverity=warning',{headers:H()})).json();
+    const list = d.diagnostics || [];
+    $('#f-diag').textContent = `${fmt(d.total ?? list.length)} diagnostics`;
+    const el = $('#diaglist');
+    if(list.length === 0){ el.innerHTML = '<div class="empty">No warnings or errors flagged.</div>'; return; }
+    el.innerHTML = list.slice(0,40).map(x => {
+      const sv = (x.severity||'Info').toLowerCase();
+      return `<div class="diag ${sv}">
+        <span class="sv">${escapeHtml(x.severity||'')}</span> <span class="cd">${escapeHtml(x.code||'')}</span>
+        <div class="ms">${escapeHtml(x.message||'')}</div>
+      </div>`;
+    }).join('');
+  }catch(e){ $('#f-diag').textContent = '— diagnostics'; $('#diaglist').innerHTML='<div class="empty">Diagnostics unavailable.</div>'; }
+}
+
+let searchTimer;
+$('#q').addEventListener('input', e => {
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  if(q.length < 2){ $('#results').innerHTML=''; return; }
+  searchTimer = setTimeout(() => runSearch(q), 220);
+});
+async function runSearch(q){
+  try{
+    const res = await (await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=20`,{headers:H()})).json();
+    const items = Array.isArray(res) ? res : [];
+    $('#stage-title').textContent = `Hunt · “${q}”`;
+    $('#territories').style.display='none';
+    $('#results').innerHTML = items.length === 0 ? '<div class="placeholder">No matches.</div>' :
+      items.map((r,i) => {
+        const n = r.node || r.Node || r;
+        return `<div class="res" data-i="${i}">
+          <span class="ty">${escapeHtml(n.type||n.Type||'')}</span>
+          <span class="nm">${escapeHtml(n.name||n.Name||'')}</span>
+          <span class="lo">${escapeHtml(shortLoc(n))}</span>
+        </div>`;
+      }).join('');
+    [...document.querySelectorAll('.res')].forEach(el => el.addEventListener('click', () => {
+      const n = (items[el.dataset.i].node || items[el.dataset.i].Node || items[el.dataset.i]);
+      inspect(n);
+    }));
+  }catch(e){ $('#results').innerHTML='<div class="placeholder">Search failed.</div>'; }
+}
+function shortLoc(n){
+  const f = n.filePath||n.FilePath||''; const l = n.startLine||n.StartLine;
+  const base = f ? f.split(/[\\/]/).pop() : (n.id||n.Id||'');
+  return l ? `${base}:${l}` : base;
+}
+function inspect(n){
+  const insp = $('#insp');
+  insp.innerHTML = `
+    <div class="kind">${escapeHtml(n.type||n.Type||'node')}</div>
+    <h2>${escapeHtml(n.name||n.Name||'—')}</h2>
+    <div class="loc">${escapeHtml(shortLoc(n))}</div>
+    ${ (n.summary||n.Summary) ? `<div class="sum">${escapeHtml(n.summary||n.Summary)}</div>` : '' }
+    <div class="lbl">Actions</div>
+    <div class="placeholder" style="margin:0">references · capsule · trace — wired in the next build.</div>`;
+}
+
+function escapeHtml(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+document.addEventListener('keydown', e => {
+  if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); $('#q').focus(); }
+});
+boot();
+</script>
+</body>
+</html>
