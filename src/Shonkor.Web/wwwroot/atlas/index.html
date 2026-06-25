@@ -122,6 +122,11 @@
   .projmenu .pm-i:hover{background:var(--paper-2)}
   .projmenu .pm-i.sel{color:var(--teal)} .projmenu .pm-i.sel::before{content:"●"; font-size:8px}
   .projmenu .pm-i:not(.sel)::before{content:"○"; font-size:8px; color:var(--line-2)}
+  .projmenu .pm-sep{height:1px; background:var(--line-2); margin:4px 0}
+  .projmenu .pm-act{padding:9px 12px; cursor:pointer; font-family:var(--mono); font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:var(--russet)}
+  .projmenu .pm-act:hover{background:var(--paper-2)}
+  .projmenu .pm-act.busy{color:var(--ink-3); cursor:default; background:none}
+  .projmenu .pm-act .sub{display:block; font-family:var(--sans); text-transform:none; letter-spacing:0; color:var(--ink-3); font-size:10px; margin-top:2px}
 
   /* station overlay */
   .station{position:absolute; inset:0; background:var(--paper); z-index:6; display:none; flex-direction:column; overflow:hidden}
@@ -646,13 +651,16 @@ function toast(msg, ms=2400){ const t=$('#toast'); t.textContent=msg; t.classLis
 /* ===================== PROJECT SWITCHER ===================== */
 function renderProjMenu(){
   const m=$('#projmenu');
-  m.innerHTML = `<div class="pm-h">Projects</div>` + (state.projects||[]).map(p=>{
+  const items = (state.projects||[]).map(p=>{
     const nm=p.name||p.Name||p; const sel=nm===state.project?'sel':'';
     return `<div class="pm-i ${sel}" data-p="${escapeHtml(nm)}">${escapeHtml(nm)}</div>`;
   }).join('') || '<div class="pm-i">No projects</div>';
+  m.innerHTML = `<div class="pm-h">Projects</div>${items}<div class="pm-sep"></div>` +
+    `<div class="pm-act ${_indexing?'busy':''}" id="pm-reindex">${_indexing?'⟳ reindexing…':'⟳ Reindex'} ${escapeHtml(state.project||'')}<span class="sub">re-scan the project's source into the graph</span></div>`;
   m.querySelectorAll('.pm-i[data-p]').forEach(el=>el.onclick=()=>switchProject(el.getAttribute('data-p')));
+  const rb=m.querySelector('#pm-reindex'); if(rb) rb.onclick=e=>{ e.stopPropagation(); reindexProject(); };
 }
-$('#proj').onclick = e=>{ e.stopPropagation(); $('#projmenu').classList.toggle('open'); };
+$('#proj').onclick = e=>{ e.stopPropagation(); const m=$('#projmenu'); const open=!m.classList.contains('open'); if(open) renderProjMenu(); m.classList.toggle('open', open); };
 document.addEventListener('click', ()=>$('#projmenu').classList.remove('open'));
 function switchProject(name){
   if(!name || name===state.project){ $('#projmenu').classList.remove('open'); return; }
@@ -662,6 +670,30 @@ function switchProject(name){
   loadStats(); loadDiagnostics();
   if($('#station').classList.contains('open')) openStation(_station);
   toast(`Switched to ${name}`);
+}
+
+// Reindex (re-scan source into the graph) the active project. Incremental — only changed files
+// are reparsed — but still a long-running scan on big projects; the call resolves when it finishes.
+let _indexing=false;
+async function reindexProject(){
+  if(_indexing || !state.project) return;
+  _indexing=true; renderProjMenu();
+  toast(`Reindexing ${state.project}… this can take a while`, 600000);
+  try{
+    const r=await fetch('/api/index',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:'{}'});
+    if(r.status===409){ toast('An index scan is already running for this project.', 4000); }
+    else {
+      const j=await r.json().catch(()=>({}));
+      if(r.ok){
+        const st=j.stats||j.Stats||{}; const res=j.result||j.Result||{};
+        const scanned=(res.filesScanned??res.FilesScanned);
+        toast(`Reindexed ${state.project} — ${fmt(st.totalNodes||0)} nodes${scanned!=null?` · ${fmt(scanned)} files scanned`:''}`, 5000);
+        loadStats(); loadDiagnostics();
+        if($('#station').classList.contains('open') && (_station==='diag'||_station==='journal')) openStation(_station);
+      } else toast(typeof j==='string'?j:'Reindex failed', 4000);
+    }
+  }catch(e){ toast('Reindex failed — is the project reachable?', 4000); }
+  _indexing=false; renderProjMenu();
 }
 
 /* ===================== STATIONS ===================== */
