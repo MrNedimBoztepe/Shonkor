@@ -160,6 +160,19 @@
   .toast.show{opacity:1}
   .smd pre{font-family:var(--mono); font-size:11.5px; line-height:1.55; background:var(--paper); border:1px solid var(--line-2); padding:14px; white-space:pre-wrap; word-break:break-word; max-height:52vh; overflow:auto}
   .sempty{font-family:var(--mono); font-size:12px; color:var(--ink-3); text-align:center; padding:40px 0}
+  /* journal records */
+  .rec{border:1px solid var(--line); border-left-width:3px; padding:11px 14px; margin-bottom:8px; background:var(--paper)}
+  .rec .rh{display:flex; align-items:center; gap:10px}
+  .rec .rname{font-family:var(--serif); font-size:16px; font-weight:500; word-break:break-word}
+  .rec .rstatus{margin-left:auto; font-family:var(--mono); font-size:9px; letter-spacing:.07em; text-transform:uppercase; padding:2px 8px; border:1px solid var(--line-2); color:var(--ink-2); white-space:nowrap}
+  .rec .rstatus[data-st="done"],.rec .rstatus[data-st="resolved"],.rec .rstatus[data-st="accepted"]{color:var(--teal); border-color:var(--teal)}
+  .rec .rstatus[data-st="open"]{color:var(--russet); border-color:var(--russet)}
+  .rec .rstatus[data-st="superseded"]{color:var(--ink-3); text-decoration:line-through}
+  .rec .rsum{font-family:var(--serif); font-style:italic; font-size:13.5px; color:var(--ink-2); margin:7px 0; line-height:1.5}
+  .rec .rfoot{display:flex; align-items:center; gap:14px; margin-top:8px}
+  .rec .rloc{font-family:var(--mono); font-size:10px; color:var(--ink-3)}
+  .rec .rset{margin-left:auto; font-family:var(--mono); font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3); display:flex; align-items:center; gap:6px}
+  .rec .rset select{font-family:var(--mono); font-size:11px; border:1px solid var(--line-2); background:var(--paper); color:var(--ink); padding:3px 6px; text-transform:none; letter-spacing:0; cursor:pointer}
 </style>
 </head>
 <body>
@@ -189,6 +202,7 @@
       <div class="st" data-view="capsule" title="Capsule"><svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="1.5"/><path d="M8 9h8 M8 13h6"/></svg>Capsule</div>
       <div class="st" data-view="diag" title="Diagnostics"><svg viewBox="0 0 24 24"><path d="M12 4 21 19 3 19 Z"/><path d="M12 10v4 M12 16.5v.2"/></svg>Diag</div>
       <div class="st" data-view="plugins" title="Plugins"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="6" height="6" rx="1"/><rect x="13" y="13" width="6" height="6" rx="1"/><path d="M11 8h4v5"/></svg>Plugins</div>
+      <div class="st" data-view="journal" title="Journal — decisions, milestones, tasks, questions"><svg viewBox="0 0 24 24"><path d="M6 4h10l3 3v13H6z"/><path d="M9 9h7 M9 12.5h7 M9 16h4"/></svg>Journal</div>
     </nav>
 
     <section class="stage" id="stage">
@@ -250,6 +264,8 @@ const TERR = [
   { key:'Interface', nm:'Interfaces', c:'#5a5230' }, { key:'MarkdownSection', nm:'Docs', c:'#a9803a' }
 ];
 const PALETTE = ['#1f4d44','#b14a26','#5a5230','#a9803a','#2f6c66','#8f3d1e','#6b5a2c','#3a5a52','#94552a','#4a4636'];
+// Interaction records (decisions, milestones, tasks, questions) live in the Journal, never the graph.
+const INTERACTION = new Set(['Task','Decision','Question','Milestone']);
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 async function boot(){
@@ -327,6 +343,7 @@ const G = (() => {
     const ids = new Set();
     for(const n of capped){
       const id = n.id||n.Id; if(!id||nodes.has(id)) continue;
+      if(INTERACTION.has(n.type||n.Type||'')) continue; // records belong in the Journal, not the map
       const mod = moduleOf({filePath:n.filePath||n.FilePath, type:n.type||n.Type});
       colorFor(mod);
       const node = { id, name:n.name||n.Name||id, type:n.type||n.Type||'', filePath:n.filePath||n.FilePath||'',
@@ -658,6 +675,7 @@ function openStation(v){
   else if(v==='capsule'){ $('#st-title').textContent='Capsule'; $('#st-sub').textContent='synthesize token-optimised context'; renderCapsuleStation(body); }
   else if(v==='diag'){ $('#st-title').textContent='Diagnostics'; $('#st-sub').textContent='graph integrity findings'; renderDiagStation(body); }
   else if(v==='plugins'){ $('#st-title').textContent='Plugins'; $('#st-sub').textContent='assembly extensions — install · activate'; renderPlugins(body); }
+  else if(v==='journal'){ $('#st-title').textContent='Journal'; $('#st-sub').textContent='decisions · milestones · tasks · questions'; renderJournal(body); }
 }
 
 /* --- Hunt --- */
@@ -795,6 +813,60 @@ async function pluginOp(op, i){
     toast(j.message || (r.ok?`${op} ok`:`${op} failed`));
   }catch(e){ toast(`${op} failed`); }
   loadPlugins();
+}
+
+/* --- Journal (interaction records, kept out of the graph) --- */
+const REC_ORDER=['Decision','Milestone','Task','Question'];
+const REC_COLOR={Decision:'#5a5230',Milestone:'#a9803a',Task:'#1f4d44',Question:'#b14a26'};
+const STATUSES=['open','in_progress','done','resolved','accepted','superseded'];
+let _journal=[], _jFilter='';
+function recStatus(n){ const p=n.properties||n.Properties||{}; return p.status||p.Status||''; }
+function recLoc(n){ const f=n.filePath||n.FilePath||''; const b=f?f.split(/[\\/]/).pop():''; const ln=n.startLine||n.StartLine; return b?(b+(ln?':'+ln:'')):''; }
+async function renderJournal(body){
+  body.innerHTML = `<div class="chips" id="j-tabs"></div><div id="j-list"><div class="sempty">Loading records…</div></div>`;
+  loadJournal();
+}
+async function loadJournal(){
+  const list=$('#j-list');
+  try{
+    const data=await (await fetch('/api/interactions',{headers:H()})).json();
+    _journal=(Array.isArray(data)?data:[]).map(n=>({ id:n.id||n.Id, name:n.name||n.Name||n.id||n.Id, type:n.type||n.Type||'', summary:n.summary||n.Summary||'', _n:n }));
+    const counts={}; _journal.forEach(r=>counts[r.type]=(counts[r.type]||0)+1);
+    const tabs=[`<span class="chip ${_jFilter===''?'on':''}" data-f="">all <span style="opacity:.6">${_journal.length}</span></span>`]
+      .concat(REC_ORDER.filter(t=>counts[t]).map(t=>`<span class="chip ${_jFilter===t?'on':''}" data-f="${t}">${t} <span style="opacity:.6">${counts[t]}</span></span>`));
+    $('#j-tabs').innerHTML=tabs.join('');
+    $('#j-tabs').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{ _jFilter=c.getAttribute('data-f'); paintJournal(); });
+    paintJournal();
+  }catch(e){ list.innerHTML='<div class="sempty">Records unavailable.</div>'; }
+}
+function paintJournal(){
+  $('#j-tabs').querySelectorAll('.chip').forEach(c=>c.classList.toggle('on', c.getAttribute('data-f')===_jFilter));
+  const list=$('#j-list');
+  const groups=_jFilter?[_jFilter]:REC_ORDER;
+  let html='';
+  for(const t of groups){
+    const recs=_journal.filter(r=>r.type===t); if(!recs.length) continue;
+    html+=`<div class="grp" style="color:${REC_COLOR[t]||'var(--ink-2)'}">${t}s <span class="n">${recs.length}</span></div>`;
+    html+=recs.map(r=>{ const i=_journal.indexOf(r); const st=recStatus(r._n); const loc=recLoc(r._n); const c=REC_COLOR[t]||'#4a4636';
+      const known=STATUSES.some(s=>s.toLowerCase()===st.toLowerCase());
+      const allOpts = !st ? ['',...STATUSES] : (!known ? [st,...STATUSES] : STATUSES);
+      const opts=allOpts.map(s=>`<option value="${escapeHtml(s)}" ${s.toLowerCase()===st.toLowerCase()?'selected':''}>${s===''?'— set status —':escapeHtml(s)}</option>`).join('');
+      return `<div class="rec" style="border-left-color:${c}">
+        <div class="rh"><span class="rname">${escapeHtml(r.name)}</span>${st?`<span class="rstatus" data-st="${escapeHtml(st.toLowerCase())}">${escapeHtml(st.replace(/_/g,' '))}</span>`:''}</div>
+        ${r.summary?`<div class="rsum">${escapeHtml(r.summary)}</div>`:''}
+        <div class="rfoot">${loc?`<span class="rloc">${escapeHtml(loc)}</span>`:'<span class="rloc" style="opacity:.5">no source</span>'}
+          <label class="rset">status <select onchange="setRecStatus(${i}, this.value)">${opts}</select></label></div>
+      </div>`; }).join('');
+  }
+  list.innerHTML = html || '<div class="sempty">No records yet — decisions, milestones, tasks and questions recorded via the MCP tools appear here.</div>';
+}
+async function setRecStatus(i, status){
+  const r=_journal[i]; if(!r || !status) return;
+  try{
+    const res=await fetch('/api/interactions/status',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify({Id:r.id, Status:status})});
+    if(res.ok){ const p=r._n.properties||r._n.Properties||(r._n.properties={}); p.status=status; toast(`${r.type} → ${status.replace(/_/g,' ')}`); paintJournal(); }
+    else toast('Status update failed');
+  }catch(e){ toast('Status update failed'); }
 }
 
 document.addEventListener('keydown', e => {
