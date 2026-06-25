@@ -2976,3 +2976,37 @@ select.glass-btn option {
     padding: 0 1rem;
 }
 
+
+/* --- Diagnostics panel (phase-2 post-processor output) --- */
+.red-glow { color: #ef4444; filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.4)); }
+
+.diagnostic-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+.diagnostic-head code {
+    font-size: 0.72rem;
+    opacity: 0.85;
+}
+.diag-sev {
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    border: 1px solid currentColor;
+}
+.diag-sev.error   { color: #ef4444; background: rgba(239, 68, 68, 0.12); }
+.diag-sev.warning { color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+.diag-sev.info    { color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
+
+.diagnostic-where {
+    margin-top: 0.35rem;
+    font-size: 0.68rem;
+    opacity: 0.6;
+    word-break: break-all;
+    font-family: var(--font-mono, monospace);
+}

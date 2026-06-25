@@ -14,10 +14,28 @@ namespace Shonkor.Plugins;
 ///   clrtype:X --RESOLVES_TO--> {file}::Class      (one unambiguous match)
 ///   ...all matches with confidence=ambiguous + an Info diagnostic   (several same-named definitions)
 ///   a Warning diagnostic                                            (no matching definition indexed)
+///   an Info diagnostic                                              (unresolved, but a framework/platform type)
+/// Types from platform/third-party assemblies (Sitecore.*, System.*, etc.) live in compiled DLLs, never in
+/// indexed source, so their non-resolution is expected — they are downgraded to Info instead of Warning so the
+/// warning stream stays a real signal of *your own* missing code.
 /// </summary>
 public sealed class ClrTypeResolverPostProcessor : IGraphPostProcessor
 {
     public string Name => "sitecore.clrtype-resolver";
+
+    /// <summary>
+    /// Namespace prefixes whose types are defined in platform or third-party assemblies, not in the
+    /// project's own indexed source. An unresolved reference to one of these is expected, not a problem.
+    /// </summary>
+    private static readonly string[] FrameworkPrefixes =
+    {
+        "Sitecore.", "System.", "Microsoft.", "Newtonsoft.", "Castle.", "Glass.", "Unicorn.",
+        "Rainbow.", "log4net.", "Owin.", "Lucene.", "Mvc.", "Mongo", "Solr."
+    };
+
+    private static bool IsFrameworkType(string? fullType) =>
+        !string.IsNullOrEmpty(fullType) &&
+        FrameworkPrefixes.Any(p => fullType!.StartsWith(p, StringComparison.Ordinal));
 
     public async Task<GraphEnrichment> ProcessAsync(IGraphView graph)
     {
@@ -58,6 +76,14 @@ public sealed class ClrTypeResolverPostProcessor : IGraphPostProcessor
                         $"Type '{fullType}' resolves to {matches.Count} indexed definitions; linked all (ambiguous).",
                         clr.Id));
                 }
+            }
+            else if (IsFrameworkType(fullType))
+            {
+                // Defined in a platform/third-party assembly — not expected to be in indexed source.
+                diagnostics.Add(new GraphDiagnostic(
+                    "sitecore.clrtype-external", DiagnosticSeverity.Info,
+                    $"Config references framework type '{fullType}' (defined in a platform/third-party assembly, not in indexed source).",
+                    clr.Id));
             }
             else
             {

@@ -78,6 +78,25 @@ public static class ProjectEndpoints
             }
         });
 
+        // POST /api/projects/{name}/semantic - set/clear the per-project semantic-C# override.
+        app.MapPost("/api/projects/{name}/semantic", (string name, SemanticRequest req, ProjectManager pm) =>
+        {
+            try
+            {
+                pm.SetProjectSemantic(name, req.SemanticCSharp);
+                var label = req.SemanticCSharp switch { true => "semantic", false => "syntactic", _ => "default" };
+                return Results.Ok(new { Message = $"Project '{name}' set to {label} indexing.", SemanticCSharp = req.SemanticCSharp });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return Fail("Failed to update semantic setting.", ex);
+            }
+        });
+
         // GET /api/projects/{name}/config - read a project's shonkor.json config.
         app.MapGet("/api/projects/{name}/config", (string name, ProjectManager pm) =>
         {

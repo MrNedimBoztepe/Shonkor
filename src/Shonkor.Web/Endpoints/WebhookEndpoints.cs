@@ -252,7 +252,8 @@ public static class WebhookEndpoints
                         activeParsers.AddRange(pluginLoad.Parsers);
 
                         var scanner = new GraphIndexScanner(storage, activeParsers, webhookLogger,
-                            semanticCsharp: EndpointHelpers.UseSemanticCSharp(project, config), compilationCache: compilationCache);
+                            semanticCsharp: EndpointHelpers.UseSemanticCSharp(project, config), compilationCache: compilationCache,
+                            postProcessors: pluginLoad.PostProcessors);
                         var projectConfig = pm.GetProjectConfig(project.Name);
 
                         GraphIndexScanner.IndexResult result;
