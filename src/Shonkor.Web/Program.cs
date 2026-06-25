@@ -63,6 +63,18 @@ var app = builder.Build();
 
 // --- Middleware pipeline ---
 
+// ATLAS is the primary UI: redirect the bare root to it. The legacy dashboard stays reachable at
+// /index.html. This runs before UseDefaultFiles so "/" never resolves to the old shell.
+app.Use(async (ctx, next) =>
+{
+    if (ctx.Request.Path == "/")
+    {
+        ctx.Response.Redirect("/atlas/");
+        return;
+    }
+    await next();
+});
+
 // Serve the dashboard's static assets (HTML/CSS/JS/images) FIRST, before the API-key check.
 // The dashboard shell and its assets are public; gating them behind the API key would make the
 // whole UI return 401 in production. The static-file middleware short-circuits the pipeline for
