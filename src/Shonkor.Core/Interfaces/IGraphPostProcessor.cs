@@ -24,4 +24,12 @@ public interface IGraphPostProcessor
 
     /// <summary>Runs once over the assembled graph and returns additive enrichment + diagnostics.</summary>
     Task<GraphEnrichment> ProcessAsync(IGraphView graph);
+
+    /// <summary>
+    /// Overload that also receives host context (per-project configuration). The host invokes THIS overload.
+    /// The default implementation ignores the context and forwards to <see cref="ProcessAsync(IGraphView)"/>,
+    /// so plugins built against the older single-argument contract remain binary-compatible and keep working
+    /// unchanged — only a post-processor that wants the context overrides this method.
+    /// </summary>
+    Task<GraphEnrichment> ProcessAsync(IGraphView graph, GraphPostProcessorContext context) => ProcessAsync(graph);
 }

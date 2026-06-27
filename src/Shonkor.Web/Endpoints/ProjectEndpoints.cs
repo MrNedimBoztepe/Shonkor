@@ -97,6 +97,27 @@ public static class ProjectEndpoints
             }
         });
 
+        // POST /api/projects/{name}/external-types - set the per-project external/third-party CLR-type
+        // prefixes (replaces the whole list). Applied on the next reindex.
+        app.MapPost("/api/projects/{name}/external-types", (string name, ExternalTypePrefixesRequest req, ProjectManager pm) =>
+        {
+            try
+            {
+                pm.SetProjectExternalTypePrefixes(name, req.Prefixes ?? new List<string>());
+                var saved = pm.GetProjects().FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.ExternalTypePrefixes
+                            ?? new List<string>();
+                return Results.Ok(new { Message = $"Project '{name}': {saved.Count} external type prefix(es) saved (reindex to apply).", ExternalTypePrefixes = saved });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return Fail("Failed to update external type prefixes.", ex);
+            }
+        });
+
         // GET /api/projects/{name}/config - read a project's shonkor.json config.
         app.MapGet("/api/projects/{name}/config", (string name, ProjectManager pm) =>
         {
