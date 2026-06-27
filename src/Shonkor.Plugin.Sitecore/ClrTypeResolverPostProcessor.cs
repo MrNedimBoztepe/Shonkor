@@ -29,16 +29,31 @@ public sealed class ClrTypeResolverPostProcessor : IGraphPostProcessor
     /// </summary>
     private static readonly string[] FrameworkPrefixes =
     {
-        "Sitecore.", "System.", "Microsoft.", "Newtonsoft.", "Castle.", "Glass.", "Unicorn.",
-        "Rainbow.", "log4net.", "Owin.", "Lucene.", "Mvc.", "Mongo", "Solr."
+        // Platform + core framework assemblies.
+        "Sitecore.", "System.", "Microsoft.", "Newtonsoft.", "Castle.", "log4net.", "Owin.",
+        "Lucene.", "Mvc.", "Mongo", "Solr.",
+        // Common third-party Sitecore modules (ship as compiled DLLs, never in indexed source).
+        "Glass.", "Unicorn.", "Rainbow.", "Dianoga.", "Synthesis.", "Fortis.", "Constellation.",
+        "Cognifide.", "Spe.", "Feydra.", "Leprechaun.",
+        // DI containers / utility libraries common in Sitecore Helix solutions.
+        "SimpleInjector.", "Autofac.", "Ninject.", "StructureMap.", "DryIoc.",
+        "MediatR.", "AutoMapper.", "FluentValidation."
     };
 
-    private static bool IsFrameworkType(string? fullType) =>
+    private static bool IsExternalType(string? fullType, IReadOnlyList<string> prefixes) =>
         !string.IsNullOrEmpty(fullType) &&
-        FrameworkPrefixes.Any(p => fullType!.StartsWith(p, StringComparison.Ordinal));
+        prefixes.Any(p => fullType!.StartsWith(p, StringComparison.Ordinal));
 
-    public async Task<GraphEnrichment> ProcessAsync(IGraphView graph)
+    /// <summary>Older single-argument entrypoint — runs with no user-configured external prefixes.</summary>
+    public Task<GraphEnrichment> ProcessAsync(IGraphView graph) => ProcessAsync(graph, GraphPostProcessorContext.Empty);
+
+    public async Task<GraphEnrichment> ProcessAsync(IGraphView graph, GraphPostProcessorContext context)
     {
+        // Built-in framework prefixes plus any namespaces the user declared external for this project.
+        var externalPrefixes = context.ExternalTypePrefixes is { Count: > 0 }
+            ? FrameworkPrefixes.Concat(context.ExternalTypePrefixes).ToArray()
+            : FrameworkPrefixes;
+
         var clrTypes = await graph.NodesByTypeAsync("ClrType").ConfigureAwait(false);
         if (clrTypes.Count == 0) return GraphEnrichment.Empty;
 
@@ -77,7 +92,7 @@ public sealed class ClrTypeResolverPostProcessor : IGraphPostProcessor
                         clr.Id));
                 }
             }
-            else if (IsFrameworkType(fullType))
+            else if (IsExternalType(fullType, externalPrefixes))
             {
                 // Defined in a platform/third-party assembly — not expected to be in indexed source.
                 diagnostics.Add(new GraphDiagnostic(
