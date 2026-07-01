@@ -55,3 +55,9 @@ nupkg/
 *.nupkg
 publish-test/
 publish/
+
+# Eval harness: keep golden set + baselines, ignore generated caches/reports
+eval/cache-*.json
+eval/experiment-*.json
+eval/last-report.md
+eval/last-metrics.json

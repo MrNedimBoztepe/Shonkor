@@ -51,7 +51,7 @@ public static class SearchEndpoints
             {
                 var storage = await pm.GetStorageForRequestAsync(context, ct);
 
-                var queryEmbedding = await embeddingService.GenerateEmbeddingAsync(q, ct);
+                var queryEmbedding = await embeddingService.GenerateEmbeddingAsync(q, EmbeddingKind.Query, ct);
                 if (queryEmbedding == null || queryEmbedding.Length == 0)
                 {
                     return Fail("Failed to generate embedding for the search query.", new Exception("Embedding generation returned empty."));
@@ -63,6 +63,46 @@ public static class SearchEndpoints
             catch (Exception ex)
             {
                 return Fail("Semantic search failed.", ex);
+            }
+        });
+
+        // GET /api/search/hybrid - Reciprocal Rank Fusion of FTS (BM25) + vector similarity (TICKET-008).
+        // Additive endpoint: existing /api/search and /api/search/semantic are unchanged. Falls back to
+        // FTS-only when no embedding backend is reachable, so it never hard-fails the dashboard.
+        app.MapGet("/api/search/hybrid", async (string q, int? limit, HttpContext context, ProjectManager pm, IEmbeddingService embeddingService, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(q))
+            {
+                return Results.BadRequest("Query string 'q' cannot be empty.");
+            }
+
+            try
+            {
+                var storage = await pm.GetStorageForRequestAsync(context, ct);
+                var k = limit ?? 15;
+
+                var ftsResults = await storage.SearchAsync(q, k * 2, 0, null, ct);
+
+                IReadOnlyList<SearchResult> semResults = Array.Empty<SearchResult>();
+                try
+                {
+                    var qv = await embeddingService.GenerateEmbeddingAsync(q, EmbeddingKind.Query, ct);
+                    if (qv is { Length: > 0 })
+                    {
+                        semResults = await storage.SearchSemanticAsync(qv, k * 2, ct);
+                    }
+                }
+                catch
+                {
+                    // Embedding backend down — degrade gracefully to FTS-only fusion (no throw).
+                }
+
+                var fused = HybridFusion.ReciprocalRankFusion(ftsResults, semResults, k);
+                return Results.Ok(fused);
+            }
+            catch (Exception ex)
+            {
+                return Fail("Hybrid search failed.", ex);
             }
         });
 
@@ -249,7 +289,9 @@ public static class SearchEndpoints
                 var seeds = searchResults.Select(r => r.Node.Id).ToList();
                 var (nodes, edges) = await storage.GetSubgraphAsync(seeds, request.Hops ?? 2, ct);
 
-                var markdown = synthesizer.Synthesize(nodes, edges);
+                // Budget-aware capsule (TICKET-003): seeds in full, remainder up to a ~3k-token code budget.
+                var markdown = synthesizer.Synthesize(nodes, edges,
+                    new CapsuleOptions { SeedIds = seeds, MaxContentChars = 12000, MaxNodes = 40 });
                 return Results.Ok(new { Markdown = markdown, NodeCount = nodes.Count, EdgeCount = edges.Count });
             }
             catch (Exception ex)

@@ -1,0 +1,17 @@
+[
+  { "id": "intent-capsule", "query": "context capsule synthesizer mermaid diagram", "mode": "graph", "expected": ["ContextCapsuleSynthesizer"] },
+  { "id": "intent-embedding", "query": "ollama embedding service generate vector", "mode": "graph", "expected": ["OllamaEmbeddingService"] },
+  { "id": "intent-apikey", "query": "api key middleware loopback auth bypass", "mode": "graph", "expected": ["ApiKeyMiddleware"] },
+  { "id": "intent-crosstech", "query": "cross technology linker nextjs sitecore", "mode": "graph", "expected": ["CrossTechLinker"] },
+  { "id": "intent-path", "query": "shortest path finder between two nodes", "mode": "graph", "expected": ["GraphPathFinder"] },
+  { "id": "intent-roslyn", "query": "roslyn ast parser c# classes methods", "mode": "graph", "expected": ["RoslynAstParser"] },
+  { "id": "intent-php", "query": "php module parser oxid smarty templates", "mode": "graph", "expected": ["PhpModuleParser"] },
+  { "id": "intent-markdown", "query": "markdown hierarchy parser headings sections", "mode": "graph", "expected": ["MarkdownHierarchyParser"] },
+  { "id": "intent-tokenhash", "query": "token hasher sha256 constant time compare", "mode": "graph", "expected": ["TokenHasher"] },
+  { "id": "intent-enrichment", "query": "semantic enrichment background worker circuit breaker", "mode": "graph", "expected": ["SemanticEnrichmentService"] },
+  { "id": "intent-graphql", "query": "graphql parser queries fragments", "mode": "graph", "expected": ["GraphQLParser"] },
+  { "id": "intent-js", "query": "javascript typescript parser react components imports", "mode": "graph", "expected": ["JavaScriptParser"] },
+  { "id": "intent-pluginreg", "query": "plugin registry install activate assembly", "mode": "graph", "expected": ["PluginRegistry"] },
+  { "id": "intent-drift", "query": "drift reconciliation service reindex changed files", "mode": "graph", "expected": ["DriftReconciliationService"] },
+  { "id": "intent-sqlite", "query": "sqlite graph storage provider fts5 recursive cte", "mode": "graph", "expected": ["SqliteGraphStorageProvider"] }
+]

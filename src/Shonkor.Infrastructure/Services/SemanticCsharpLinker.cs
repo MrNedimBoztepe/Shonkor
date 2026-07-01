@@ -108,7 +108,9 @@ public static class SemanticCsharpLinker
 
         var trees = compilation.SyntaxTrees.Where(t => filePaths.Contains(t.FilePath));
         var edges = new HashSet<(string Source, string Target, string Relationship)>();
-        await CollectEdgesAsync(compilation, trees, edges, cancellationToken).ConfigureAwait(false);
+        var unresolved = new HashSet<(string EnclosingId, string TypeName)>();
+        await CollectEdgesAsync(compilation, trees, edges, unresolved, cancellationToken).ConfigureAwait(false);
+        await ResolveUnresolvedByNameAsync(storage, unresolved, edges, cancellationToken).ConfigureAwait(false);
 
         if (edges.Count == 0) return;
         await storage.UpsertEdgesAsync(
@@ -127,13 +129,58 @@ public static class SemanticCsharpLinker
 
         // Dedup by (source, target, relationship).
         var edges = new HashSet<(string Source, string Target, string Relationship)>();
-        await CollectEdgesAsync(compilation, compilation.SyntaxTrees, edges, cancellationToken).ConfigureAwait(false);
+        var unresolved = new HashSet<(string EnclosingId, string TypeName)>();
+        await CollectEdgesAsync(compilation, compilation.SyntaxTrees, edges, unresolved, cancellationToken).ConfigureAwait(false);
+
+        // Non-lossy fallback (TICKET-004): for type references the compilation could NOT resolve (partial or
+        // non-compiling checkouts), fall back to name-based edges so semantic mode never produces FEWER
+        // REFERENCES_TYPE edges than the default resolver — only more precise ones where the symbol resolved.
+        await ResolveUnresolvedByNameAsync(storage, unresolved, edges, cancellationToken).ConfigureAwait(false);
 
         if (edges.Count == 0) return;
         await storage.UpsertEdgesAsync(
             edges.Select(e => new GraphEdge { SourceId = e.Source, TargetId = e.Target, Relationship = e.Relationship }),
             cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Emits name-based <c>REFERENCES_TYPE</c> edges for the type references the semantic model could not
+    /// resolve to a symbol. Resolves the simple names against the graph's definition nodes (a name may map
+    /// to several same-named types — the same residual ambiguity the default resolver has, but now confined
+    /// to just the unresolved references rather than all of them).
+    /// </summary>
+    private static async Task ResolveUnresolvedByNameAsync(
+        IGraphStore storage,
+        HashSet<(string EnclosingId, string TypeName)> unresolved,
+        HashSet<(string Source, string Target, string Relationship)> edges,
+        CancellationToken cancellationToken)
+    {
+        if (unresolved.Count == 0) return;
+
+        var names = unresolved.Select(u => u.TypeName).Distinct().ToList();
+        var definitions = await storage.GetDefinitionsByNamesAsync(names, cancellationToken).ConfigureAwait(false);
+        if (definitions.Count == 0) return;
+
+        foreach (var (enclosingId, typeName) in unresolved)
+        {
+            if (!definitions.TryGetValue(typeName, out var defs)) continue;
+            foreach (var def in defs)
+            {
+                if (def.Id == enclosingId) continue;
+                edges.Add((enclosingId, def.Id, ReferencesType));
+            }
+        }
+    }
+
+    /// <summary>The simple (unqualified) type name of a syntax, or <c>null</c> for forms we don't name-match
+    /// (predefined keywords, arrays, tuples, <c>var</c>).</summary>
+    private static string? ExtractSimpleTypeName(TypeSyntax type) => type switch
+    {
+        IdentifierNameSyntax id when id.Identifier.Text != "var" => id.Identifier.Text,
+        GenericNameSyntax g => g.Identifier.Text,
+        QualifiedNameSyntax q => ExtractSimpleTypeName(q.Right),
+        _ => null
+    };
 
     /// <summary>
     /// Walks the given <paramref name="trees"/> (each resolved against the whole <paramref name="compilation"/>)
@@ -143,6 +190,7 @@ public static class SemanticCsharpLinker
         CSharpCompilation compilation,
         IEnumerable<SyntaxTree> trees,
         HashSet<(string Source, string Target, string Relationship)> edges,
+        HashSet<(string EnclosingId, string TypeName)> unresolved,
         CancellationToken cancellationToken)
     {
         foreach (var tree in trees)
@@ -170,14 +218,29 @@ public static class SemanticCsharpLinker
             // REFERENCES_TYPE — every type usage, from the enclosing type to the referenced type.
             foreach (var typeSyntax in root.DescendantNodes().OfType<TypeSyntax>())
             {
-                if (model.GetSymbolInfo(typeSyntax).Symbol is not INamedTypeSymbol referencedType) continue;
-                var referencedId = RoslynSemantics.ToNodeId(referencedType);
-                if (referencedId is null) continue;
+                if (model.GetSymbolInfo(typeSyntax).Symbol is INamedTypeSymbol referencedType)
+                {
+                    var referencedId = RoslynSemantics.ToNodeId(referencedType);
+                    if (referencedId is null) continue;
 
-                var enclosingType = typeSyntax.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
-                var enclosingId = enclosingType is null ? null : RoslynSemantics.ToNodeId(model.GetDeclaredSymbol(enclosingType));
-                if (enclosingId is null || enclosingId == referencedId) continue;
-                edges.Add((enclosingId, referencedId, ReferencesType));
+                    var enclosingType = typeSyntax.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
+                    var enclosingId = enclosingType is null ? null : RoslynSemantics.ToNodeId(model.GetDeclaredSymbol(enclosingType));
+                    if (enclosingId is null || enclosingId == referencedId) continue;
+                    edges.Add((enclosingId, referencedId, ReferencesType));
+                }
+                else if (typeSyntax is IdentifierNameSyntax or GenericNameSyntax)
+                {
+                    // Unresolved (partial/non-compiling checkout) — record the simple name for the name-based
+                    // fallback so the edge isn't silently lost. Only leaf identifier/generic names, so the
+                    // 'A' in a qualified 'A.Thing' isn't mistaken for a type.
+                    var simpleName = ExtractSimpleTypeName(typeSyntax);
+                    if (simpleName is null) continue;
+
+                    var enclosingType = typeSyntax.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
+                    var enclosingId = enclosingType is null ? null : RoslynSemantics.ToNodeId(model.GetDeclaredSymbol(enclosingType));
+                    if (enclosingId is null) continue;
+                    unresolved.Add((enclosingId, simpleName));
+                }
             }
 
             // CALLS — each invocation, from the enclosing method to the callee method.

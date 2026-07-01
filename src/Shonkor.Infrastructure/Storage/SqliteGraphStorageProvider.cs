@@ -1426,18 +1426,41 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             command.CommandText =
                 """
                 UPDATE Nodes
-                SET Summary = @Summary, Metadata = @Metadata, NeedsSemanticAnalysis = 0, Embedding = @Embedding
+                SET Summary = @Summary, Metadata = @Metadata, NeedsSemanticAnalysis = 0,
+                    Embedding = @Embedding, EmbeddingDim = @EmbeddingDim
                 WHERE Id = @Id;
                 """;
             command.Parameters.AddWithValue("@Summary", (object?)result.Summary ?? DBNull.Value);
             command.Parameters.AddWithValue("@Metadata", JsonSerializer.Serialize(properties));
             command.Parameters.AddWithValue("@Embedding", (object?)SqliteRowMapper.EmbeddingToBytes(embedding) ?? DBNull.Value);
+            // TICKET-006: stamp the embedding's dimension so a later model change is detectable.
+            command.Parameters.AddWithValue("@EmbeddingDim", embedding is { Length: > 0 } ? embedding.Length : (object)DBNull.Value);
             command.Parameters.AddWithValue("@Id", nodeId);
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<int> MarkStaleEmbeddingsForReembedAsync(int expectedDim, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedDim);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        // Only touch embeddings with a KNOWN dimension that differs — clear the vector and re-flag the node
+        // so the enrichment worker re-embeds it under the current model. Legacy vectors with a NULL dim are
+        // left as-is (the query-time dimension guard still protects the search from mixing dimensions).
+        command.CommandText =
+            """
+            UPDATE Nodes
+            SET Embedding = NULL, EmbeddingDim = NULL, NeedsSemanticAnalysis = 1
+            WHERE Embedding IS NOT NULL AND EmbeddingDim IS NOT NULL AND EmbeddingDim <> @ExpectedDim;
+            """;
+        command.Parameters.AddWithValue("@ExpectedDim", expectedDim);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     #endregion
