@@ -35,6 +35,14 @@ public class Project
     /// </summary>
     public bool? SemanticCSharp { get; set; }
 
+    /// <summary>
+    /// Per-project namespace prefixes to treat as external/third-party CLR types. Config references to types
+    /// under these prefixes are downgraded from Warning to Info by the Sitecore clrtype resolver (merged with
+    /// its built-in framework list), so the warning stream stays a signal of *your own* missing code. A
+    /// trailing dot scopes a prefix to a namespace, e.g. <c>"Dianoga."</c>.
+    /// </summary>
+    public List<string> ExternalTypePrefixes { get; set; } = new();
+
     // Legacy field for backward compatibility during deserialization
     public string ApiKey { get; set; } = string.Empty;
 }
@@ -43,6 +51,9 @@ public record ActiveProjectRequest(string Name);
 
 /// <summary>Toggle a project's semantic-C# override. Null clears it (use the global default).</summary>
 public record SemanticRequest(bool? SemanticCSharp);
+
+/// <summary>Set a project's external/third-party CLR-type prefixes (replaces the whole list).</summary>
+public record ExternalTypePrefixesRequest(List<string> Prefixes);
 
 public class WebConfig
 {
@@ -210,6 +221,26 @@ public partial class ProjectManager
             var project = _projects.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
                 ?? throw new ArgumentException($"Project '{name}' not found.");
             project.SemanticCSharp = semanticCsharp;
+            SaveProjects();
+        }
+    }
+
+    /// <summary>
+    /// Replace a project's external/third-party CLR-type prefixes and persist them. Entries are trimmed,
+    /// blanks dropped, and duplicates removed. An empty list clears the override.
+    /// </summary>
+    public void SetProjectExternalTypePrefixes(string name, IEnumerable<string> prefixes)
+    {
+        ArgumentNullException.ThrowIfNull(prefixes);
+        lock (_lock)
+        {
+            var project = _projects.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new ArgumentException($"Project '{name}' not found.");
+            project.ExternalTypePrefixes = prefixes
+                .Select(p => p?.Trim() ?? string.Empty)
+                .Where(p => p.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
             SaveProjects();
         }
     }
