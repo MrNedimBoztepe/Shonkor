@@ -21,7 +21,7 @@ Shonkor now features a native "Ask AI" capability directly within its web dashbo
 ### Usage
 - **Search:** Use the search bar in the dashboard. You can toggle between **Semantic Search** (Brain icon) and **Keyword Search** (Network icon).
 - **Ask AI:** Once search results are displayed, a sparkling **"Ask AI"** button appears. Clicking this sends the top retrieved code nodes (with perfectly scoped `StartLine` and `EndLine` boundaries) directly to Ollama.
-- **Result:** The LLM synthesizes a precise answer based *strictly* on the provided architectural context, preventing hallucinations.
+- **Result:** The LLM answers *strictly* from the provided context and is instructed to say so when the context doesn't cover the question. Each claim is asked to carry a source citation `[Name @ file:lines]`, and generation runs at `temperature=0` so the same context yields a reproducible answer. (Answer quality still depends on the local model; the citation always resolves to the real graph node.)
 
 ---
 
@@ -93,7 +93,7 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 |------|---------|------|
 | `locate` | Pure "Where is X?" → `name -> file:line` | Most minimal output, ideal first step |
 | `search_graph` | FTS5 keyword search; one line per match | `verbose: true` for full JSON |
-| `search_semantic` | Vector/meaning search ("where is auth handled?") | **Only listed when an embedding backend is wired** (web server + Ollama); not present in the local stdio CLI |
+| `search_semantic` | Vector/meaning search ("where is auth handled?"), over **code embeddings** (not just the summary) | **Only listed when an embedding backend is wired** (web server + Ollama); not present in the local stdio CLI. The web dashboard also exposes `GET /api/search/hybrid` (Reciprocal Rank Fusion of FTS + vector) |
 
 **Read — show me the code**
 | Tool | Purpose | Note |
@@ -102,14 +102,14 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 | `get_source` | The EXACT source body of a symbol + `file:start-end` | Reads types via line-range locally; `maxChars` caps large bodies |
 | `outline` | A file's type/member structure as an indented `CONTAINS` tree | See what's in a file without reading it |
 | `get_subgraph` | N-hop traversal around seed nodes | Compact `NODES`/`EDGES` text; `verbose: true` for JSON; `maxChars` budget |
-| `generate_capsule` | Markdown capsule with Mermaid + code | `maxChars` caps to a token budget |
+| `generate_capsule` | Markdown capsule with Mermaid + code | Seed-first, relevance-ranked, hub-capped; `maxChars` caps the code budget so a 2-hop expansion can't explode the prompt |
 | `architecture` | Module building-block view + Mermaid cross-module dependency diagram | For **arc42 docs**/onboarding: types per module (key ones first), aggregated module edges |
 
 **Analyze — impact & relationships**
 | Tool | Purpose | Note |
 |------|---------|------|
 | `references` | Reference/impact over `REFERENCES_TYPE`/`IMPLEMENTS`/`EXTENDS`. `direction=used_by` (default) = *"what breaks if I change it?"*; `direction=uses` = its footprint | `depth=1` = flat list grouped by relation (AI summaries); `depth>1` = transitive — ranked blast radius with `[test]` flags (`used_by`) or indented tree (`uses`); structural containment excluded |
-| `call_hierarchy` | Method-level **callers** / **callees**, indented to a depth, over `CALLS` | Needs semantic indexing (`Indexing:SemanticCSharp`); recursion marked |
+| `call_hierarchy` | Method-level **callers** / **callees**, indented to a depth, over `CALLS` | Needs semantic indexing (`Indexing:SemanticCSharp`, **on by default**); recursion marked |
 | `find_usages` | Call/reference sites **with a code snippet** at each (graph-aware grep) | `relation  name  file:line  ⟶ <usage line>` |
 | `find_path` | Shortest connection chain between two symbols | `A --REL--> B <--REL-- C`, real edge directions |
 | `implementations_of` | Types that implement an interface / extend a base type | `IMPLEMENTS`/`EXTENDS`, with `file:line` + summaries |

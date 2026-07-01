@@ -5,6 +5,42 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — Precision & grounding roadmap (retrieval quality)
+- **Semantic C# resolution is now the default.** Indexing resolves C# references with a Roslyn
+  `SemanticModel` (exact `REFERENCES_TYPE`/`IMPLEMENTS`/`EXTENDS` + method-level `CALLS`), disambiguating
+  same-named types across namespaces. It is **non-lossy**: references a partial/non-compiling checkout
+  can't resolve fall back to name matching, so it is never worse than the syntactic resolver — only more
+  precise. Measured on this repo's `src` (168 files): ~2.0 s → ~5.6 s indexing (~2.9×) for ~50 % more,
+  more-precise edges. Opt out with `Indexing:SemanticCSharp=false` (global / per-project) or
+  `SHONKOR_SEMANTIC_CSHARP=false` (CLI).
+- **Embeddings are computed from code, not the AI summary** (`Embedding:Source=code|summary`, default
+  `code`): a structured `type + name + signature + summary + bounded body` document. On intent queries
+  over this repo, Recall@10 rose from ~0.27 (FTS-only) to ~0.93–1.0. Query/document embeddings are now
+  kind-aware, with optional nomic task prefixes (`EmbeddingService:QueryPrefix`/`:DocumentPrefix`,
+  default off — measured neutral on code).
+- **Embedding versioning + re-embed trigger.** Nodes store `EmbeddingDim`; a model/dimension change now
+  flags stale vectors for re-embedding (`MarkStaleEmbeddingsForReembedAsync`, run once per process by the
+  enrichment worker) instead of silently dropping them from vector search.
+- **Hybrid search endpoint** `GET /api/search/hybrid`: Reciprocal Rank Fusion of FTS (BM25) + vector
+  similarity. Additive — existing `/api/search` and `/api/search/semantic` are unchanged; degrades to
+  FTS-only when no embedding backend is reachable.
+- **Budget-aware context capsule.** `ContextCapsuleSynthesizer` gained `CapsuleOptions` (seed ids, content
+  budget, node cap): seeds render first and in full, the rest fills a bounded budget by structural
+  relevance, and a hub cap prevents a 2-hop expansion from exploding the prompt. On a query mix, ~87.8 %
+  fewer tokens than dumping the same retrieved subgraph in full, with the absolute size bounded. The
+  legacy full-content rendering remains the default for the parameterless `Synthesize` overload.
+- **Grounded RAG answers.** `GenerateRAGResponseAsync` now asks for per-claim citations
+  `[Name @ file:lines]`, runs at `temperature=0` (reproducible), and truncates code at line boundaries.
+- **Ambiguous-type diagnostic.** A first-party post-processor emits `csharp.ambiguous-type-reference`
+  (Warning) for same-named C# types that are actually referenced, so name-based over-connection is visible
+  via `get_diagnostics`.
+- **`Shonkor.Eval` project** — a lean, repeatable precision harness (Precision@k / Recall@k / MRR for FTS,
+  semantic and hybrid; golden set under `eval/`; baseline regression gate). See `review/` for the full
+  analysis, measured results, and roadmap.
+- **Honest token benchmark.** `Shonkor.Benchmarks` now compares the real shipped capsule path against a
+  full-content dump of the *same* retrieved subgraph (replacing the previous whole-file-vs-summary
+  comparison).
+
 ### Changed — Plugins are now installable assemblies (runtime C# compilation removed)
 - A plugin is a **pre-built assembly installed from a ZIP** and is **inert until explicitly activated**.
   `PluginRegistry` validates the `plugin.json` manifest + host-API version, extracts the package

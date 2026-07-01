@@ -51,6 +51,41 @@ public class SemanticCsharpLinkerTests
     }
 
     [Fact]
+    public async Task UnresolvedReference_FallsBackToNameBasedEdge_SoSemanticModeIsNonLossy()
+    {
+        // Simulates a partial/non-compiling checkout: the referenced type's source is NOT in the
+        // compilation (so Roslyn can't resolve the symbol), but its node IS in the graph. The linker must
+        // fall back to a name-based REFERENCES_TYPE edge instead of silently dropping it (TICKET-004).
+        var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+
+        var parser = new RoslynAstParser();
+        // Both files parsed + upserted as nodes...
+        foreach (var (path, code) in new[]
+        {
+            ("/repo/Widget.cs", "namespace A { public class Widget { } }"),
+            ("/repo/Consumer.cs", "namespace U { public class Consumer { public Widget W; } }"),
+        })
+        {
+            var (nodes, edges) = await parser.ParseAsync(path, code);
+            await storage.UpsertNodesAsync(nodes);
+            await storage.UpsertEdgesAsync(edges);
+        }
+
+        // ...but the compilation covers ONLY Consumer.cs, so `Widget` is an unresolved symbol.
+        var compilation = RoslynSemantics.BuildCompilation(new[]
+        {
+            ("/repo/Consumer.cs", "namespace U { public class Consumer { public Widget W; } }")
+        });
+        await SemanticCsharpLinker.LinkAsync(storage, compilation);
+
+        var (edges2, _) = await storage.GetIncidentEdgesAsync("/repo/Widget.cs::Widget");
+        Assert.Contains(edges2, e => e.SourceId == "/repo/Consumer.cs::Consumer" && e.Relationship == "REFERENCES_TYPE");
+
+        storage.Dispose();
+    }
+
+    [Fact]
     public async Task BaseTypes_EmitImplementsAndExtends_ToNodeIds()
     {
         using var storage = await LinkAsync(

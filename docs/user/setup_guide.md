@@ -109,14 +109,19 @@ Files are parsed in parallel, and stale/changed files are cleared in a **single 
 
 Each graph also records the **node-id scheme version** it was built under (SQLite `PRAGMA user_version`). When a Shonkor upgrade changes the id format (e.g. arity-discriminated method ids), the file content is unchanged — so the next `shonkor index` **force-reparses** every file to migrate the ids, then re-stamps the version. `get_stats` (and the MCP `get_stats` tool) report `SchemeVersion`/`CurrentSchemeVersion` and a `ReindexRecommended` hint if a graph is still on an older scheme.
 
-### Exact C# resolution (opt-in)
-By default, C# type references are resolved by **name** (fast, but two same-named types in different namespaces are indistinguishable). Enable **semantic resolution** to resolve them **exactly** via a Roslyn `SemanticModel` — disambiguating namespaces, and additionally producing method-level `CALLS` edges:
+### Exact C# resolution (default)
+C# type references are resolved **exactly** via a Roslyn `SemanticModel` — disambiguating same-named types across namespaces and additionally producing method-level `CALLS` edges. This is what makes impact/rename analysis precise for C#, and it is now the **default**. It is **non-lossy**: references a partial or non-compiling checkout can't resolve fall back to name matching, so it is never worse than the old syntactic resolver — only more precise.
 
-* **Per project (recommended):** set `"SemanticCSharp": true` on a project entry in `projects.json`. This wins over the global default, so one heavy/important project (e.g. your main C# solution) can run semantic while the rest stay on the fast name path. Applies to the web index endpoint, the push webhook, and the background drift reconciler.
-* **Web / SaaS global default:** set `Indexing:SemanticCSharp=true` (e.g. `Indexing__SemanticCSharp=true` as an env var) — used for any project that doesn't set its own flag.
-* **CLI:** `SHONKOR_SEMANTIC_CSHARP=true shonkor index .`
+Trade-off: it builds a Roslyn compilation per scan. On this repo's `src` (168 files) that is ~+3.6 s (~2.9×) for ~50 % more, more-precise edges; the cost scales with the amount of C# source. To force the faster name-based resolver:
 
-It's more accurate (this is what makes impact analysis precise for C#) but heavier — it builds a compilation per scan — so it's off by default. It needs no project build: intra-codebase symbols resolve from the source itself.
+* **Per project:** set `"SemanticCSharp": false` on a project entry in `projects.json` (wins over the global setting) — e.g. keep one very large project on the fast name path while the rest run semantic.
+* **Web / SaaS global:** set `Indexing:SemanticCSharp=false` (e.g. `Indexing__SemanticCSharp=false` as an env var).
+* **CLI:** `SHONKOR_SEMANTIC_CSHARP=false shonkor index .`
+
+It needs no project build: intra-codebase symbols resolve from the source itself; references into un-referenced third-party types are simply skipped.
+
+### Embedding source & semantic search
+Semantic (vector) search embeds a **structured code document** per node — `type + name + signature + summary + bounded body` — not just the AI summary, which measurably improves natural-language ("intent") retrieval. Configure via `Embedding:Source` (`code` (default) | `summary`). Query and index embeddings are kind-aware; optional nomic task prefixes are available via `EmbeddingService:QueryPrefix` / `EmbeddingService:DocumentPrefix` (default off). Each stored vector records its dimension, so changing the embedding model automatically re-embeds affected nodes instead of silently dropping them from search.
 
 ---
 

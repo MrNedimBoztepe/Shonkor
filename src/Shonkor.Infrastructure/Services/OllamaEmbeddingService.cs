@@ -16,6 +16,8 @@ public class OllamaEmbeddingService : IEmbeddingService
     private readonly ILogger<OllamaEmbeddingService> _logger;
     private readonly string _ollamaUrl;
     private readonly string _ollamaModel;
+    private readonly string _queryPrefix;
+    private readonly string _documentPrefix;
 
     public OllamaEmbeddingService(HttpClient httpClient, IConfiguration configuration, ILogger<OllamaEmbeddingService> logger)
     {
@@ -25,23 +27,35 @@ public class OllamaEmbeddingService : IEmbeddingService
         _ollamaUrl = (configuration["EmbeddingService:OllamaUrl"] ?? "http://localhost:11434").TrimEnd('/');
         _ollamaModel = configuration["EmbeddingService:OllamaModel"] ?? "nomic-embed-text";
 
+        // Optional nomic-style task prefixes (TICKET-006). Default OFF: on Shonkor's code corpus the
+        // measured retrieval difference was within noise, so prefixing is opt-in rather than forced.
+        // Set EmbeddingService:QueryPrefix / :DocumentPrefix to e.g. "search_query: " / "search_document: ".
+        _queryPrefix = configuration["EmbeddingService:QueryPrefix"] ?? string.Empty;
+        _documentPrefix = configuration["EmbeddingService:DocumentPrefix"] ?? string.Empty;
+
         // Do NOT set _httpClient.BaseAddress here — mutating a shared HttpClient after construction
         // is not thread-safe and would affect any other service using the same instance.
         // Instead we build the full URL per request (see below).
         _httpClient.Timeout = TimeSpan.FromMinutes(1);
     }
 
-    public async Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default)
+    public Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default)
+        => GenerateEmbeddingAsync(text, EmbeddingKind.Document, cancellationToken);
+
+    public async Task<float[]> GenerateEmbeddingAsync(string text, EmbeddingKind kind, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
             return Array.Empty<float>();
         }
 
+        var prefix = kind == EmbeddingKind.Query ? _queryPrefix : _documentPrefix;
+        var prompt = string.IsNullOrEmpty(prefix) ? text : prefix + text;
+
         var requestBody = new
         {
             model = _ollamaModel,
-            prompt = text
+            prompt
         };
 
         var endpoint = $"{_ollamaUrl}/api/embeddings";

@@ -253,7 +253,7 @@ public static class WebhookEndpoints
 
                         var scanner = new GraphIndexScanner(storage, activeParsers, webhookLogger,
                             semanticCsharp: EndpointHelpers.UseSemanticCSharp(project, config), compilationCache: compilationCache,
-                            postProcessors: pluginLoad.PostProcessors);
+                            postProcessors: pluginLoad.PostProcessors.Prepend(new Shonkor.Infrastructure.Services.AmbiguousCSharpTypePostProcessor()));
                         var projectConfig = pm.GetProjectConfig(project.Name);
 
                         GraphIndexScanner.IndexResult result;

@@ -39,7 +39,16 @@ public class SemanticEnrichmentService : BackgroundService
     private readonly int _batchSize;
     private readonly int _maxParallelism;
 
+    // TICKET-002: what text gets embedded. "code" (default) embeds a structured code document
+    // (type + name + signature + bounded body), which measured markedly better on intent retrieval
+    // than embedding the 1-sentence summary ("summary"). See review/results.md.
+    private readonly string _embeddingSource;
+
     private int _consecutiveServiceFailures;
+    // TICKET-006: reconcile stored embeddings against the current model's dimension exactly once per
+    // process (after the backend is first reachable), so a model change re-embeds instead of silently
+    // dropping stale-dimension vectors from the vector search.
+    private bool _embeddingsReconciled;
 
     public SemanticEnrichmentService(
         ProjectManager projectManager,
@@ -52,6 +61,34 @@ public class SemanticEnrichmentService : BackgroundService
         _logger = logger;
         _batchSize = Math.Max(1, configuration.GetValue<int?>("SemanticEnrichment:BatchSize") ?? 16);
         _maxParallelism = Math.Max(1, configuration.GetValue<int?>("SemanticEnrichment:MaxParallelism") ?? 4);
+        _embeddingSource = (configuration["Embedding:Source"] ?? "code").Trim().ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Builds the text fed to the embedding model for a node. "code" yields a structured code document
+    /// (identity + signature + bounded body); "summary" keeps the legacy behaviour (embed the AI summary).
+    /// Internal + static for testability.
+    /// </summary>
+    internal static string BuildEmbeddingText(GraphNode node, string? summary, string source)
+    {
+        if (source == "summary")
+        {
+            return summary ?? string.Empty;
+        }
+
+        var signature = node.Properties.TryGetValue("signature", out var sig) ? sig : string.Empty;
+        var body = node.Content ?? string.Empty;
+        // nomic-embed-text has a 2048-token window; bound the body so a large file/class doesn't get
+        // truncated arbitrarily by the backend. ~1500 chars ≈ well within the window with the header.
+        const int maxBody = 1500;
+        if (body.Length > maxBody) body = body[..maxBody];
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append(node.Type).Append(' ').Append(node.Name).Append('\n');
+        if (!string.IsNullOrWhiteSpace(signature)) sb.Append(signature).Append('\n');
+        if (!string.IsNullOrWhiteSpace(summary)) sb.Append(summary).Append('\n');
+        sb.Append(body);
+        return sb.ToString();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -124,6 +161,36 @@ public class SemanticEnrichmentService : BackgroundService
         var analyzer = scope.ServiceProvider.GetRequiredService<ISemanticAnalyzer>();
         var embeddingService = scope.ServiceProvider.GetRequiredService<IEmbeddingService>();
 
+        // One-time re-embed reconciliation: probe the current embedding dimension, then flag any stored
+        // vectors of a different dimension for re-embedding (TICKET-006). Guarded by a probe so a dead
+        // backend simply defers this to a later cycle.
+        if (!_embeddingsReconciled)
+        {
+            try
+            {
+                var probe = await embeddingService.GenerateEmbeddingAsync("dimension probe", cancellationToken);
+                if (probe is { Length: > 0 })
+                {
+                    foreach (var project in projects)
+                    {
+                        var st = await _projectManager.GetStorageProviderAsync(project.Name, cancellationToken);
+                        var flagged = await st.MarkStaleEmbeddingsForReembedAsync(probe.Length, cancellationToken);
+                        if (flagged > 0)
+                        {
+                            _logger.LogInformation(
+                                "Flagged {Count} embedding(s) with a stale dimension for re-embedding in project '{Project}'.",
+                                flagged, project.Name);
+                        }
+                    }
+                    _embeddingsReconciled = true;
+                }
+            }
+            catch (Exception ex) when (IsBackendUnavailable(ex))
+            {
+                // Backend not reachable yet — leave _embeddingsReconciled false and retry next cycle.
+            }
+        }
+
         foreach (var project in projects)
         {
             var storage = await _projectManager.GetStorageProviderAsync(project.Name, cancellationToken);
@@ -136,7 +203,7 @@ public class SemanticEnrichmentService : BackgroundService
                 pendingNodes.Count, project.Name);
 
             var backendDown = await ProcessBatchAsync(
-                pendingNodes, analyzer, embeddingService, storage, _maxParallelism, _logger, cancellationToken)
+                pendingNodes, analyzer, embeddingService, storage, _maxParallelism, _logger, _embeddingSource, cancellationToken)
                 .ConfigureAwait(false);
 
             if (backendDown) return true;
@@ -162,6 +229,7 @@ public class SemanticEnrichmentService : BackgroundService
         ISemanticGraphStore storage,
         int maxParallelism,
         ILogger logger,
+        string embeddingSource,
         CancellationToken cancellationToken)
     {
         using var cycleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -181,10 +249,13 @@ public class SemanticEnrichmentService : BackgroundService
                 {
                     var result = await analyzer.AnalyzeNodeAsync(node, ct);
 
+                    // TICKET-002: embed a structured code document by default (markedly better intent
+                    // retrieval than embedding the summary). Configurable via Embedding:Source.
+                    var embeddingText = BuildEmbeddingText(node, result.Summary, embeddingSource);
                     float[]? embedding = null;
-                    if (!string.IsNullOrWhiteSpace(result.Summary))
+                    if (!string.IsNullOrWhiteSpace(embeddingText))
                     {
-                        embedding = await embeddingService.GenerateEmbeddingAsync(result.Summary, ct);
+                        embedding = await embeddingService.GenerateEmbeddingAsync(embeddingText, EmbeddingKind.Document, ct);
                     }
 
                     await storage.UpdateNodeSemanticDataAsync(node.Id, result, embedding, ct);

@@ -20,4 +20,12 @@ public interface ISemanticGraphStore
     /// Updates the semantic summary of a node and resets its pending flag.
     /// </summary>
     Task UpdateNodeSemanticDataAsync(string nodeId, SemanticAnalysisResult result, float[]? embedding = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Flags stored embeddings whose dimension differs from <paramref name="expectedDim"/> for re-embedding
+    /// (clears the vector and re-marks the node as pending), instead of letting the vector search silently
+    /// skip them forever after a model/dimension change. Returns the number of nodes flagged. Legacy
+    /// embeddings with an unknown (null) dimension are left untouched.
+    /// </summary>
+    Task<int> MarkStaleEmbeddingsForReembedAsync(int expectedDim, CancellationToken cancellationToken = default);
 }

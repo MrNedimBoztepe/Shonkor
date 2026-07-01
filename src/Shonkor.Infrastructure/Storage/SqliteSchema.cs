@@ -39,7 +39,9 @@ internal static class SqliteSchema
                 ContentHash TEXT,
                 Summary     TEXT,
                 NeedsSemanticAnalysis INTEGER DEFAULT 1,
-                Embedding   BLOB
+                Embedding   BLOB,
+                EmbeddingDim   INTEGER,
+                EmbeddingModel TEXT
             );
             """,
             cancellationToken).ConfigureAwait(false);
@@ -48,6 +50,10 @@ internal static class SqliteSchema
         await TryExecuteAsync(connection, "ALTER TABLE Nodes ADD COLUMN Summary TEXT;", cancellationToken).ConfigureAwait(false);
         await TryExecuteAsync(connection, "ALTER TABLE Nodes ADD COLUMN NeedsSemanticAnalysis INTEGER DEFAULT 1;", cancellationToken).ConfigureAwait(false);
         await TryExecuteAsync(connection, "ALTER TABLE Nodes ADD COLUMN Embedding BLOB;", cancellationToken).ConfigureAwait(false);
+        // TICKET-006: version the embedding so a model/dimension change is detectable (re-embed trigger)
+        // instead of the stored vector being silently skipped at query time.
+        await TryExecuteAsync(connection, "ALTER TABLE Nodes ADD COLUMN EmbeddingDim INTEGER;", cancellationToken).ConfigureAwait(false);
+        await TryExecuteAsync(connection, "ALTER TABLE Nodes ADD COLUMN EmbeddingModel TEXT;", cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection,
             """

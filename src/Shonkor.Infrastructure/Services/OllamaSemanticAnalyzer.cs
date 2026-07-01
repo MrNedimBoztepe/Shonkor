@@ -140,24 +140,44 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         throw new Exception("Failed to analyze node after retries.");
     }
 
+    /// <summary>Truncates at the last newline before <paramref name="maxChars"/> so a code body is never
+    /// cut mid-line/mid-token; appends a marker when truncated.</summary>
+    internal static string TruncateAtLineBoundary(string content, int maxChars)
+    {
+        if (content.Length <= maxChars) return content;
+        var slice = content[..maxChars];
+        var lastNl = slice.LastIndexOf('\n');
+        if (lastNl > maxChars / 2) slice = slice[..lastNl];
+        return slice + "\n… [gekürzt — vollständiger Code via get_source]";
+    }
+
     public async Task<string> GenerateRAGResponseAsync(string query, IReadOnlyList<GraphNode> contextNodes, CancellationToken cancellationToken = default)
     {
         var contextBuilder = new System.Text.StringBuilder();
         foreach (var node in contextNodes)
         {
-            contextBuilder.AppendLine($"--- KNOTEN: {node.Name} ({node.Type}) ---");
-            contextBuilder.AppendLine($"ZUSAMMENFASSUNG: {node.Summary}");
+            // Stable citation label per node: [Name @ file:start-end]. The model is asked to cite it,
+            // so every claim is traceable back to a graph node (TICKET-005 grounding).
+            var loc = node.FilePath is { Length: > 0 }
+                ? $"{System.IO.Path.GetFileName(node.FilePath)}:{node.StartLine}-{node.EndLine}"
+                : "virtual";
+            var citation = $"[{node.Name} @ {loc}]";
+            contextBuilder.AppendLine($"--- QUELLE {citation} · {node.Type} ---");
+            if (!string.IsNullOrWhiteSpace(node.Summary))
+            {
+                contextBuilder.AppendLine($"ZUSAMMENFASSUNG: {node.Summary}");
+            }
             if (!string.IsNullOrWhiteSpace(node.Content))
             {
-                var contentToInclude = node.Content.Length > 2000 ? node.Content[..2000] + " ... [TRUNCATED]" : node.Content;
-                contextBuilder.AppendLine($"CODE:\n{contentToInclude}");
+                contextBuilder.AppendLine($"CODE:\n{TruncateAtLineBoundary(node.Content, 2000)}");
             }
             contextBuilder.AppendLine();
         }
 
         var prompt = $$"""
         Du bist Shonkor, ein intelligenter KI-Softwarearchitekt. Beantworte die folgende Frage des Nutzers PRÄZISE und AUSSCHLIESSLICH basierend auf dem bereitgestellten Code-Kontext aus dem Projektgraphen.
-        Wenn die Antwort nicht im bereitgestellten Kontext enthalten ist, sage deutlich, dass du es basierend auf den aktuellen Graphen-Daten nicht weißt. Erfinde keine APIs oder Funktionen, die nicht im Kontext stehen.
+        Wenn die Antwort nicht im bereitgestellten Kontext enthalten ist, sage deutlich: "Das ist in den aktuellen Graphen-Daten nicht belegt." Erfinde keine APIs, Typen oder Funktionen, die nicht im Kontext stehen.
+        Belege JEDE Aussage mit der Quellenangabe der jeweiligen QUELLE in der Form [Name @ datei:zeilen]. Zitiere nur Quellen, die unten tatsächlich aufgeführt sind.
 
         NUTZERFRAGE:
         {{query}}
@@ -165,14 +185,16 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         VERFÜGBARER KONTEXT:
         {{contextBuilder.ToString()}}
 
-        Antworte in klarem Markdown (auf Deutsch).
+        Antworte in klarem Markdown (auf Deutsch) mit Quellenangaben.
         """;
 
         var requestBody = new
         {
             model = _ollamaModel,
             prompt = prompt,
-            stream = false
+            stream = false,
+            // temperature=0 → reproducible answers for the same context (TICKET-005 determinism).
+            options = new { temperature = 0 }
         };
 
         var ragEndpoint = $"{_ollamaUrl}/api/generate";

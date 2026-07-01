@@ -252,9 +252,12 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
                 Console.WriteLine($"Loaded {pluginLoad.Parsers.Count} active plugin parser(s).");
             }
 
-            // Opt-in semantic C# linking (exact REFERENCES_TYPE/IMPLEMENTS/EXTENDS/CALLS via Roslyn).
-            var semanticCsharp = string.Equals(Environment.GetEnvironmentVariable("SHONKOR_SEMANTIC_CSHARP"), "true", StringComparison.OrdinalIgnoreCase);
-            var scanner = new GraphIndexScanner(storage, parsers, semanticCsharp: semanticCsharp, postProcessors: pluginLoad.PostProcessors);
+            // Semantic C# linking (exact REFERENCES_TYPE/IMPLEMENTS/EXTENDS/CALLS via Roslyn) is now the
+            // DEFAULT: it is non-lossy (unresolved refs fall back to name matching) so it is never worse
+            // than the old syntactic resolver, only more precise. Set SHONKOR_SEMANTIC_CSHARP=false to force
+            // the faster name-based resolver (trades precision for lower indexing latency on large repos).
+            var semanticCsharp = !string.Equals(Environment.GetEnvironmentVariable("SHONKOR_SEMANTIC_CSHARP"), "false", StringComparison.OrdinalIgnoreCase);
+            var scanner = new GraphIndexScanner(storage, parsers, semanticCsharp: semanticCsharp, postProcessors: pluginLoad.PostProcessors.Prepend(new Shonkor.Infrastructure.Services.AmbiguousCSharpTypePostProcessor()));
 
             Console.WriteLine("Scanning and indexing files... (this may take a few moments)");
             var result = await scanner.ScanDirectoryAsync(absoluteDir, config.ExcludePatterns);
