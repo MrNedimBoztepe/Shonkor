@@ -11,6 +11,12 @@ using Shonkor.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Writable settings overlay: the dashboard's AI/tool settings (Ollama URL/model, embedding source,
+// streaming, etc.) are written here by the loopback-only /api/settings endpoint. Loaded LAST and with
+// reloadOnChange, so a save takes effect on the next request/enrichment cycle without a restart.
+// Machine-local, gitignored; secrets never go here (they stay in user-secrets / env).
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+
 // In Production, emit structured (JSON) logs so a container/k8s log pipeline can parse them.
 // Development keeps the readable default console.
 if (builder.Environment.IsProduction())
@@ -129,6 +135,7 @@ app.MapIndexEndpoints();
 app.MapProjectEndpoints();
 app.MapBrowseEndpoints();
 app.MapPluginEndpoints();
+app.MapSettingsEndpoints();
 
 app.Run();
 
