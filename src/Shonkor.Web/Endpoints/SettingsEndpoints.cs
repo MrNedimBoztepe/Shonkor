@@ -62,11 +62,13 @@ public static class SettingsEndpoints
             {
                 var localPath = Path.Combine(env.ContentRootPath, "appsettings.Local.json");
                 SettingsStore.Write(localPath, update);
-                // Give reloadOnChange (debounced) a beat to pick up the file before reading back effective values.
-                await Task.Delay(400);
+                // Don't read back from IConfiguration here — reloadOnChange is debounced, so a re-read could
+                // race and echo pre-save values. Echo the accepted update (authoritative) and let the client
+                // GET /api/settings later for the reloaded effective values.
                 return Results.Ok(new
                 {
-                    settings = SettingsStore.Read(config),
+                    saved = true,
+                    applied = update,
                     note = "Saved. Most settings apply on the next request/enrichment cycle. " +
                            "Drift interval changes need a restart (the reconciliation worker is wired at startup)."
                 });

@@ -348,6 +348,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         });
                     }
                 }
+                answer += decoder.decode(); // flush any bytes buffered across the final chunk boundary
                 answer = answer.trim() || 'No answer.';
                 renderMarkdownSafe(answer, thinking);
                 aiChatHistory.push({ role: 'assistant', text: answer });

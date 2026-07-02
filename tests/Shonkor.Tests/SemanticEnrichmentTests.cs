@@ -57,7 +57,7 @@ public class SemanticEnrichmentTests
         var analyzer = new FakeAnalyzer(n => new SemanticAnalysisResult { Summary = $"summary of {n.Name}" });
 
         var backendDown = await SemanticEnrichmentService.ProcessBatchAsync(
-            nodes, analyzer, new FakeEmbeddings(), storage, maxParallelism: 4, NullLogger.Instance, "summary", CancellationToken.None);
+            nodes, analyzer, new FakeEmbeddings(), storage, maxParallelism: 4, NullLogger.Instance, "summary", "test-model", CancellationToken.None);
 
         Assert.False(backendDown);
         Assert.Equal(8, analyzer.Calls);
@@ -75,7 +75,7 @@ public class SemanticEnrichmentTests
         var analyzer = new FakeAnalyzer(_ => throw new HttpRequestException("connection refused"));
 
         var backendDown = await SemanticEnrichmentService.ProcessBatchAsync(
-            nodes, analyzer, new FakeEmbeddings(), storage, maxParallelism: 4, NullLogger.Instance, "summary", CancellationToken.None);
+            nodes, analyzer, new FakeEmbeddings(), storage, maxParallelism: 4, NullLogger.Instance, "summary", "test-model", CancellationToken.None);
 
         Assert.True(backendDown);
         // Nothing was persisted; all nodes still pending.
@@ -93,7 +93,7 @@ public class SemanticEnrichmentTests
             : new SemanticAnalysisResult { Summary = $"ok {n.Name}" });
 
         var backendDown = await SemanticEnrichmentService.ProcessBatchAsync(
-            nodes, analyzer, new FakeEmbeddings(), storage, maxParallelism: 4, NullLogger.Instance, "summary", CancellationToken.None);
+            nodes, analyzer, new FakeEmbeddings(), storage, maxParallelism: 4, NullLogger.Instance, "summary", "test-model", CancellationToken.None);
 
         Assert.False(backendDown);                       // logic error must NOT trip the breaker
         var stillPending = await storage.GetNodesPendingSemanticAnalysisAsync(100);
@@ -110,7 +110,7 @@ public class SemanticEnrichmentTests
 
         // Enrich with 3-dim embeddings (FakeEmbeddings). All nodes now have EmbeddingDim = 3.
         await SemanticEnrichmentService.ProcessBatchAsync(
-            nodes, analyzer, new FakeEmbeddings(), storage, maxParallelism: 4, NullLogger.Instance, "summary", CancellationToken.None);
+            nodes, analyzer, new FakeEmbeddings(), storage, maxParallelism: 4, NullLogger.Instance, "summary", "test-model", CancellationToken.None);
         Assert.Empty(await storage.GetNodesPendingSemanticAnalysisAsync(100));
 
         // Same dimension → nothing is stale.
@@ -120,6 +120,24 @@ public class SemanticEnrichmentTests
         // A model change to a different dimension (e.g. 768) → all four re-flagged for re-embedding,
         // instead of being silently skipped by the vector search forever.
         Assert.Equal(4, await storage.MarkStaleEmbeddingsForReembedAsync(768));
+        Assert.Equal(4, (await storage.GetNodesPendingSemanticAnalysisAsync(100)).Count);
+    }
+
+    [Fact]
+    public async Task MarkStaleEmbeddings_ReflagsSameDimensionModelSwap()
+    {
+        using var storage = await SeededStorageAsync(4);
+        var nodes = await storage.GetNodesPendingSemanticAnalysisAsync(100);
+        var analyzer = new FakeAnalyzer(n => new SemanticAnalysisResult { Summary = $"s {n.Name}" });
+
+        // Enrich, stamping EmbeddingModel = "test-model" (dim 3).
+        await SemanticEnrichmentService.ProcessBatchAsync(
+            nodes, analyzer, new FakeEmbeddings(), storage, maxParallelism: 4, NullLogger.Instance, "summary", "test-model", CancellationToken.None);
+
+        // Same dim + same model → nothing stale.
+        Assert.Equal(0, await storage.MarkStaleEmbeddingsForReembedAsync(3, "test-model"));
+        // Same dim (3) but a DIFFERENT model → all four flagged (catches a same-dimension model swap).
+        Assert.Equal(4, await storage.MarkStaleEmbeddingsForReembedAsync(3, "other-model"));
         Assert.Equal(4, (await storage.GetNodesPendingSemanticAnalysisAsync(100)).Count);
     }
 }

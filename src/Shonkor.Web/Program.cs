@@ -12,10 +12,31 @@ using Shonkor.Web.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 // Writable settings overlay: the dashboard's AI/tool settings (Ollama URL/model, embedding source,
-// streaming, etc.) are written here by the loopback-only /api/settings endpoint. Loaded LAST and with
-// reloadOnChange, so a save takes effect on the next request/enrichment cycle without a restart.
-// Machine-local, gitignored; secrets never go here (they stay in user-secrets / env).
-builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+// streaming, etc.) are written here by the loopback-only /api/settings endpoint, with reloadOnChange so
+// a save takes effect on the next request/enrichment cycle without a restart. Machine-local, gitignored;
+// secrets never go here (they stay in user-secrets / env). It is inserted so it overrides appsettings.json
+// but stays BELOW environment variables / command-line args — deployment env (Docker/k8s) must still win
+// over a machine-local dashboard edit (standard .NET precedence: env > JSON files).
+{
+    var localOverlay = new Microsoft.Extensions.Configuration.Json.JsonConfigurationSource
+    {
+        Path = "appsettings.Local.json",
+        Optional = true,
+        ReloadOnChange = true
+    };
+    localOverlay.ResolveFileProvider();
+    var envIndex = 0;
+    for (var i = 0; i < builder.Configuration.Sources.Count; i++)
+    {
+        if (builder.Configuration.Sources[i] is Microsoft.Extensions.Configuration.EnvironmentVariables.EnvironmentVariablesConfigurationSource)
+        {
+            envIndex = i;
+            break;
+        }
+        envIndex = i + 1; // default: after the last JSON/user-secrets source if no env source is present
+    }
+    builder.Configuration.Sources.Insert(envIndex, localOverlay);
+}
 
 // In Production, emit structured (JSON) logs so a container/k8s log pipeline can parse them.
 // Development keeps the readable default console.

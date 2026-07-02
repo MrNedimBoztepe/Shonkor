@@ -182,7 +182,7 @@ public sealed class SearchSemanticTool : IMcpTool
         var limit = ReadInt(args?["limit"], 10);
         var basePath = ctx.GetProjectBasePath(projectName);
 
-        var embedding = await ctx.EmbeddingService.GenerateEmbeddingAsync(query).ConfigureAwait(false);
+        var embedding = await ctx.EmbeddingService.GenerateEmbeddingAsync(query, Shonkor.Core.Interfaces.EmbeddingKind.Query).ConfigureAwait(false);
         if (embedding == null || embedding.Length == 0)
         {
             return SendToolResponse(id, "Could not embed the query (is the embedding backend / Ollama running?).");

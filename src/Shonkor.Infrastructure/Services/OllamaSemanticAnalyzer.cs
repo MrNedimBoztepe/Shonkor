@@ -243,7 +243,10 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
     /// Streams the grounded RAG answer token-by-token from Ollama (<c>stream=true</c>, NDJSON), so the UI
     /// shows first tokens immediately instead of waiting for the whole generation (TICKET-104). Uses the
     /// same grounded prompt as <see cref="GenerateRAGResponseAsync"/>. No retry loop — a stream can't be
-    /// safely restarted mid-flight; a failure surfaces to the caller, which falls back to the blocking path.
+    /// safely restarted once bytes are on the wire; a failure after headers are sent surfaces to the caller,
+    /// which can only mark the partial answer (it cannot transparently fall back to the blocking path).
+    /// If the stream ends before Ollama's terminal <c>done</c> line (e.g. the backend is killed mid-answer),
+    /// a truncation marker is emitted so the answer isn't silently presented as complete.
     /// </summary>
     public async IAsyncEnumerable<string> StreamRAGResponseAsync(
         string query,
@@ -272,6 +275,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         using var reader = new StreamReader(stream);
 
         // Ollama streams one JSON object per line: {"response":"…","done":false} … {"done":true}.
+        var completed = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -305,8 +309,16 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             }
             if (done)
             {
+                completed = true;
                 break;
             }
+        }
+
+        if (!completed)
+        {
+            // Stream ended without Ollama's terminal done=true — the backend was cut off mid-answer.
+            // Emit a marker so the caller/UI doesn't present a truncated answer as complete.
+            yield return "\n\n_… [Antwort unvollständig — Verbindung zum Modell abgebrochen]_";
         }
     }
 }

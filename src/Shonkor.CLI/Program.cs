@@ -323,15 +323,18 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
     {
         var config = new ConfigurationBuilder().AddEnvironmentVariables().Build();
         var source = (config["Embedding:Source"] ?? "code").Trim().ToLowerInvariant();
+        var model = config["EmbeddingService:OllamaModel"] ?? "nomic-embed-text";
         var maxParallelism = Math.Max(1, int.TryParse(config["SemanticEnrichment:MaxParallelism"], out var mp) ? mp : 4);
 
         using var httpClient = new HttpClient();
         var embeddingService = new OllamaEmbeddingService(httpClient, config, NullLogger<OllamaEmbeddingService>.Instance);
 
-        // Probe once so an unreachable backend fails fast and clearly instead of per-node.
+        // Probe once so an unreachable OR stalled backend fails fast (bounded), instead of per-node or a
+        // ~minutes-long hang on a backend that accepts the connection but never responds.
         try
         {
-            var probe = await embeddingService.GenerateEmbeddingAsync("probe");
+            using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var probe = await embeddingService.GenerateEmbeddingAsync("probe", probeCts.Token);
             if (probe.Length == 0)
             {
                 Console.WriteLine("\n[embed] Backend returned an empty embedding — skipping. Semantic search will fall back to FTS.");
@@ -340,7 +343,7 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"\n[embed] Embedding backend unreachable ({ex.Message}). Skipping; semantic search will fall back to FTS.");
+            Console.WriteLine($"\n[embed] Embedding backend unreachable/slow ({ex.Message}). Skipping; semantic search will fall back to FTS.");
             return;
         }
 
@@ -366,7 +369,7 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
                     var vector = await embeddingService.GenerateEmbeddingAsync(text, EmbeddingKind.Document, ct);
                     if (vector.Length > 0)
                     {
-                        await storage.UpdateNodeEmbeddingAsync(node.Id, vector, ct);
+                        await storage.UpdateNodeEmbeddingAsync(node.Id, vector, model, ct);
                     }
                     var n = Interlocked.Increment(ref done);
                     if (n % 100 == 0) Console.WriteLine($"[embed]   {n}/{toEmbed.Count}...");

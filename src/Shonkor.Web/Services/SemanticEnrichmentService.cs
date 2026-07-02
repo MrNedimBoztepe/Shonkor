@@ -34,15 +34,17 @@ public class SemanticEnrichmentService : BackgroundService
     private static readonly TimeSpan BasePollInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(15);
 
-    // Tunable via config (SemanticEnrichment:BatchSize / :MaxParallelism). Client-side parallelism is
-    // safe: Ollama serializes internally when it can't parallelize, so concurrency never costs throughput.
-    private readonly int _batchSize;
-    private readonly int _maxParallelism;
+    // Config is read PER CYCLE (not cached in the ctor) so dashboard edits via /api/settings — which land
+    // in IConfiguration through reloadOnChange — take effect on the next enrichment cycle without a restart:
+    //   SemanticEnrichment:BatchSize / :MaxParallelism (client-side parallelism is safe: Ollama serializes
+    //   internally when it can't parallelize) and Embedding:Source ("code" (default) embeds a structured
+    //   code document — markedly better intent retrieval than the 1-sentence "summary"; see review/results.md).
+    private readonly IConfiguration _configuration;
 
-    // TICKET-002: what text gets embedded. "code" (default) embeds a structured code document
-    // (type + name + signature + bounded body), which measured markedly better on intent retrieval
-    // than embedding the 1-sentence summary ("summary"). See review/results.md.
-    private readonly string _embeddingSource;
+    private int BatchSize => Math.Max(1, _configuration.GetValue<int?>("SemanticEnrichment:BatchSize") ?? 16);
+    private int MaxParallelism => Math.Max(1, _configuration.GetValue<int?>("SemanticEnrichment:MaxParallelism") ?? 4);
+    private string EmbeddingSource => (_configuration["Embedding:Source"] ?? "code").Trim().ToLowerInvariant();
+    private string EmbeddingModelName => _configuration["EmbeddingService:OllamaModel"] ?? "nomic-embed-text";
 
     private int _consecutiveServiceFailures;
     // TICKET-006: reconcile stored embeddings against the current model's dimension exactly once per
@@ -59,9 +61,7 @@ public class SemanticEnrichmentService : BackgroundService
         _projectManager = projectManager;
         _scopeFactory = scopeFactory;
         _logger = logger;
-        _batchSize = Math.Max(1, configuration.GetValue<int?>("SemanticEnrichment:BatchSize") ?? 16);
-        _maxParallelism = Math.Max(1, configuration.GetValue<int?>("SemanticEnrichment:MaxParallelism") ?? 4);
-        _embeddingSource = (configuration["Embedding:Source"] ?? "code").Trim().ToLowerInvariant();
+        _configuration = configuration;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -139,15 +139,27 @@ public class SemanticEnrichmentService : BackgroundService
         // backend simply defers this to a later cycle.
         if (!_embeddingsReconciled)
         {
+            float[]? probe = null;
             try
             {
-                var probe = await embeddingService.GenerateEmbeddingAsync("dimension probe", cancellationToken);
-                if (probe is { Length: > 0 })
+                probe = await embeddingService.GenerateEmbeddingAsync("dimension probe", cancellationToken);
+            }
+            catch (Exception ex) when (IsBackendUnavailable(ex))
+            {
+                // Backend not reachable yet — leave _embeddingsReconciled false and retry next cycle.
+            }
+
+            if (probe is { Length: > 0 })
+            {
+                // Mark reconciliation done up front: a single project's storage error must NOT re-run this
+                // (and block enrichment) every cycle. Per-project failures are isolated and logged.
+                _embeddingsReconciled = true;
+                foreach (var project in projects)
                 {
-                    foreach (var project in projects)
+                    try
                     {
                         var st = await _projectManager.GetStorageProviderAsync(project.Name, cancellationToken);
-                        var flagged = await st.MarkStaleEmbeddingsForReembedAsync(probe.Length, cancellationToken);
+                        var flagged = await st.MarkStaleEmbeddingsForReembedAsync(probe.Length, EmbeddingModelName, cancellationToken);
                         if (flagged > 0)
                         {
                             _logger.LogInformation(
@@ -155,12 +167,15 @@ public class SemanticEnrichmentService : BackgroundService
                                 flagged, project.Name);
                         }
                     }
-                    _embeddingsReconciled = true;
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Embedding reconciliation failed for project '{Project}'; skipping it.", project.Name);
+                    }
                 }
-            }
-            catch (Exception ex) when (IsBackendUnavailable(ex))
-            {
-                // Backend not reachable yet — leave _embeddingsReconciled false and retry next cycle.
             }
         }
 
@@ -168,7 +183,7 @@ public class SemanticEnrichmentService : BackgroundService
         {
             var storage = await _projectManager.GetStorageProviderAsync(project.Name, cancellationToken);
 
-            var pendingNodes = await storage.GetNodesPendingSemanticAnalysisAsync(_batchSize, cancellationToken);
+            var pendingNodes = await storage.GetNodesPendingSemanticAnalysisAsync(BatchSize, cancellationToken);
             if (pendingNodes.Count == 0) continue;
 
             _logger.LogInformation(
@@ -176,7 +191,7 @@ public class SemanticEnrichmentService : BackgroundService
                 pendingNodes.Count, project.Name);
 
             var backendDown = await ProcessBatchAsync(
-                pendingNodes, analyzer, embeddingService, storage, _maxParallelism, _logger, _embeddingSource, cancellationToken)
+                pendingNodes, analyzer, embeddingService, storage, MaxParallelism, _logger, EmbeddingSource, EmbeddingModelName, cancellationToken)
                 .ConfigureAwait(false);
 
             if (backendDown) return true;
@@ -203,6 +218,7 @@ public class SemanticEnrichmentService : BackgroundService
         int maxParallelism,
         ILogger logger,
         string embeddingSource,
+        string embeddingModel,
         CancellationToken cancellationToken)
     {
         using var cycleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -231,7 +247,7 @@ public class SemanticEnrichmentService : BackgroundService
                         embedding = await embeddingService.GenerateEmbeddingAsync(embeddingText, EmbeddingKind.Document, ct);
                     }
 
-                    await storage.UpdateNodeSemanticDataAsync(node.Id, result, embedding, ct);
+                    await storage.UpdateNodeSemanticDataAsync(node.Id, result, embedding, embeddingModel, ct);
                 }
                 catch (OperationCanceledException)
                 {

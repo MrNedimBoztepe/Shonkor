@@ -1136,7 +1136,7 @@ async function sendChat(){
         ans+=dec.decode(value,{stream:true});
         if(!pending){ pending=true; requestAnimationFrame(()=>{ thinking.innerHTML=mdLite(ans||'…'); $('#chat-msgs').scrollTop=$('#chat-msgs').scrollHeight; pending=false; }); }
       }
-      ans=ans.trim()||'No answer.'; thinking.innerHTML=mdLite(ans); _chatHist.push({role:'assistant',text:ans});
+      ans+=dec.decode(); ans=ans.trim()||'No answer.'; thinking.innerHTML=mdLite(ans); _chatHist.push({role:'assistant',text:ans});
     }
     else { thinking.className='cmsg error'; thinking.textContent = r.status>=500 ? "Couldn't reach the AI backend. Make sure Ollama is running with the configured model, then try again." : `Error: ${await r.text().catch(()=>r.status)}`; }
   }catch(e){ thinking.className='cmsg error'; thinking.textContent="Couldn't reach the AI backend. Make sure Ollama is running, then try again."; }
