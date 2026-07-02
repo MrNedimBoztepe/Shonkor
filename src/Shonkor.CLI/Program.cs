@@ -582,11 +582,16 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
     private static async Task<IEmbeddingService?> TryCreateMcpEmbeddingServiceAsync(IConfiguration config, HttpClient sharedClient)
     {
         var url = (config["EmbeddingService:OllamaUrl"] ?? "http://localhost:11434").TrimEnd('/');
+        // Probe over IPv4 to avoid the "localhost" -> ::1 first-attempt detour, which on a cold process
+        // can exceed a short timeout before falling back to 127.0.0.1 (a present backend would then be
+        // wrongly seen as absent). An absent backend still fails instantly (connection refused), so a
+        // slightly generous timeout stays fast when Ollama isn't running.
+        var probeUrl = url.Replace("localhost", "127.0.0.1", StringComparison.OrdinalIgnoreCase);
         try
         {
-            using var probeCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1500));
+            using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             using var probe = new HttpClient();
-            var response = await probe.GetAsync($"{url}/api/tags", probeCts.Token).ConfigureAwait(false);
+            var response = await probe.GetAsync($"{probeUrl}/api/tags", probeCts.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 return null;
