@@ -1080,8 +1080,18 @@ async function sendChat(){
   const recent=_chatHist.slice(-6);
   const composed=recent.length>1 ? recent.map(m=>`${m.role==='user'?'User':'Assistant'}: ${m.text}`).join('\n') : q;
   try{
-    const r=await fetch('/api/ask',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify({query:composed, nodeIds:ids})});
-    if(r.ok){ const d=await r.json(); const ans=d.response||d.Response||'No answer.'; _chatHist.push({role:'assistant',text:ans}); thinking.className='cmsg assistant'; thinking.innerHTML=mdLite(ans); }
+    // Streamed answer (text/plain, token-by-token) so first tokens render immediately.
+    const r=await fetch('/api/ask/stream',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify({query:composed, nodeIds:ids})});
+    if(r.ok && r.body){
+      const reader=r.body.getReader(); const dec=new TextDecoder(); let ans=''; let pending=false;
+      thinking.className='cmsg assistant';
+      while(true){
+        const {done,value}=await reader.read(); if(done) break;
+        ans+=dec.decode(value,{stream:true});
+        if(!pending){ pending=true; requestAnimationFrame(()=>{ thinking.innerHTML=mdLite(ans||'…'); $('#chat-msgs').scrollTop=$('#chat-msgs').scrollHeight; pending=false; }); }
+      }
+      ans=ans.trim()||'No answer.'; thinking.innerHTML=mdLite(ans); _chatHist.push({role:'assistant',text:ans});
+    }
     else { thinking.className='cmsg error'; thinking.textContent = r.status>=500 ? "Couldn't reach the AI backend. Make sure Ollama is running with the configured model, then try again." : `Error: ${await r.text().catch(()=>r.status)}`; }
   }catch(e){ thinking.className='cmsg error'; thinking.textContent="Couldn't reach the AI backend. Make sure Ollama is running, then try again."; }
   $('#chat-msgs').scrollTop=$('#chat-msgs').scrollHeight;

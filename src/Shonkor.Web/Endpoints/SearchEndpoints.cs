@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 using Shonkor.Core.Services;
@@ -142,6 +143,71 @@ public static class SearchEndpoints
             catch (Exception ex)
             {
                 return Fail("Failed to generate RAG response.", ex);
+            }
+        });
+
+        // POST /api/ask/stream - same as /api/ask but streams the answer token-by-token (TICKET-104), so
+        // the dashboard shows first tokens immediately. Writes text/plain chunks; disable streaming with
+        // Features:StreamingAnswers=false (then the full answer is written in one chunk).
+        app.MapPost("/api/ask/stream", async (AskRagRequest req, HttpContext context, ProjectManager pm, ISemanticAnalyzer semanticAnalyzer, IConfiguration config, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Query) || req.NodeIds == null || req.NodeIds.Length == 0)
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsync("Query and NodeIds are required.", ct);
+                return;
+            }
+
+            var storage = await pm.GetStorageForRequestAsync(context, ct);
+            var contextNodes = new List<GraphNode>();
+            foreach (var id in req.NodeIds)
+            {
+                var node = await storage.GetNodeByIdAsync(id, ct);
+                if (node != null)
+                {
+                    contextNodes.Add(node);
+                }
+            }
+
+            if (contextNodes.Count == 0)
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsync("None of the provided NodeIds were found in the database.", ct);
+                return;
+            }
+
+            context.Response.ContentType = "text/plain; charset=utf-8";
+            var streamingEnabled = config.GetValue<bool?>("Features:StreamingAnswers") ?? true;
+
+            try
+            {
+                if (streamingEnabled)
+                {
+                    await foreach (var chunk in semanticAnalyzer.StreamRAGResponseAsync(req.Query, contextNodes, ct).WithCancellation(ct))
+                    {
+                        await context.Response.WriteAsync(chunk, ct);
+                        await context.Response.Body.FlushAsync(ct);
+                    }
+                }
+                else
+                {
+                    var full = await semanticAnalyzer.GenerateRAGResponseAsync(req.Query, contextNodes, ct);
+                    await context.Response.WriteAsync(full, ct);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Client disconnected or request aborted — nothing to do; the response is already partial.
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[API] Streaming RAG response failed. :: {ex.Message}");
+                // Headers/body may already be sent; append a marker rather than trying to set a status code.
+                if (!context.Response.HasStarted)
+                {
+                    context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                }
+                await context.Response.WriteAsync("\n[Fehler beim Streamen der Antwort]", CancellationToken.None);
             }
         });
 

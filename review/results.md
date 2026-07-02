@@ -41,8 +41,8 @@
 - **Hybrid = Semantik** auf diesem Set, weil FTS bei Intent-Queries zu schwach ist, um per RRF noch etwas beizutragen. Bei n=15 ist das Konfidenzintervall breit — die Hybrid-Fusion ist als Absicherung (graceful, additiv) implementiert, ihr Mehrwert über reine Code-Semantik ist auf größeren Sets zu verifizieren.
 - **n = 15** Intent-Fälle: Richtung eindeutig, Punktschätzung mit Vorsicht. Golden-Set sollte wachsen (siehe eval-plan.md).
 
-### 1c. Befund am Rande: semantische Suche war im ausgelieferten DB **inaktiv**
-`shonkor.db`: **40,4 % der Knoten haben eine Summary, aber 0,0 % ein Embedding.** Die Vektorsuche lieferte also produktiv **nichts**. Das untermauert K2/M1: Der semantische Pfad war bislang faktisch tot. Mit code-basiertem Enrichment (jetzt Default) wird er erst nutzbar.
+### 1c. Korrektur: `shonkor.db` hat sehr wohl Embeddings (Messfehler in Runde 1)
+`shonkor.db`: **40,4 % der Knoten haben eine Summary — und ebenso 40,4 % ein Embedding.** Eine frühere Version dieses Berichts behauptete „0 % Embeddings / semantischer Pfad tot" — das war **falsch** und ein Messfehler: der Eval-Zähler las die Knoten über `GetAllNodesAsync`, das die `Embedding`-BLOB-Spalte bewusst **nicht** lädt (Aufrufer brauchen sie nicht), also immer 0 meldete. Der Zähler zählt jetzt direkt per SQL (`SELECT COUNT(*) … WHERE Embedding IS NOT NULL`). Die Vektorsuche war im web-angereicherten `shonkor.db` also nutzbar — auf Basis der **Summary**-Embeddings des alten Entwurfs (Finding K2 bleibt gültig: Code schlägt Summary). Lehre: eine Metrik ist nur so gut wie ihr Messpfad — genau dafür ist die Eval da.
 
 ---
 
@@ -91,6 +91,21 @@ Faithfulness-Scoring (Ebene 2 der Eval) ist als nächster Schritt vorgesehen.
 
 - **TICKET-006 vollständig:** Embeddings tragen jetzt ihre Dimension (`EmbeddingDim`); ein Modellwechsel markiert alte Vektoren automatisch zum Re-Embed (`MarkStaleEmbeddingsForReembedAsync`, einmalig vom Worker nach Backend-Probe), statt sie still aus der Suche zu kippen. Behebt den in §1c gefundenen stillen Recall-Verlust an der Wurzel.
 - **TICKET-004 größtenteils:** (a) Warn-Diagnose `csharp.ambiguous-type-reference` macht die Über-Verkantung der Default-Namensauflösung (H1) **sichtbar** (via `get_diagnostics`), ohne Kanten/Schema/Web-UI anzufassen. (b) Der Semantik-Modus ist jetzt **non-lossy**: unauflösbare Referenzen (partielle/nicht-kompilierende Checkouts) fallen auf Namens-Auflösung zurück statt Kanten still zu verlieren — damit ist exakte Auflösung **gefahrlos aktivierbar** (`Indexing:SemanticCSharp`), nie schlechter als der Default. Offen bleibt allein der globale **Default-Flip** — bewusst als Nutzer-Entscheidung (Indexier-Latenz-Kosten der Roslyn-Compilation, verändert bestehende Graphen).
+
+## 5b. Roadmap #2 umgesetzt — reale End-to-End-Zahlen durch den ausgelieferten Pfad
+
+Nach Runde 2 (TICKET-101…107) sind Embeddings + Semantik/Hybrid jetzt auf dem Hauptpfad. Gemessen **durch die echte Produkt-Pipeline** (`shonkor index src --embed` → gespeicherte Code-Embeddings → `SearchSemanticAsync`), nicht mehr über den In-Process-Experiment-Harness. Gleiche DB (885 eingebettete Knoten), gleiche 40 Intent-Queries, 95 %-KI:
+
+| Retriever | Precision@1 | Recall@10 | MRR |
+|---|---|---|---|
+| Graph (FTS5) | 0,250 ±0,134 | 0,250 ±0,134 | 0,250 |
+| **Semantik (gespeicherte Code-Embeddings)** | **0,725 ±0,138** | **0,975 ±0,048** | **0,822** |
+
+**Versprechbar:** *„Auf natürlichsprachige Code-Suche hebt code-basierte Vektorsuche Recall@10 von ~0,25 (FTS) auf ~0,98 und Precision@1 von ~0,25 auf ~0,73 — jetzt auch im CLI-/Agenten-Pfad, sofern Embeddings erzeugt wurden (`index --embed` bzw. Web-Enrichment)."*
+
+Grounding (RAG-Antwort, `--answers`, live `qwen2.5-coder`): Zitat-Validität **1,00**, Antworten-mit-Zitat **1,00**, Must-cite **0,67**, **Abstention-Recall 0,50** — Grounding ist damit erstmals gemessen (K2), inkl. der ehrlichen Grenze, dass das kleine Modell nicht immer korrekt verweigert.
+
+Verdrahtung (K1/H1 behoben): `search_semantic` **und** neues `search_hybrid` sind MCP-Tools (der stdio-Server bekommt einen Embedding-Service bei erreichbarem Backend); das Dashboard nutzt Hybrid im „Brain"-Modus; die Antwort **streamt** (TICKET-104); Ambiguitäts- und Injection-Diagnosen sind aktiv.
 
 ## 6. Semantik-Default geflippt — gemessener Latenz-Tradeoff (TICKET-004 abgeschlossen)
 

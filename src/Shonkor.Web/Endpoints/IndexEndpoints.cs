@@ -63,7 +63,7 @@ public static class IndexEndpoints
                     var storage = await pm.GetStorageProviderAsync(project.Name, ct);
                     var scanner = new GraphIndexScanner(storage, activeParsers, loggerFactory.CreateLogger("Shonkor.Index"),
                         semanticCsharp: UseSemanticCSharp(project, config), compilationCache: compilationCache,
-                        postProcessors: pluginLoad.PostProcessors.Prepend(new Shonkor.Infrastructure.Services.AmbiguousCSharpTypePostProcessor()));
+                        postProcessors: pluginLoad.PostProcessors.Concat(Shonkor.Infrastructure.Services.FirstPartyPostProcessors.Create()));
 
                     var result = await scanner.ScanDirectoryAsync(targetDir, exclusions, ct);
                     var stats = await storage.GetStatisticsAsync(ct);

@@ -1463,5 +1463,24 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task UpdateNodeEmbeddingAsync(string nodeId, float[]? embedding, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(nodeId);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE Nodes
+            SET Embedding = @Embedding, EmbeddingDim = @EmbeddingDim
+            WHERE Id = @Id;
+            """;
+        command.Parameters.AddWithValue("@Embedding", (object?)SqliteRowMapper.EmbeddingToBytes(embedding) ?? DBNull.Value);
+        command.Parameters.AddWithValue("@EmbeddingDim", embedding is { Length: > 0 } ? embedding.Length : (object)DBNull.Value);
+        command.Parameters.AddWithValue("@Id", nodeId);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     #endregion
 }

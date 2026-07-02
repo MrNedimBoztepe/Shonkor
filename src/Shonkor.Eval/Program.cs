@@ -50,7 +50,9 @@ internal static class Program
         var stats = await provider.GetStatisticsAsync();
         var allNodes = await provider.GetAllNodesAsync();
         var withSummary = allNodes.Count(n => !string.IsNullOrWhiteSpace(n.Summary));
-        var withEmbedding = allNodes.Count(n => n.Embedding is { Length: > 0 });
+        // GetAllNodesAsync/ReadNode does not load the Embedding BLOB (callers don't need it), so count it
+        // directly against the DB file rather than off the materialized nodes.
+        var withEmbedding = CountNodesWithEmbedding(dbPath);
 
         Console.WriteLine("=== Shonkor Precision Eval ===");
         Console.WriteLine($"DB: {Path.GetFullPath(dbPath)}");
@@ -62,6 +64,26 @@ internal static class Program
         if (dump)
         {
             DumpSample(allNodes);
+            return 0;
+        }
+
+        // Answer/grounding mode (TICKET-102): citation validity, must-cite, abstention over the RAG path.
+        if (args.Contains("--answers"))
+        {
+            var answersPath = setPath ?? Path.Combine("eval", "golden", "answers.json");
+            if (!File.Exists(answersPath))
+            {
+                Console.Error.WriteLine($"No answer golden set at '{answersPath}'.");
+                return 1;
+            }
+            var answerCases = JsonSerializer.Deserialize<List<GoldenCase>>(File.ReadAllText(answersPath), JsonOpts) ?? new();
+            var analyzer = TryCreateSemanticAnalyzer();
+            if (analyzer is null)
+            {
+                Console.Error.WriteLine("No semantic analyzer backend.");
+                return 1;
+            }
+            await AnswerEval.RunAsync(provider, analyzer, answerCases, contextK: ArgValue(args, "--context-k") is { } ck && int.TryParse(ck, out var ckp) ? ckp : 5);
             return 0;
         }
 
@@ -83,6 +105,13 @@ internal static class Program
         List<GoldenCase> cases = setPath is not null && File.Exists(setPath)
             ? JsonSerializer.Deserialize<List<GoldenCase>>(File.ReadAllText(setPath), JsonOpts) ?? new()
             : Bootstrap(allNodes);
+
+        // --force-mode lets one golden set be scored under a chosen retriever (graph|semantic) against the
+        // same DB, so graph-vs-semantic is a clean apples-to-apples comparison on identical queries.
+        if (ArgValue(args, "--force-mode") is { } forced)
+        {
+            foreach (var c in cases) c.Mode = forced;
+        }
 
         Console.WriteLine($"Golden cases: {cases.Count} ({(setPath is null ? "auto-bootstrapped self-retrieval" : setPath)})");
         Console.WriteLine();
@@ -244,6 +273,38 @@ internal static class Program
         catch { return null; }
     }
 
+    private static ISemanticAnalyzer? TryCreateSemanticAnalyzer()
+    {
+        try
+        {
+            var config = new ConfigurationBuilder().AddEnvironmentVariables().Build();
+            var logger = LoggerFactory.Create(b => { }).CreateLogger<OllamaSemanticAnalyzer>();
+            return new OllamaSemanticAnalyzer(new HttpClient(), config, logger);
+        }
+        catch { return null; }
+    }
+
+    private static int CountNodesWithEmbedding(string dbPath)
+    {
+        try
+        {
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+                {
+                    DataSource = dbPath,
+                    Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly
+                }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM Nodes WHERE Embedding IS NOT NULL;";
+            return Convert.ToInt32(command.ExecuteScalar());
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
     private static string? ArgValue(string[] args, string name)
     {
         var i = Array.IndexOf(args, name);
@@ -264,14 +325,25 @@ internal sealed class GoldenCase
 {
     public string Id { get; set; } = "";
     public string Query { get; set; } = "";
-    /// <summary>"graph" (FTS, default) or "semantic" (vector).</summary>
+    /// <summary>"graph" (FTS, default), "semantic" (vector), or "ask" (RAG answer / grounding eval).</summary>
     public string? Mode { get; set; }
-    /// <summary>Node-id substrings or exact names that count as a correct hit.</summary>
+    /// <summary>Node-id substrings or exact names that count as a correct hit (retrieval) / must-cite (answer).</summary>
     public List<string> Expected { get; set; } = new();
+    /// <summary>False for abstention cases: the answer is NOT in the graph and the system must say so.</summary>
+    public bool IsAnswerable { get; set; } = true;
 }
 
 internal sealed record MetricSet(int Cases, double PrecisionAt1, double PrecisionAtK, double RecallAtK, double Mrr)
 {
     public string Row(string label) =>
-        $"| {label} | {Cases} | {PrecisionAt1:F3} | {PrecisionAtK:F3} | {RecallAtK:F3} | {Mrr:F3} |";
+        $"| {label} | {Cases} | {PrecisionAt1:F3} {Ci(PrecisionAt1)} | {PrecisionAtK:F3} | {RecallAtK:F3} {Ci(RecallAtK)} | {Mrr:F3} |";
+
+    /// <summary>95% confidence half-width (normal approximation) for a proportion metric, so a small
+    /// golden set is read as a range, not a false-precision point estimate. Rendered as "±0.xxx".</summary>
+    private string Ci(double p)
+    {
+        if (Cases <= 0) return string.Empty;
+        var halfWidth = 1.96 * Math.Sqrt(Math.Max(p * (1 - p), 0) / Cases);
+        return $"±{halfWidth:F3}";
+    }
 }

@@ -2,6 +2,7 @@
 
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Shonkor.Core.Services;
 using static Shonkor.Infrastructure.Services.Mcp.McpToolHelpers;
 
 namespace Shonkor.Infrastructure.Services.Mcp.Tools;
@@ -194,6 +195,82 @@ public sealed class SearchSemanticTool : IMcpTool
         }
 
         var lines = results.Select(r =>
+        {
+            var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t— {r.Node.Summary}" : "";
+            return $"{r.Node.Type}\t{r.Node.Name}\t{ToHandle(r.Node.Id, basePath)}{summary}";
+        });
+        return SendToolResponse(id, string.Join("\n", lines));
+    }
+}
+
+/// <summary>
+/// Hybrid search: Reciprocal Rank Fusion of FTS (keyword/BM25) and vector similarity — combines the
+/// exact-token strength of <c>search_graph</c> with the meaning strength of <c>search_semantic</c>.
+/// Capability-gated on an embedding backend; without embedded nodes it effectively returns the FTS ranking.
+/// </summary>
+public sealed class SearchHybridTool : IMcpTool
+{
+    public string Name => "search_hybrid";
+
+    public bool IsAvailable(McpToolContext ctx) => ctx.HasEmbeddingService;
+
+    public object GetSchema() => new
+    {
+        name = "search_hybrid",
+        description = "Best-of-both search: fuses keyword (FTS) and vector (meaning) results via Reciprocal Rank Fusion. Use when a query has both concrete identifiers and a conceptual intent. Returns 'type  name  handle  — summary' per hit. Requires embedded nodes for the vector half; otherwise ranks like search_graph.",
+        inputSchema = new
+        {
+            type = "object",
+            properties = new
+            {
+                query = new { type = "string", description = "The search text — identifiers and/or a natural-language intent." },
+                limit = new { type = "integer", description = "Max number of results (default 10)." },
+                projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+            },
+            required = new[] { "query" }
+        }
+    };
+
+    public async Task<string> ExecuteAsync(JsonElement id, JsonObject? args, McpToolContext ctx)
+    {
+        var query = args?["query"]?.ToString();
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return SendError(id, -32602, "Parameter 'query' is required");
+        }
+
+        var projectName = args?["projectName"]?.ToString();
+        var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
+        var limit = ReadInt(args?["limit"], 10);
+        var basePath = ctx.GetProjectBasePath(projectName);
+
+        // Fetch a wider candidate set from each retriever (limit*2), then fuse and take the top `limit`.
+        var ftsResults = await storage.SearchAsync(query, limit * 2).ConfigureAwait(false);
+
+        IReadOnlyList<Shonkor.Core.Models.SearchResult> semResults = [];
+        if (ctx.EmbeddingService != null)
+        {
+            try
+            {
+                var embedding = await ctx.EmbeddingService.GenerateEmbeddingAsync(query, Shonkor.Core.Interfaces.EmbeddingKind.Query).ConfigureAwait(false);
+                if (embedding is { Length: > 0 })
+                {
+                    semResults = await storage.SearchSemanticAsync(embedding, limit * 2).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // Embedding backend hiccup — fall back to FTS-only fusion rather than failing the query.
+            }
+        }
+
+        var fused = HybridFusion.ReciprocalRankFusion(ftsResults, semResults, limit);
+        if (fused.Count == 0)
+        {
+            return SendToolResponse(id, $"No hybrid matches for '{query}'.");
+        }
+
+        var lines = fused.Select(r =>
         {
             var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t— {r.Node.Summary}" : "";
             return $"{r.Node.Type}\t{r.Node.Name}\t{ToHandle(r.Node.Id, basePath)}{summary}";

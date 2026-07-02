@@ -32,4 +32,17 @@ public interface ISemanticAnalyzer
     /// Synthesizes a natural language answer to the user's query based on the provided graph context.
     /// </summary>
     Task<string> GenerateRAGResponseAsync(string query, IReadOnlyList<GraphNode> contextNodes, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Streams the answer incrementally (token/chunk at a time). The default implementation yields the
+    /// full <see cref="GenerateRAGResponseAsync"/> result in one chunk, so implementations that cannot
+    /// stream still satisfy callers; backends that support streaming override this.
+    /// </summary>
+    async IAsyncEnumerable<string> StreamRAGResponseAsync(
+        string query,
+        IReadOnlyList<GraphNode> contextNodes,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        yield return await GenerateRAGResponseAsync(query, contextNodes, cancellationToken).ConfigureAwait(false);
+    }
 }

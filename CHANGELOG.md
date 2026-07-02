@@ -5,6 +5,26 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — Precision roadmap #2 (retrieval reaches the main paths; grounding measured)
+- **Semantic/hybrid search now works on the CLI and MCP paths, not just the web dashboard.**
+  `shonkor index --embed` populates code embeddings at index time (opt-in; needs a reachable Ollama), and
+  the stdio MCP server wires an embedding service when a backend is reachable — so `search_semantic` and the
+  new **`search_hybrid`** MCP tool are usable by agents. Absent backend → clean FTS fallback (no startup delay).
+- **`search_hybrid` MCP tool** and dashboard "Brain" mode now use Reciprocal Rank Fusion (FTS + vector).
+- **Streaming answers**: `POST /api/ask/stream` streams the grounded answer token-by-token (`ISemanticAnalyzer.StreamRAGResponseAsync`); the dashboard renders incrementally. Toggle with `Features:StreamingAnswers=false`.
+- **Grounding evaluation** (`shonkor-eval --answers`): citation validity, must-cite rate, and abstention
+  recall over the RAG answer path — "grounded" is now measured, not just prompted.
+- **Prompt-injection hardening**: the RAG prompt frames retrieved context as untrusted data; a
+  `SuspiciousContentPostProcessor` flags injection-style text via `security.suspicious-instruction-in-content`.
+- **Embedding coverage of large symbols**: `EmbeddingTextBuilder` embeds head + tail (not just the head), so
+  a symbol's opening and closing logic are both represented; shared by the web worker and CLI embed pass.
+- **Eval harness**: 40-case intent golden set (was 15), 95% confidence intervals in the report, a
+  `--force-mode` switch for apples-to-apples graph-vs-semantic runs, and a direct-SQL embedding count
+  (fixing a measurement bug where `GetAllNodesAsync` never loads the embedding BLOB).
+- **New storage op** `UpdateNodeEmbeddingAsync` (embedding-only write, no summarization).
+- Measured end-to-end on this repo's `src` (885 embedded nodes, 40 intent queries): natural-language
+  Recall@10 **0.25 (FTS) → 0.98 (semantic)**, Precision@1 **0.25 → 0.73**. See `review/results.md`.
+
 ### Added — Precision & grounding roadmap (retrieval quality)
 - **Semantic C# resolution is now the default.** Indexing resolves C# references with a Roslyn
   `SemanticModel` (exact `REFERENCES_TYPE`/`IMPLEMENTS`/`EXTENDS` + method-level `CALLS`), disambiguating

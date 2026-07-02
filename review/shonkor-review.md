@@ -1,27 +1,27 @@
-# Kritisches Review: shonkor — Präzises Graph-RAG (C#/.NET)
+# Kritisches Review #2: shonkor — Präzises Graph-RAG (C#/.NET) — Stand nach Roadmap-Umsetzung
 
 **Reviewer-Rolle:** Senior Engineer Graph-RAG / Retrieval / MCP
-**Datum:** 2026-06-30
-**Branch:** develop · **Fokus:** Präzision & Grounding der Antworten
-**Methodik:** Code gelesen (Ingestion, Graph-Linking, Retrieval, MCP, LLM-Pfad), Aussagen mit Datei-/Zeilenverweisen belegt. Laufzeit-Präzision nicht messbar, weil kein Eval existiert (siehe K1).
+**Datum:** 2026-07-02 · **Branch:** feat/precision-graphrag-roadmap (PR #38) · **Fokus:** Präzision & Grounding
+**Kontext:** Dies ist der **zweite** Durchgang, am *umgesetzten* Code. Der erste Review + die Umsetzung sind in [results.md](results.md) und im [CHANGELOG](../CHANGELOG.md) dokumentiert. Hier wird geprüft, was *jetzt* — nach den Verbesserungen — die Antwortqualität gefährdet, inklusive schonungsloser Prüfung der neu gebauten Teile.
 
 ---
 
 ## Executive Summary (1 Seite)
 
-shonkor hat ein **starkes Fundament und ein schwaches Versprechen**. Das Fundament ist der deterministische, AST-abgeleitete Struktur-Graph (Roslyn) plus FTS5 + rekursive CTEs. Für die *strukturellen* MCP-Tools (`get_source`, `find_usages`, `call_hierarchy`, `signature`, `outline`) ist das tatsächlich präzise und reproduzierbar — das ist das beste am System und sollte das Produkt-Zentrum bleiben.
+Die Roadmap hat echte, gemessene Verbesserungen gebracht (semantische C#-Auflösung als Default, Code-Embeddings, budgetierte Capsule, Zitate im RAG-Prompt, Eval-Harness). **Das trägt.** Aber der zweite Blick deckt einen unbequemen, code-belegten Kern auf:
 
-Das Versprechen — „**100 % präzise**", „**präziser als probabilistische Vektor-DBs**", „**87 % Token-Ersparnis**" — hält der Code an drei zentralen Stellen **nicht**:
+**Die zwei/drei Dinge, die die Antwortqualität jetzt wirklich gefährden:**
 
-1. **Es gibt keinerlei Präzisions-Messung.** Kein Golden-Set, keine Faithfulness-/Precision@k-Metrik, keine Regression. Alle Tests sind Unit-Tests für Parser/Storage/Plugins. „Präzise" ist damit eine **unbelegte Behauptung** — und ohne Eval merkt niemand, wenn eine Änderung die Antwortqualität verschlechtert. (→ **K1**)
+1. **Die Retrieval-Verbesserungen erreichen die Hauptpfade nicht (KRITISCH).** Der gemessene Sprung „Intent-Recall@10 0,27 → 0,93" hängt an *Code-Embeddings*, die es auf den meistgenutzten Wegen gar nicht gibt:
+   - **CLI `index` erzeugt keine Embeddings.** Der Index-Pfad ([Program.cs `ParseAndRunIndexAsync`](../src/Shonkor.CLI/Program.cs:203)) ruft nie einen Embedding-Service auf — Embeddings entstehen ausschließlich im Web-Hintergrund-Worker `SemanticEnrichmentService`. Ein offline per `shonkor index` gebauter Graph hat **0 Embeddings**.
+   - **Der stdio-MCP-Server (der Agenten-Pfad) wird ohne Embedding-Service gebaut** ([Program.cs:544](../src/Shonkor.CLI/Program.cs:544) — `embeddingService`-Parameter bleibt `null`). Damit ist `search_semantic` dort gar nicht gelistet ([MetaTools.cs:50](../src/Shonkor.Infrastructure/Services/Mcp/Tools/MetaTools.cs:50)), und `/api/search/hybrid` ist kein MCP-Tool.
+   - **Folge:** Auf dem primären Agenten- (MCP) und Offline- (CLI) Pfad ist die Retrieval-Präzision **unverändert gegenüber vor der Roadmap** — reines FTS + Graph. Die 0,93 gelten nur für einen web-angereicherten Graphen mit laufendem Ollama. Das ist die Lücke zwischen versprochener Zahl und dem, was die meisten Nutzungen tatsächlich bekommen. (→ **K1**)
 
-2. **Die semantische Suche bettet nicht den Code ein, sondern eine vom kleinen lokalen LLM erzeugte 1-Satz-Zusammenfassung auf Deutsch** ([SemanticEnrichmentService.cs:187](../src/Shonkor.Web/Services/SemanticEnrichmentService.cs:187)). Damit wird gegen einen lossy, potenziell halluzinierten Paraphrase-Vektor gematcht; bei englischer Query entsteht zusätzlich ein Cross-Lingual-Mismatch. Der „semantische" Pfad ist strukturell ungenau. (→ **K2**)
+2. **Grounding wird verlangt, aber nicht verifiziert (KRITISCH/HOCH).** Die RAG-Antwort fordert per Prompt Zitate `[Name @ file:zeilen]` und läuft mit `temperature=0` — gut. Aber **nichts prüft, ob die zitierte Stelle die Aussage tatsächlich stützt**, und die Eval misst nur *Retrieval* (Precision/Recall/MRR), **keine Faithfulness/Abstention** ([Shonkor.Eval/Program.cs](../src/Shonkor.Eval/Program.cs) — retrieval-only). Das kleine lokale Modell halluzinierte im Smoke-Test sichtbar („Lernmaterialien"), während das Zitat formal korrekt aussah. „Grounded" ist damit weiterhin überwiegend eine *Behauptung*, nicht ein *gemessener* Zustand. (→ **K2**)
 
-3. **Die Kontext-Assemblierung hat kein Token-Budget und kein Query-Relevanz-Ranking.** Der Capsule-Synthesizer kippt den **vollständigen Quellcode aller Knoten der 2-Hop-Nachbarschaft** in den Prompt, flach nach Datei sortiert, ohne Seeds von Randknoten zu unterscheiden ([ContextCapsuleSynthesizer.cs:159](../src/Shonkor.Core/Services/ContextCapsuleSynthesizer.cs:159)). Das ist „mehr als Top-K reinkippen" — und auf Hub-Knoten explodiert es, womit auch das Token-Versprechen kippt. (→ **K3**)
+3. **Hybrid-Retrieval ist verwaist (HOCH).** Die RRF-Fusion existiert nur als REST-Endpoint `/api/search/hybrid` — **ohne Aufrufer**: die Dashboard-UI toggelt weiter FTS vs. Semantik ([app.js](../src/Shonkor.Web/wwwroot/app.js:797)), und es gibt **kein `search_hybrid` MCP-Tool**. Die Verbesserung sitzt nicht dort, wo Retrieval tatsächlich passiert. (→ **H1**)
 
-Dazu kommt ein **High-Finding am Graph-Kern selbst**: Im Default (`SHONKOR_SEMANTIC_CSHARP` aus) werden `REFERENCES_TYPE`-Kanten **per Namen** aufgelöst — „a name match creates an edge to EVERY same-named type" ([CrossTechLinker.cs:119](../src/Shonkor.Infrastructure/Services/CrossTechLinker.cs:119)). Gleichnamige Typen über Namespaces hinweg erzeugen damit **falsche Kanten**, die `blast_radius`, `impact_of` und `rename_plan` direkt verfälschen. Die „100 %"-Präzision gilt nur im opt-in-Semantikmodus, der standardmäßig **aus** ist.
-
-**Bottom line:** Das deterministische Struktur-Retrieval ist gut und sollte geschärft (Semantik-Default) und ehrlich vermarktet werden. Der LLM-/Vektor-/Antwort-Pfad ist heute nicht „grounded" im versprochenen Sinn und braucht: (a) eine Eval, (b) Embeddings auf Code statt Summary, (c) ein Kontext-Budget mit Ranking, (d) Zitate + Determinismus im Antwort-Prompt. Priorität: **K1 → K2 → K3**, in dieser Reihenfolge, weil ohne K1 keine der anderen Verbesserungen verifizierbar ist.
+**Bottom line:** Der Präzisions-*Kern* (deterministischer Graph, semantische C#-Auflösung als Default) ist solide und real verbessert. Der *semantische/hybride/geerdete* Teil ist gebaut, aber **an den falschen Enden verdrahtet** — die gemessenen Gewinne erreichen weder den Agenten noch den Offline-Nutzer. Reihenfolge der Behebung: **K1 (Verdrahtung/Embeddings am Haupt­pfad) → K2 (Faithfulness messen) → H1 (Hybrid dorthin bringen, wo abgefragt wird)**.
 
 ---
 
@@ -29,72 +29,50 @@ Dazu kommt ein **High-Finding am Graph-Kern selbst**: Im Default (`SHONKOR_SEMAN
 
 ### 🔴 Kritisch
 
-#### K1 — Keine Präzisions-Evaluation; „präzise" ist unbelegt
-- **Befund:** Kein Golden-Dataset, keine Metriken (Precision@k, Recall, Faithfulness/Groundedness, Answer-Relevance), keine Regressions-Checks. `grep` über `tests/` und `docs/` findet nur Unit-Regressionen für Parser/CTE/Plugins, keine Retrieval- oder Antwort-Qualitätsmessung.
-- **Beleg:** `tests/Shonkor.Tests/*` (22 Dateien, alle struktur-/infrastrukturbezogen); kein Eval-Harness, kein Query→Erwartung-Set.
-- **Auswirkung auf Präzision:** Maximal. Jede Aussage über „Präzision" ist nicht falsifizierbar. Eine Änderung an Chunking, Linking, Embedding-Quelle oder Prompt kann die Antwortqualität still verschlechtern — niemand misst es. Das ist die Grundlage, ohne die K2/K3 nicht bewertbar sind.
+#### K1 — Semantik/Hybrid-Retrieval erreicht den Agenten- und CLI-Pfad nicht
+- **Befund:** Embeddings entstehen nur im Web-`SemanticEnrichmentService`; CLI-Index und stdio-MCP haben keine.
+- **Beleg:** kein Embedding-Aufruf in [ParseAndRunIndexAsync](../src/Shonkor.CLI/Program.cs:203); MCP-Server ohne `embeddingService` ([Program.cs:544](../src/Shonkor.CLI/Program.cs:544)); `search_semantic` nur bei `HasEmbeddingService` ([MetaTools.cs:50](../src/Shonkor.Infrastructure/Services/Mcp/Tools/MetaTools.cs:50), [McpToolContext.cs:44](../src/Shonkor.Infrastructure/Services/Mcp/McpToolContext.cs:44)).
+- **Auswirkung:** Der Kern-Präzisionsgewinn der Roadmap ist auf dem Hauptpfad **nicht wirksam**. Agenten/Offline-Nutzer bekommen FTS-Intent-Recall ~0,27 statt ~0,93. Die README-/results-Zahlen sind nur unter „Web + Ollama-Enrichment gelaufen" wahr — das ist unzureichend kommuniziert.
 
-#### K2 — Semantische Suche bettet die LLM-Zusammenfassung ein, nicht den Code
-- **Befund:** Im Enrichment wird pro Knoten erst ein 1-Satz-Summary vom lokalen Modell erzeugt und dann **dieses Summary** eingebettet — nicht Code, Signatur oder Identifier.
-- **Beleg:** [SemanticEnrichmentService.cs:182-190](../src/Shonkor.Web/Services/SemanticEnrichmentService.cs:182) (`result = AnalyzeNodeAsync(...)` → `GenerateEmbeddingAsync(result.Summary)`); Summary-Prompt erzwingt **deutsche** 1-Satz-Fachbeschreibung ([OllamaSemanticAnalyzer.cs:46-61](../src/Shonkor.Infrastructure/Services/OllamaSemanticAnalyzer.cs:46)).
-- **Auswirkung auf Präzision:** Hoch. (a) Garbage-in: ist das Summary generisch/falsch (kleines Modell, `qwen2.5-coder` default), ist der Vektor wertlos. (b) Identifier-/API-Level-Treffer gehen verloren — exakt das, was bei Code-Suche zählt. (c) Query (oft EN, roher Text) vs. Dokument (DE, abstrakter Satz) = Domänen-/Sprach-Mismatch. Der „semantische" Modus ist damit kein verlässlicher Recall-Lieferant und untergräbt das Hybrid-Versprechen des READMEs.
-
-#### K3 — Kontext-Assemblierung ohne Token-Budget und ohne Relevanz-Ranking
-- **Befund:** `Synthesize()` rendert für **jeden** Knoten der Subgraph-Nachbarschaft den **vollständigen** `node.Content`, gruppiert nach Datei, sortiert nach Zeilennummer. Kein Budget, keine Truncation, keine Gewichtung Seed > 1-Hop > 2-Hop.
-- **Beleg:** [ContextCapsuleSynthesizer.cs:155-162](../src/Shonkor.Core/Services/ContextCapsuleSynthesizer.cs:155); aufgerufen aus `/api/rag/query` mit `hops=2` ([GraphRagEndpoints.cs:40-44](../src/Shonkor.Web/Endpoints/GraphRagEndpoints.cs:40)) und `/api/capsule` ([SearchEndpoints.cs:250-252](../src/Shonkor.Web/Endpoints/SearchEndpoints.cs:250)). Seeds = nur Top-5 FTS, danach blinde 2-Hop-Expansion über rekursive CTE.
-- **Auswirkung auf Präzision:** Hoch. Bei Hub-Knoten (z. B. eine Basisklasse mit 200 Referenzen) bläht die 2-Hop-Expansion den Kontext massiv auf → (1) das 87 %-Token-Versprechen kippt ins Gegenteil, (2) das LLM ertrinkt in Rauschen („lost in the middle"), (3) die wirklich relevanten Seeds sind nicht priorisiert. Das ist genau das im Auftrag benannte Anti-Pattern „einfach Top-K (hier: ganze Nachbarschaft) reinkippen".
+#### K2 — Grounding ist prompt-gefordert, nicht verifiziert; keine Faithfulness-Eval
+- **Befund:** Zitate + `temperature=0` im RAG-Prompt ([OllamaSemanticAnalyzer.cs:143](../src/Shonkor.Infrastructure/Services/OllamaSemanticAnalyzer.cs:143)), aber keine Post-hoc-Prüfung der Beleg-Treue und keine Antwort-Metrik in der Eval.
+- **Beleg:** Eval enthält nur Precision@k/Recall@k/MRR; kein Faithfulness/Abstention-Lauf ([Shonkor.Eval/Program.cs](../src/Shonkor.Eval/Program.cs)); Abstention-Golden-Fälle im Plan skizziert, aber nicht implementiert.
+- **Auswirkung:** Halluzinationen mit formal korrekt *aussehenden* Zitaten bleiben unentdeckt. Der zentrale Auftrag „jede Aussage belegt" ist nicht messbar erfüllt.
 
 ### 🟠 Hoch
 
-#### H1 — Default-C#-Linking ist namensbasiert → falsche Kanten, untergräbt „100 % präzise"
-- **Befund:** Ohne `SHONKOR_SEMANTIC_CSHARP=true` werden `REFERENCES_TYPE`-Kanten per Namensgleichheit gesetzt; bei gleichnamigen Typen in verschiedenen Namespaces entsteht eine Kante zu **jedem** gleichnamigen Typ.
-- **Beleg:** [CrossTechLinker.cs:116-152](../src/Shonkor.Infrastructure/Services/CrossTechLinker.cs:116) („resolves … by NAME … a name match creates an edge to EVERY same-named type"); Opt-in-Schalter in [Program.cs:255](../src/Shonkor.CLI/Program.cs:255).
-- **Auswirkung:** `blast_radius`, `impact_of`, `rename_plan`, `related_tests` liefern im Default Über-Verbindungen (False Positives). Ein Agent, der `rename_plan` vertraut, editiert ggf. falsche Stellen. Die READMEs „compiler-accurate / 100 % präzise" gelten nur im Semantikmodus.
+#### H1 — Hybrid-Retrieval (RRF) hat keinen Consumer
+- **Befund:** RRF nur in `/api/search/hybrid`; kein MCP-Tool, kein UI-Aufruf.
+- **Beleg:** Endpoint [SearchEndpoints.cs](../src/Shonkor.Web/Endpoints/SearchEndpoints.cs) (`/api/search/hybrid`); UI toggelt FTS/Semantik ([app.js:797](../src/Shonkor.Web/wwwroot/app.js:797)); MCP-Registry ohne Hybrid ([McpToolRegistryFactory.cs:25](../src/Shonkor.Infrastructure/Services/Mcp/McpToolRegistryFactory.cs:25)).
+- **Auswirkung:** Der Recall-/Präzisions-Absicherungsmechanismus (BM25 ∪ Vektor) ist effektiv toter Code — er verbessert keine reale Abfrage.
 
-#### H2 — RAG-Antwort ohne Zitate, ohne Grounding-Prüfung, nicht-deterministisch
-- **Befund:** Der Antwort-Prompt instruiert zwar „nur aus Kontext, sonst ‚weiß ich nicht'" (gut), aber: keine Quellen-/Zeilen-Zitate angefordert, keine Post-hoc-Faithfulness-Prüfung, **keine `temperature`/`options`** gesetzt → Ollama-Default (~0.8), also nicht reproduzierbar. Pro Knoten harte 2000-Zeichen-Truncation, die Methodenrümpfe mitten durchschneidet.
-- **Beleg:** [OllamaSemanticAnalyzer.cs:143-176](../src/Shonkor.Infrastructure/Services/OllamaSemanticAnalyzer.cs:143) (Prompt + `requestBody = { model, prompt, stream=false }`, keine Options); Truncation Zeile 152.
-- **Auswirkung:** Anti-Halluzination hängt allein an einer Prompt-Bitte an ein kleines Modell. Ohne Zitate ist keine Aussage zur Quelle rückführbar; ohne `temperature=0` ist „gleiche Query → vergleichbares Ergebnis" nicht gegeben (Reproduzierbarkeit aus dem Auftrag verletzt).
+#### H2 — Non-lossy-Fallback reintroduziert die Namens-Ambiguität (H1 aus Review #1)
+- **Befund:** Bei nicht auflösbaren Referenzen fällt der Semantik-Linker auf Namensauflösung zurück und verkantet dann wieder zu *allen* gleichnamigen Typen.
+- **Beleg:** [SemanticCsharpLinker.ResolveUnresolvedByNameAsync](../src/Shonkor.Infrastructure/Services/SemanticCsharpLinker.cs).
+- **Auswirkung:** Auf partiellen/nicht-kompilierenden Checkouts entstehen wieder Über-Kanten in Impact/Rename — bewusst (nie schlechter als reiner Namensmodus), aber die Präzisionsgrenze ist real und nur via Diagnose sichtbar.
 
-#### H3 — Keine echte Hybrid-Suche (FTS + Vektor + Graph) trotz README-Claim
-- **Befund:** FTS5 (`/api/search`) und Vektor (`/api/search/semantic`) sind **getrennte** Endpunkte; der Nutzer/Agent muss einen Modus wählen. Keine Fusion (z. B. Reciprocal Rank Fusion), kein Reranking, keine kombinierte Kandidatenmenge vor der Graph-Expansion.
-- **Beleg:** [SearchEndpoints.cs:23-67](../src/Shonkor.Web/Endpoints/SearchEndpoints.cs:23); README spricht von „Hybrid-Suche", Code zeigt zwei Toggles.
-- **Auswirkung:** Recall und Präzision bleiben unter dem Möglichen. Gerade weil K2 den Vektor-Pfad schwächt, fehlt die Absicherung durch BM25-Fusion + Reranking.
-
-#### H4 — Benchmark „87 %" misst das Falsche und ist nicht repräsentativ
-- **Befund:** Verglichen wird „klassisches RAG = **ganze Quelldatei** senden" gegen „shonkor = **nur 1-Satz-Summary** senden", mit **synthetischen** Konstanten (4 chars/token, 0.005 s/token). Gemessen wird **Token-Volumen**, nicht Antwort-Korrektheit. Der real ausgelieferte Capsule-Pfad sendet aber **vollen Code** (K3), nicht nur Summaries.
-- **Beleg:** [Shonkor.Benchmarks/Program.cs:58-107](../src/Shonkor.Benchmarks/Program.cs:58).
-- **Auswirkung:** Die 87 %/7,6×-Zahlen im README sind ein Strohmann-Vergleich und nicht das, was der ausgelieferte Pfad tut. Reputations-/Erwartungsrisiko; sollte entweder korrekt gemessen oder relativiert werden.
+#### H3 — Keine Streaming-Antwort; Blocking-LLM-Call bis 2 Minuten
+- **Befund:** RAG und Analyse nutzen `stream = false`; kein `IAsyncEnumerable`.
+- **Beleg:** [OllamaSemanticAnalyzer.cs:67,195](../src/Shonkor.Infrastructure/Services/OllamaSemanticAnalyzer.cs:195); HttpClient-Timeout 2 min.
+- **Auswirkung:** Die „Ask AI"-Antwort erscheint erst komplett nach der vollen Generierung — schlechte wahrgenommene Latenz, Timeout-Risiko bei langen Antworten.
 
 ### 🟡 Mittel
 
-#### M1 — Embedding-Modell ohne Task-Prefixe; Dimensions-Mismatch wird still verworfen
-- **Befund:** `nomic-embed-text` wird ohne die trainierten Prefixe `search_query:` / `search_document:` genutzt; zudem werden bei der Vektorsuche Knoten mit abweichender Embedding-Dimension **still übersprungen**.
-- **Beleg:** [OllamaEmbeddingService.cs:41-47](../src/Shonkor.Infrastructure/Services/OllamaEmbeddingService.cs:41) (kein Prefix); [SqliteGraphStorageProvider.cs:383](../src/Shonkor.Infrastructure/Storage/SqliteGraphStorageProvider.cs:383) (`if (floatCount != queryEmbedding.Length) continue;`).
-- **Auswirkung:** Prefix-losigkeit kostet messbar Retrieval-Qualität (immerhin symmetrisch). Der Dimensions-Skip ist gefährlicher: ein **Modellwechsel** macht den Alt-Index still teilweise unsichtbar (Recall-Verlust ohne Fehler/Log). Kein Re-Embed-Trigger, kein Versionsfeld am Embedding.
-
-#### M2 — Vektorsuche ist O(N)-Full-Scan ohne ANN-Index
-- **Befund:** Jede semantische Query lädt alle Embeddings und rechnet Cosine in-process (mit bounded Heap — speicherseitig ok).
-- **Beleg:** [SqliteGraphStorageProvider.cs:371-403](../src/Shonkor.Infrastructure/Storage/SqliteGraphStorageProvider.cs:371).
-- **Auswirkung:** Für <100k Knoten vertretbar (deckt sich mit dem bestehenden Arch-Review). Ab Multi-Projekt-/SaaS-Skalierung ein Latenz-Treiber. Heute eher Hinweis als Defekt.
-
-#### M3 — SaaS-`/api/rag/query` liefert Kontext ohne Grounding-Gerüst
-- **Befund:** Gibt nur das Capsule-Markdown an den externen LLM zurück — ohne System-Instruktion „nur aus Kontext antworten + Quellen zitieren". Die Grounding-Verantwortung wird ungeführt an den Client delegiert.
-- **Beleg:** [GraphRagEndpoints.cs:44-53](../src/Shonkor.Web/Endpoints/GraphRagEndpoints.cs:44).
-- **Auswirkung:** Externe Agenten können den präzisen Kontext trotzdem ungrounded verwenden; das Produkt verschenkt seinen Präzisionsvorteil am letzten Meter.
+- **M1 — Embedding-Input char-truncated (1500 Zeichen)** ([SemanticEnrichmentService.BuildEmbeddingText](../src/Shonkor.Web/Services/SemanticEnrichmentService.cs)): große Klassen/Methoden werden nur „kopf-eingebettet"; kein semantisches Chunking → Rumpf-Logik ist im Vektor unsichtbar.
+- **M2 — Golden-Set winzig & selbst-authored** (15 Intent-Fälle, 200 Self-Retrieval; shonkor-eigene Namen): Punktschätzungen mit breitem Konfidenzintervall, nicht repräsentativ. „0,93" ist ein Signal, keine belastbare Kennzahl.
+- **M3 — Prompt-Injection-Fläche** ungemindert: `get_source`/`generate_capsule` geben indizierten Code **roh** an den Agenten; eingebetteter Schadtext („ignore previous instructions…") in einer Codebasis könnte Agenten-Verhalten beeinflussen. Inhärent bei Code-RAG, aber nirgends benannt/markiert.
+- **M4 — Semantik-Default = Dauer-CPU im Hintergrund:** `DriftReconciliationService` baut je Zyklus eine Roslyn-Compilation (durch `SemanticCompilationCache` gemildert), jetzt per Default für jedes Projekt.
 
 ### 🟢 Niedrig
-
-- **N1 — FTS5-`rebuild` bei jedem Start** und **N+1 in `SearchAsync`** sind im bestehenden Arch-Review notiert; Status prüfen (Performance, nicht Präzision).
-- **N2 — Summary-Truncation per Zeichenzahl** (8000 bzw. 2000 chars) statt Tokenizer ([OllamaSemanticAnalyzer.cs:41,152](../src/Shonkor.Infrastructure/Services/OllamaSemanticAnalyzer.cs:41)) — schneidet an willkürlichen Grenzen.
-- **N3 — Fehlerpfade verschlucken Detail:** `/api/rag/query` loggt auf `Console.Error` statt strukturiert ([GraphRagEndpoints.cs:57](../src/Shonkor.Web/Endpoints/GraphRagEndpoints.cs:57)).
+- **N1 —** Token-Budget nutzt `chars/4` als groben Token-Proxy (Capsule/Benchmark); reale Tokenizer-Zahl weicht ab.
+- **N2 —** `search_semantic` (MCP) — Query-Embedding-Kind prüfen (Query- vs. Document-Prefix-Konsistenz), heute Prefixe ohnehin default aus.
 
 ---
 
-## Was trägt (in je einem Satz)
-- **Deterministischer Struktur-Graph + Roslyn-AST:** echtes Alleinstellungsmerkmal, präzise und reproduzierbar — Produkt-Kern.
-- **MCP-Tool-Schnitt:** sinnvoll granular (find/read/analyze/plan/apply), gute Namen, Anti-Halluzination via `verify_exists` und Freshness-Flagging — konzeptionell stark.
-- **Resilienz im Enrichment:** Circuit Breaker + Backoff gegen totes Ollama, korrekte HttpClientFactory-Scope-Nutzung ([SemanticEnrichmentService.cs:77-110](../src/Shonkor.Web/Services/SemanticEnrichmentService.cs:77)) — sauber gelöst.
-- **Async-Hygiene im LLM-Pfad:** durchgängig `await` + `ConfigureAwait(false)`, Retry mit Backoff, kein `.Result`/`.Wait()` in den heißen Pfaden.
+## Was trägt (je ein Satz)
+- **Semantische C#-Auflösung als Default + non-lossy Fallback** — der Graph-Kern ist jetzt real präzise und robust gegen nicht-kompilierende Repos.
+- **Budgetierte Capsule mit Hub-Deckelung** — löst die Token-Explosion aus Review #1 messbar (~88 %).
+- **Eval-Harness + Baseline-Gate** — macht Retrieval-Regressionen erstmals erkennbar (auch wenn Antwort-Faithfulness noch fehlt).
+- **Async-/Resilienz-Hygiene** — Circuit Breaker, HttpClientFactory-Scopes, `ConfigureAwait(false)` durchgängig; keine Deadlock-Muster.
 
-> Details, Lösungsvorschläge inkl. Alternativen, Risiko und Aufwand: siehe [improvements.md](improvements.md). Eval-Aufbau: [eval-plan.md](eval-plan.md). Reihenfolge: [roadmap.md](roadmap.md).
+> Verbesserungen inkl. Alternativen/Risiko/Aufwand: [improvements.md](improvements.md) · Faithfulness-Eval-Ausbau: [eval-plan.md](eval-plan.md) · Reihenfolge: [roadmap.md](roadmap.md) · Tickets: [`tickets/`](../tickets/).

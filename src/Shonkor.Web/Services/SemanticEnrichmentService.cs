@@ -64,33 +64,6 @@ public class SemanticEnrichmentService : BackgroundService
         _embeddingSource = (configuration["Embedding:Source"] ?? "code").Trim().ToLowerInvariant();
     }
 
-    /// <summary>
-    /// Builds the text fed to the embedding model for a node. "code" yields a structured code document
-    /// (identity + signature + bounded body); "summary" keeps the legacy behaviour (embed the AI summary).
-    /// Internal + static for testability.
-    /// </summary>
-    internal static string BuildEmbeddingText(GraphNode node, string? summary, string source)
-    {
-        if (source == "summary")
-        {
-            return summary ?? string.Empty;
-        }
-
-        var signature = node.Properties.TryGetValue("signature", out var sig) ? sig : string.Empty;
-        var body = node.Content ?? string.Empty;
-        // nomic-embed-text has a 2048-token window; bound the body so a large file/class doesn't get
-        // truncated arbitrarily by the backend. ~1500 chars ≈ well within the window with the header.
-        const int maxBody = 1500;
-        if (body.Length > maxBody) body = body[..maxBody];
-
-        var sb = new System.Text.StringBuilder();
-        sb.Append(node.Type).Append(' ').Append(node.Name).Append('\n');
-        if (!string.IsNullOrWhiteSpace(signature)) sb.Append(signature).Append('\n');
-        if (!string.IsNullOrWhiteSpace(summary)) sb.Append(summary).Append('\n');
-        sb.Append(body);
-        return sb.ToString();
-    }
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Semantic Enrichment Service is starting.");
@@ -251,7 +224,7 @@ public class SemanticEnrichmentService : BackgroundService
 
                     // TICKET-002: embed a structured code document by default (markedly better intent
                     // retrieval than embedding the summary). Configurable via Embedding:Source.
-                    var embeddingText = BuildEmbeddingText(node, result.Summary, embeddingSource);
+                    var embeddingText = Shonkor.Core.Services.EmbeddingTextBuilder.Build(node, result.Summary, embeddingSource);
                     float[]? embedding = null;
                     if (!string.IsNullOrWhiteSpace(embeddingText))
                     {

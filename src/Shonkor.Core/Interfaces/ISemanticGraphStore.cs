@@ -28,4 +28,11 @@ public interface ISemanticGraphStore
     /// embeddings with an unknown (null) dimension are left untouched.
     /// </summary>
     Task<int> MarkStaleEmbeddingsForReembedAsync(int expectedDim, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Writes only a node's embedding vector (and its dimension), without touching its summary, concepts or
+    /// pending flag. Used by the CLI embed pass, which populates vectors for semantic/hybrid search without
+    /// running LLM summarization. A <c>null</c>/empty vector clears the embedding.
+    /// </summary>
+    Task UpdateNodeEmbeddingAsync(string nodeId, float[]? embedding, CancellationToken cancellationToken = default);
 }
