@@ -61,3 +61,7 @@ eval/cache-*.json
 eval/experiment-*.json
 eval/last-report.md
 eval/last-metrics.json
+
+# Machine-local writable settings overlay (dashboard /api/settings). Never committed.
+appsettings.Local.json
+**/appsettings.Local.json

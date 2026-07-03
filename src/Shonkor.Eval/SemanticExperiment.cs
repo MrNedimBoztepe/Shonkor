@@ -126,15 +126,14 @@ internal static class SemanticExperiment
         return scores.OrderByDescending(kv => kv.Value).Select(kv => kv.Key).ToList();
     }
 
+    // Build the embedding document via the SAME production helper (EmbeddingTextBuilder) so the eval
+    // measures exactly what ships — incl. the head+tail bounding (TICKET-105) — instead of a divergent
+    // head-only copy. "name" stays a probe-only mode for ablation.
     private static string DocText(GraphNode node, string source) => source switch
     {
         "name" => node.Name,
-        "summary" => node.Summary ?? "",
-        // "code": structured doc — identity + signature-ish header + a bounded body slice.
-        _ => Trim($"{node.Type} {node.Name}\n{node.Properties.GetValueOrDefault("signature", "")}\n{node.Content}", 1500)
+        _ => Shonkor.Core.Services.EmbeddingTextBuilder.Build(node, node.Summary, source)
     };
-
-    private static string Trim(string s, int max) => s.Length <= max ? s : s[..max];
 
     private static double Cosine(float[] a, float[] b)
     {

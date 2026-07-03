@@ -62,8 +62,10 @@ public sealed class AmbiguousCSharpTypePostProcessor : IGraphPostProcessor
                 Code: "csharp.ambiguous-type-reference",
                 Severity: DiagnosticSeverity.Warning,
                 Message: $"Type name '{group.Key}' has {defs.Count} definitions ({locations}). " +
-                         $"Under default name-based REFERENCES_TYPE resolution, references to '{group.Key}' link to ALL of them — " +
-                         "impact/rename results for this type may over-connect. Enable SHONKOR_SEMANTIC_CSHARP for exact resolution.",
+                         $"References to '{group.Key}' that name-based resolution can't disambiguate link to ALL of them, so " +
+                         "impact/rename results for this type may over-connect. Semantic C# resolution (on by default) resolves " +
+                         "compilable references exactly; residual over-connection here comes from references it could not resolve " +
+                         "(e.g. a partial or non-compiling checkout).",
                 NodeId: defs[0].Id,
                 FilePath: defs[0].FilePath));
         }

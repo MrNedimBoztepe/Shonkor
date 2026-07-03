@@ -730,6 +730,37 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task SearchHybrid_FusesFtsAndVector_RanksExpectedNodeFirst()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        // Query vector aligned with Widget [1,0,0]; the text "Widget" also matches FTS — both retrievers
+        // surface Widget, so the RRF fusion must rank it first.
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true,
+            embeddingService: new StubEmbeddingService(new[] { 1f, 0f, 0f }));
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("search_hybrid", new { query = "Widget" })));
+
+        Assert.Contains("Widget", text);
+        Assert.True(text.IndexOf("Widget", StringComparison.Ordinal)
+                  < text.IndexOf("Gadget", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SearchHybrid_WithoutEmbeddingBackend_IsNotListed()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        // No embedding service (stdio/CLI case) -> search_hybrid is capability-gated out of tools/list.
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var listed = await handler.ProcessJsonRpcMessageAsync(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
+
+        Assert.NotNull(listed);
+        Assert.DoesNotContain("search_hybrid", listed);
+    }
+
+    [Fact]
     public async Task GetOpenThreads_ListsOpen_ExcludesClosed()
     {
         var (pm, synth, _) = await SetupAsync();

@@ -1,9 +1,9 @@
 {
   "graph": {
-    "Cases": 15,
-    "PrecisionAt1": 0.2,
-    "PrecisionAtK": 0.02666666666666667,
-    "RecallAtK": 0.26666666666666666,
-    "Mrr": 0.22222222222222224
+    "Cases": 40,
+    "PrecisionAt1": 0.225,
+    "PrecisionAtK": 0.024999999999999998,
+    "RecallAtK": 0.25,
+    "Mrr": 0.23333333333333334
   }
 }

@@ -319,7 +319,8 @@ document.addEventListener('DOMContentLoaded', () => {
             `<div style="display:flex; align-items:center; gap:0.5rem;"><div class="spinner" style="width:16px; height:16px; border-width:2px;"></div><span>Thinking…</span></div>`, true);
 
         try {
-            const res = await fetch('/api/ask', {
+            // Streamed answer (text/plain, token-by-token) so the first tokens show immediately.
+            const res = await fetch('/api/ask/stream', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -328,11 +329,29 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ query: composedQuery, nodeIds: aiChatContextIds })
             });
 
-            if (res.ok) {
-                const data = await res.json();
-                const answer = data.response || 'No answer.';
-                aiChatHistory.push({ role: 'assistant', text: answer });
+            if (res.ok && res.body) {
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let answer = '';
+                let pending = false;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    answer += decoder.decode(value, { stream: true });
+                    // Re-render on animation frames to avoid thrashing markdown parsing on every chunk.
+                    if (!pending) {
+                        pending = true;
+                        requestAnimationFrame(() => {
+                            renderMarkdownSafe(answer || '…', thinking);
+                            aiChatScrollToBottom();
+                            pending = false;
+                        });
+                    }
+                }
+                answer += decoder.decode(); // flush any bytes buffered across the final chunk boundary
+                answer = answer.trim() || 'No answer.';
                 renderMarkdownSafe(answer, thinking);
+                aiChatHistory.push({ role: 'assistant', text: answer });
             } else {
                 // Most failures here are the AI backend (Ollama) being unreachable.
                 thinking.className = 'ai-msg error';
@@ -1879,9 +1898,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const typeFilter = document.getElementById('type-filter').value;
             const semanticToggleBtn = document.getElementById('semantic-toggle-btn');
             const isSemantic = semanticToggleBtn && semanticToggleBtn.classList.contains('active');
-            
-            let url = isSemantic 
-                ? `/api/search/semantic?q=${encodeURIComponent(currentSearchQuery)}&limit=${currentSearchLimit}`
+
+            // "Brain" mode uses hybrid search (Reciprocal Rank Fusion of FTS + vector): best-of-both, and
+            // it degrades gracefully to FTS when no embeddings/backend are present. Keyword mode = FTS.
+            let url = isSemantic
+                ? `/api/search/hybrid?q=${encodeURIComponent(currentSearchQuery)}&limit=${currentSearchLimit}`
                 : `/api/search?q=${encodeURIComponent(currentSearchQuery)}&limit=${currentSearchLimit}&offset=${currentSearchOffset}`;
                 
             if (typeFilter && !isSemantic) {

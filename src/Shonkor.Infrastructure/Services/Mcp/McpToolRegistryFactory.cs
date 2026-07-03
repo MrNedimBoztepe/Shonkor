@@ -23,6 +23,7 @@ public static class McpToolRegistryFactory
         new SearchGraphTool(),
         new LocateTool(),
         new SearchSemanticTool(),
+        new SearchHybridTool(),
 
         // Group 3 — read
         new SignatureTool(),

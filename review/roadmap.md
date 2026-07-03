@@ -54,3 +54,48 @@ TICKET-007 (Benchmark) — unabhängig
 ## Gesamt-Leitplanke
 - **Nichts ohne Eval ausliefern:** Jede Phase-1/2/3-Änderung muss in der TICKET-001-Eval ≥ Baseline liegen, sonst Flag aus.
 - **Alles hinter Flags:** Ermöglicht inkrementellen Rollout und sofortigen Rollback ohne Datenverlust (Re-Embed idempotent, Alt-Kanten/-Vektoren bleiben bis Ersatz).
+
+---
+
+# Roadmap #2 — Restarbeit nach der Umsetzung (Stand 2026-07-02)
+
+Der zweite Review ([shonkor-review.md](shonkor-review.md)) zeigt: die Verbesserungen sind gebaut, aber teils **an den falschen Enden verdrahtet**. Diese Roadmap bringt sie auf den Hauptpfad und macht Grounding messbar.
+
+> **Umsetzungsstand 2026-07-02: alle 7 Tickets (TICKET-101…107) vollständig umgesetzt** (erledigte Tickets: [`tickets/done/`](../tickets/done/)). Build grün (0 Warnungen), **151 Tests grün**, End-to-End verifiziert. Reale Zahlen: [results.md §5b](results.md). Kern: Semantik/Hybrid erreichen jetzt CLI + MCP (`index --embed`, MCP-Embedding-Service, `search_hybrid`-Tool), Grounding ist gemessen (`--answers`), Antworten streamen, Embeddings decken Kopf+Fuß ab, Golden-Set + KI erweitert, Injection-Härtung aktiv. Nebenbefund korrigiert: der frühere „0 % Embeddings"-Befund war ein Messfehler (`ReadNode` lädt die BLOB-Spalte nicht) — jetzt per Direkt-SQL gezählt.
+
+## Phase A — Retrieval-Gewinn auf den Hauptpfad (höchste Priorität)
+| Schritt | Ticket | Aufwand | Abhängigkeit |
+|---|---|---|---|
+| Embeddings im CLI-Index (opt-in) + EmbeddingService in den stdio-MCP-Server | TICKET-101 | M | — |
+| `search_hybrid` als MCP-Tool + Dashboard-Anbindung | TICKET-103 | S–M | 101 |
+- **Rollback:** beides additiv/flag-gesteuert — Embedding-Schritt ist opt-in (`--embed`), MCP-Embedding nur bei erreichbarem Backend; UI-Toggle bleibt abwählbar. Kein Datenverlust.
+- **Exit:** `search_semantic`/`search_hybrid` sind im Agenten-Pfad nutzbar, wenn Embeddings vorhanden; sonst sauberer FTS-Fallback.
+
+## Phase B — Grounding messbar machen
+| Schritt | Ticket | Aufwand | Abhängigkeit |
+|---|---|---|---|
+| Faithfulness/Abstention/Zitat-Validitäts-Eval (Ebene 2) | TICKET-102 | M | — |
+| Golden-Set vergrößern/diversifizieren | TICKET-106 | M | 102 |
+- **Rollback:** rein additive Eval + Datendateien; nicht-blockierend in CI.
+- **Exit:** Zitat-Validität + Abstention-Recall haben eine Baseline; Regression sichtbar.
+
+## Phase C — Antwort-UX & Präzisionsdetails
+| Schritt | Ticket | Aufwand | Abhängigkeit |
+|---|---|---|---|
+| LLM-Antwort streamen (Dashboard) | TICKET-104 | M | — |
+| Semantisches Chunking für große Symbole | TICKET-105 | M | 101, 102 |
+| Prompt-Injection-Rahmung im RAG-Kontext | TICKET-107 | S | — |
+- **Rollback:** Streaming hinter Flag; Chunking über Eval abgesichert; Rahmung ist reine Prompt-Änderung.
+
+## Abhängigkeitsgraph (Runde 2)
+```
+TICKET-101 (Embeddings/MCP) ──┬─> TICKET-103 (Hybrid überall)
+                              └─> TICKET-105 (Chunking)
+TICKET-102 (Grounding-Eval) ──┬─> TICKET-106 (Golden-Set)
+                              └─> TICKET-105 (Chunking, zum Messen)
+TICKET-104 (Streaming) — unabhängig
+TICKET-107 (Injection-Rahmung) — unabhängig
+```
+
+## Leitplanke (unverändert)
+- Nichts ohne Eval ausliefern; alles hinter Flags/opt-in; semantische Zahlen nur mit dem Zusatz „erfordert erzeugte Embeddings" kommunizieren.

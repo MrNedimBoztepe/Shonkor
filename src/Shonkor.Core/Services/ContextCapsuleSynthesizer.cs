@@ -48,13 +48,17 @@ public sealed class ContextCapsuleSynthesizer
                 deg[e.SourceId] = deg.GetValueOrDefault(e.SourceId) + 1;
                 deg[e.TargetId] = deg.GetValueOrDefault(e.TargetId) + 1;
             }
-            trimmedAway = nodes.Count - cap;
-            var kept = nodes
-                .OrderByDescending(n => seedSet.Contains(n.Id))
-                .ThenByDescending(n => deg.GetValueOrDefault(n.Id))
+            // Seeds are the retrieval anchors and must never be trimmed — even if there are more seeds
+            // than the cap. Keep ALL seeds, then fill the remaining budget with the highest-degree
+            // non-seed neighbours; the effective cap is at least the seed count.
+            var seeds = nodes.Where(n => seedSet.Contains(n.Id)).ToList();
+            var nonSeeds = nodes
+                .Where(n => !seedSet.Contains(n.Id))
+                .OrderByDescending(n => deg.GetValueOrDefault(n.Id))
                 .ThenBy(n => n.FilePath, StringComparer.Ordinal)
-                .Take(cap)
-                .ToList();
+                .Take(Math.Max(0, cap - seeds.Count));
+            var kept = seeds.Concat(nonSeeds).ToList();
+            trimmedAway = nodes.Count - kept.Count;
             var keptIds = new HashSet<string>(kept.Select(n => n.Id), StringComparer.Ordinal);
             nodes = kept;
             edges = edges.Where(e => keptIds.Contains(e.SourceId) && keptIds.Contains(e.TargetId)).ToList();

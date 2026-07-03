@@ -1,54 +1,41 @@
-# Eval-Plan — schlanke, wiederholbare Präzisions-Evaluation
+# Eval-Plan — Präzisions- & Grounding-Evaluation (Stand Review #2)
 
-**Ziel:** „präzise" von einer Behauptung zu einer Zahl machen, die bei jeder Änderung neu berechnet wird. Offline, deterministisch, im shonkor-Stil (kein Cloud-LLM-Zwang).
+Ziel unverändert: „präzise/grounded" von Behauptungen zu Zahlen machen, die bei jeder Änderung neu berechnet werden. Offline, deterministisch, im shonkor-Stil.
 
-## Zwei Ebenen messen
+## Stand
+- **Ebene 1 (Retrieval) ist gebaut** — `Shonkor.Eval`: Precision@k / Recall@k / MRR für `graph` (FTS), `semantic` und `hybrid`; Golden-Set unter `eval/`; Baseline-Regressions-Gate (`--baseline`, Exit 2 bei Drop > 3 pp). Reproduzierbar: `dotnet run --project src/Shonkor.Eval -- shonkor.db [...]`.
+- **Ebene 2 (Antwort/Grounding) fehlt noch** — genau die Lücke, die Finding **K2** kritisch macht. Das ist der nächste Ausbau (siehe unten).
 
-### Ebene 1 — Retrieval (deterministisch, kein LLM)
-Misst, ob die *richtigen* Knoten geholt werden — das Kern-USP.
-- **Metriken:** Precision@k, Recall@k, MRR (k = 5, 10). Getrennt für `search_graph` (FTS), `search_semantic` (Vektor) und den Hybrid-/Fusionspfad (V5).
-- **Warum kein LLM:** Erwartung sind konkrete Knoten-IDs/Symbole → exakt vergleichbar, reproduzierbar, schnell, CI-tauglich.
+## Ebene 1 — Retrieval (deterministisch, kein LLM) — vorhanden
+- Metriken je Modus (k = 5, 10). Golden-Fälle: `{query, mode, expected node-ids}`; Auto-Bootstrap (Self-Retrieval) + kuratiertes Intent-Set (`eval/golden/intent.json`).
+- **Offene Schärfung (V7):** Set von 15 auf 50–100 Fälle über mehrere Repos/Sprachen; Konfidenzintervalle ausweisen (aktuell zu klein für belastbare Punktschätzung).
+- **Wichtig für K1:** Die Eval muss gegen einen Graphen **mit erzeugten Embeddings** laufen, sonst misst `semantic`/`hybrid` nichts. Das ist heute nur im web-angereicherten Zustand gegeben — der Eval-Lauf sollte das explizit prüfen und andernfalls „semantic skipped: no embeddings" melden (tut er).
 
-### Ebene 2 — Antwort (RAG-Grounding, optionaler LLM-Judge)
-Misst, ob die generierte Antwort durch den Kontext gedeckt ist.
-- **Metriken:**
-  - **Faithfulness/Groundedness:** Anteil der Aussagen, die durch Kontextknoten belegt sind.
-  - **Answer-Relevance:** Beantwortet die Antwort die Frage?
-  - **Abstention-Korrektheit:** Sagt das System bei nicht-belegbarer Frage korrekt „weiß ich nicht"? (eigene Negativ-Fälle, siehe unten)
-- **Judge:** Für lokalen Offline-Lauf ein deterministischer Heuristik-Check (Zitat-Labels aus V6 vorhanden? Verweisen sie auf gelieferte Knoten?) + optional ein LLM-Judge (RAGAS oder lokaler Ollama-Judge) hinter Flag.
+## Ebene 2 — Antwort-Grounding (NEU aufzubauen, K2)
+Drei Bausteine, aufsteigend nach Kosten:
 
-## Golden-Set aufbauen
-- **Umfang Start:** 30–50 Fälle, je Sprache/Parser-Familie abgedeckt (C#, JS/TS, PHP, Sitecore-YAML, Markdown) + Cross-Tech-Fälle.
-- **Quelle:** shonkors **eigene** Repo-DB (`shonkor.db`) als erstes Korpus — bekannt, stabil, versioniert.
-- **Fall-Schema** (`eval/golden/*.json`):
-  ```json
-  {
-    "id": "csharp-impact-roslynastparser",
-    "query": "Welche Typen referenzieren RoslynAstParser?",
-    "mode": "search_graph|search_semantic|hybrid|ask",
-    "expected_node_ids": ["...", "..."],
-    "expected_must_contain": ["REFERENCES_TYPE"],
-    "answer_must_cite": ["RoslynAstParser"],
-    "is_answerable": true
-  }
-  ```
-- **Negativ-/Abstention-Fälle:** Fragen, deren Antwort **nicht** im Graph steht (`is_answerable=false`) → erwartet wird eine „nicht belegt"-Antwort. Direkt der Test für H2-Grounding.
-- **Kuratierung:** Erwartungen einmalig manuell aus dem Graph belegen (mit `find_usages`/`call_hierarchy`), per Review fixieren. Set wächst aus realen Agent-Queries (aus MCP-Logs anonymisiert).
+1. **Zitat-Validität (deterministisch, kein LLM) — zuerst.** Jede `[Name @ file:zeilen]`-Referenz in der Antwort muss auf einen der tatsächlich übergebenen Kontextknoten zeigen. Metrik: Anteil valider Zitate + Anteil unbelegter Aussagen (Sätze ohne Zitat). Fängt „schön aussehendes Zitat auf nicht-geliefertem Knoten" billig ab.
+2. **Abstention-Korrektheit.** Golden-Fälle mit `is_answerable=false` (Frage, deren Antwort nicht im Graph steht). Erwartet: „nicht belegt". Metrik: Abstention-Recall. Direkter Test der Anti-Halluzinations-Zusage.
+3. **Faithfulness/Answer-Relevance (optionaler LLM-Judge).** Lokaler Ollama-Judge hinter Flag bewertet, ob die Aussagen durch die zitierten Knoten gedeckt sind und ob die Antwort die Frage trifft. Nur optional, weil nicht-deterministisch.
 
-## Runner & Integration
-- **Projekt:** `src/Shonkor.Eval` (Konsole), nutzt `IGraphStorageProvider` direkt (wie `Shonkor.Benchmarks`).
-- **CLI:** `shonkor eval --set eval/golden --k 10 [--judge ollama|heuristic|none]`.
-- **Output:** JSON + Markdown-Report mit Aggregaten und **per-Fall-Deltas**; Exit-Code ≠ 0 nur bei Regression über Schwelle (für CI optional blockierend).
+**Fall-Schema (erweitert):**
+```json
+{
+  "id": "answer-capsule-purpose",
+  "query": "Was macht ContextCapsuleSynthesizer?",
+  "mode": "ask",
+  "context_node_ids": ["…::ContextCapsuleSynthesizer"],
+  "answer_must_cite": ["ContextCapsuleSynthesizer"],
+  "is_answerable": true
+}
+```
 
 ## Regressionen erkennen
-- **Baseline einchecken:** `eval/baseline.json` mit aktuellen Werten pro Metrik+Modus.
-- **Regel:** CI-Job (nicht-blockierend zuerst) rechnet Eval gegen die Branch-DB und vergleicht mit Baseline; Drop > x % (z. B. Precision@10 −3 pp) markiert das PR.
-- **Bindung an Änderungen:** V2 (Code-Embedding), V3 (Budget/Ranking), V4 (Semantik-Default), V5 (Fusion) werden **jeweils gegen dieselbe Eval** gemessen — so wird jede Optimierung als Zahl belegt statt behauptet.
+- `eval/baseline-metrics.json` (Retrieval) existiert; um Ebene-2-Kennzahlen erweitern (Zitat-Validität, Abstention-Recall).
+- CI-Job (nicht-blockierend) rechnet beide Ebenen gegen die Branch-DB; Drop über Schwelle markiert das PR.
+- **Jede** Retrieval-/Grounding-Änderung (V1, V3, V5, V6) wird gegen dieselbe Eval gemessen — sonst bleibt der Effekt Behauptung.
 
 ## Was zuerst
-1. Golden-Set v0 (20 Fälle, nur C# + Retrieval-Ebene) — 0,5 Tag.
-2. Runner für Ebene 1 + Baseline — 1 Tag.
-3. Abstention-/Faithfulness-Fälle + Heuristik-Judge für Ebene 2 — 1 Tag.
-4. CI-Hook (nicht-blockierend) — 0,5 Tag.
-
-> **Hinweis zur Laufzeit-Präzision:** Aussagen über die *tatsächliche* Antwortqualität sind erst nach Schritt 1–3 belastbar. Bis dahin bleiben die Findings K2/K3/H1/H2 strukturell begründet (Code-Beleg), aber zahlenmäßig unquantifiziert — genau das schließt diese Eval.
+1. Zitat-Validitäts-Check + Abstention-Fälle (Ebene 2.1/2.2) — ~1,5 Tage, deterministisch. Schließt K2 zum größten Teil.
+2. Golden-Set-Erweiterung (V7) — ~1 Tag.
+3. Optionaler LLM-Judge (Ebene 2.3) — ~1 Tag, hinter Flag.
