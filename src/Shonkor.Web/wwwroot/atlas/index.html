@@ -195,6 +195,10 @@
   .prj .pbtns button{font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:uppercase; border:1px solid var(--line-2); background:var(--paper); color:var(--ink-2); padding:6px 12px; cursor:pointer}
   .prj .pbtns button:hover{color:var(--ink); border-color:var(--ink-2)}
   .prj .pbtns button.danger:hover{color:var(--err); border-color:var(--err)}
+  .prj .extrow .extp{flex:1; min-width:160px; font-family:var(--mono); font-size:11px; border:1px solid var(--line-2); background:var(--paper); color:var(--ink); padding:5px 8px; outline:none}
+  .prj .extrow .extp:focus{border-color:var(--ink-2)}
+  .prj .extrow .extsave{font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:uppercase; border:1px solid var(--line-2); background:var(--paper); color:var(--ink-2); padding:6px 12px; cursor:pointer}
+  .prj .extrow .extsave:hover{color:var(--ink); border-color:var(--ink-2)}
   .addprj{border:1px dashed var(--line-2); padding:14px 15px; margin-bottom:18px; background:var(--paper-2)}
   .addprj .af{display:flex; gap:8px; margin-top:9px} .addprj .af input{flex:1; font-family:var(--sans); font-size:13px; border:1px solid var(--line-2); background:var(--paper); padding:8px 11px; outline:none}
   .addprj .af input:focus{border-color:var(--ink-2)}
@@ -999,6 +1003,7 @@ function paintProjects(){
   el.innerHTML = list.length===0 ? '<div class="sempty">No projects registered yet.</div>' :
     list.map((p,i)=>{ const nm=p.name||p.Name; const path=p.path||p.Path||''; const active=nm===state.activeProject;
       const sem=(p.semanticCSharp ?? p.SemanticCSharp); const isCur=nm===state.project;
+      const exts=(p.externalTypePrefixes ?? p.ExternalTypePrefixes ?? []);
       const opt=(val,lbl)=>`<option value="${val}" ${String(sem)===val?'selected':''}>${lbl}</option>`;
       return `<div class="prj ${active?'act':''}">
         <div class="ph"><span class="pn">${escapeHtml(nm)}</span>${active?'<span class="pbadge active">active</span>':isCur?'<span class="pbadge view">viewing</span>':''}</div>
@@ -1013,6 +1018,11 @@ function paintProjects(){
             ${isCur?'':`<button onclick="viewProject(${i})">view</button>`}
             <button class="danger" onclick="deleteProjectUI(${i})">delete</button>
           </div>
+        </div>
+        <div class="prow extrow">
+          <span class="seglbl" title="Namespaces to treat as external/third-party so config references to them are Info, not Warning. Comma-separated; a trailing dot scopes to a namespace, e.g. Dianoga.">External types</span>
+          <input class="extp" id="extp-${i}" placeholder="e.g. Dianoga., Acme.Modules." value="${escapeHtml(exts.join(', '))}">
+          <button class="extsave" onclick="setExternalTypes(${i})">save</button>
         </div>
       </div>`; }).join('');
 }
@@ -1042,6 +1052,20 @@ async function setSemantic(i, value){
     if(r.ok){ if('semanticCSharp' in p) p.semanticCSharp=body.SemanticCSharp; p.SemanticCSharp=body.SemanticCSharp;
       toast(j.message||`${nm}: ${semLabel(body.SemanticCSharp)} — reindex to apply`, 4500); }
     else toast('Update failed');
+  }catch(e){ toast('Update failed'); }
+}
+async function setExternalTypes(i){
+  const p=(state.projects||[])[i]; if(!p) return; const nm=p.name||p.Name;
+  const raw=($('#extp-'+i)?.value||'');
+  const prefixes=raw.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
+  try{
+    const r=await fetch(`/api/projects/${encodeURIComponent(nm)}/external-types`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Prefixes:prefixes})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ const saved=j.externalTypePrefixes||j.ExternalTypePrefixes||prefixes;
+      p.externalTypePrefixes=saved; p.ExternalTypePrefixes=saved;
+      const inp=$('#extp-'+i); if(inp) inp.value=saved.join(', ');
+      toast(j.message||`${nm}: ${saved.length} external prefix(es) — reindex to apply`, 4500); }
+    else toast(typeof j==='string'?j:'Update failed');
   }catch(e){ toast('Update failed'); }
 }
 async function setActiveProjectUI(i){

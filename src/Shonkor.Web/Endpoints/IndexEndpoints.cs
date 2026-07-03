@@ -61,9 +61,15 @@ public static class IndexEndpoints
                     activeParsers.AddRange(pluginLoad.Parsers);
 
                     var storage = await pm.GetStorageProviderAsync(project.Name, ct);
+                    // Per-project config the post-processors may use (e.g. the Sitecore clrtype resolver's
+                    // user-declared external/third-party namespace prefixes).
+                    var ppContext = new Shonkor.Core.Models.GraphPostProcessorContext
+                    {
+                        ExternalTypePrefixes = project.ExternalTypePrefixes ?? new List<string>()
+                    };
                     var scanner = new GraphIndexScanner(storage, activeParsers, loggerFactory.CreateLogger("Shonkor.Index"),
                         semanticCsharp: UseSemanticCSharp(project, config), compilationCache: compilationCache,
-                        postProcessors: pluginLoad.PostProcessors.Concat(Shonkor.Infrastructure.Services.FirstPartyPostProcessors.Create()));
+                        postProcessors: pluginLoad.PostProcessors, postProcessorContext: ppContext);
 
                     var result = await scanner.ScanDirectoryAsync(targetDir, exclusions, ct);
                     var stats = await storage.GetStatisticsAsync(ct);

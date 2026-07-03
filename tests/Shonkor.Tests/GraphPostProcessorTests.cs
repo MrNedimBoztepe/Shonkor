@@ -86,6 +86,47 @@ public class GraphPostProcessorTests
     }
 
     [Fact]
+    public async Task ClrTypeResolver_DowngradesUnresolvedThirdPartyModuleTypeToInfo()
+    {
+        var view = new FakeGraphView();
+        // A real third-party Sitecore module type — ships in Dianoga.dll, never in indexed source.
+        view.ClrTypeNodes.Add(Clr("Dianoga.Optimizers.Pipelines.DianogaJpeg.MozJpegOptimizer"));
+
+        var enrichment = await new ClrTypeResolverPostProcessor().ProcessAsync(view);
+
+        Assert.Empty(enrichment.Edges);
+        Assert.DoesNotContain(enrichment.Diagnostics, d => d.Severity == DiagnosticSeverity.Warning);
+        Assert.Contains(enrichment.Diagnostics, d => d.Code == "sitecore.clrtype-external" && d.Severity == DiagnosticSeverity.Info);
+    }
+
+    [Fact]
+    public async Task ClrTypeResolver_DowngradesUserConfiguredExternalPrefixToInfo()
+    {
+        var view = new FakeGraphView();
+        // Not a built-in framework prefix and not indexed — would normally be a Warning.
+        view.ClrTypeNodes.Add(Clr("Acme.CustomModule.Pipelines.DoThing"));
+
+        var ctx = new GraphPostProcessorContext { ExternalTypePrefixes = new[] { "Acme." } };
+        var enrichment = await new ClrTypeResolverPostProcessor().ProcessAsync(view, ctx);
+
+        Assert.Empty(enrichment.Edges);
+        Assert.DoesNotContain(enrichment.Diagnostics, d => d.Severity == DiagnosticSeverity.Warning);
+        Assert.Contains(enrichment.Diagnostics, d => d.Code == "sitecore.clrtype-external" && d.Severity == DiagnosticSeverity.Info);
+    }
+
+    [Fact]
+    public async Task ClrTypeResolver_WithoutConfiguredPrefix_StillWarnsForUnknownType()
+    {
+        var view = new FakeGraphView();
+        view.ClrTypeNodes.Add(Clr("Acme.CustomModule.Pipelines.DoThing"));
+
+        // No external prefixes configured -> the same type is still a Warning (own missing code).
+        var enrichment = await new ClrTypeResolverPostProcessor().ProcessAsync(view, GraphPostProcessorContext.Empty);
+
+        Assert.Contains(enrichment.Diagnostics, d => d.Code == "sitecore.clrtype-unresolved" && d.Severity == DiagnosticSeverity.Warning);
+    }
+
+    [Fact]
     public async Task ClrTypeResolver_FlagsAmbiguousMatches()
     {
         var view = new FakeGraphView();
