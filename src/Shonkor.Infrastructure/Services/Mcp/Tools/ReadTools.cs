@@ -238,7 +238,7 @@ public sealed class GetSubgraphTool : IMcpTool
                 return $"{handle}\t{n.Type}\t{n.Name}{summary}";
             });
             var edgeLines = edges.Select(e =>
-                $"{ToHandle(e.SourceId, basePath)} --{e.Relationship}--> {ToHandle(e.TargetId, basePath)}");
+                $"{ToHandle(e.SourceId, basePath)} --{e.Relationship}--> {ToHandle(e.TargetId, basePath)} {ProvenanceTag(e.Provenance)}");
 
             var sb = new System.Text.StringBuilder();
             sb.Append("NODES (").Append(nodes.Count).Append("):\n");
@@ -271,7 +271,8 @@ public sealed class GetSubgraphTool : IMcpTool
             {
                 e.SourceId,
                 e.TargetId,
-                Relationship = e.Relationship
+                Relationship = e.Relationship,
+                Provenance = e.Provenance.ToString()
             })
         };
 

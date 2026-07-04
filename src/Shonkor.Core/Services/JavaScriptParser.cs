@@ -24,6 +24,10 @@ public sealed class JavaScriptParser : IFileParser
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".js", ".ts", ".jsx", ".tsx" }.ToFrozenSet();
 
     /// <inheritdoc />
+    /// <remarks>Name-based import extraction without cross-file type resolution — heuristic, not proven.</remarks>
+    public Provenance DefaultProvenance => Provenance.Inferred;
+
+    /// <inheritdoc />
     public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
     {
         new NodeTypeDescriptor("JSComponent", "Code", true)

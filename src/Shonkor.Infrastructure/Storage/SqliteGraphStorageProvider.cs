@@ -180,13 +180,14 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT OR IGNORE INTO Edges (SourceId, TargetId, RelationType)
-            VALUES (@SourceId, @TargetId, @RelationType);
+            INSERT OR IGNORE INTO Edges (SourceId, TargetId, RelationType, Provenance)
+            VALUES (@SourceId, @TargetId, @RelationType, @Provenance);
             """;
 
         var pSource = command.Parameters.Add("@SourceId", SqliteType.Text);
         var pTarget = command.Parameters.Add("@TargetId", SqliteType.Text);
         var pRelation = command.Parameters.Add("@RelationType", SqliteType.Text);
+        var pProvenance = command.Parameters.Add("@Provenance", SqliteType.Integer);
 
         await command.PrepareAsync(cancellationToken).ConfigureAwait(false);
 
@@ -195,6 +196,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             pSource.Value = edge.SourceId;
             pTarget.Value = edge.TargetId;
             pRelation.Value = edge.Relationship;
+            pProvenance.Value = (int)edge.Provenance;
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -512,7 +514,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         {
             edgeCommand.CommandText =
                 """
-                SELECT SourceId, TargetId, RelationType
+                SELECT SourceId, TargetId, RelationType, Provenance
                 FROM Edges
                 WHERE SourceId = @id OR TargetId = @id;
                 """;
@@ -569,7 +571,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT SourceId, TargetId, RelationType
+            SELECT SourceId, TargetId, RelationType, Provenance
             FROM Edges
             WHERE RelationType = @rel;
             """;
@@ -1255,7 +1257,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var paramList = string.Join(", ", paramNames);
         command.CommandText =
             $"""
-            SELECT SourceId, TargetId, RelationType
+            SELECT SourceId, TargetId, RelationType, Provenance
             FROM Edges
             WHERE SourceId IN ({paramList})
                OR TargetId IN ({paramList});
@@ -1315,7 +1317,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var paramList = string.Join(", ", paramNames);
         command.CommandText =
             $"""
-            SELECT SourceId, TargetId, RelationType
+            SELECT SourceId, TargetId, RelationType, Provenance
             FROM Edges
             WHERE SourceId IN ({paramList})
               AND TargetId IN ({paramList});

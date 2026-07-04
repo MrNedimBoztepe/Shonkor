@@ -56,12 +56,10 @@ public static class EndpointHelpers
     /// <summary>
     /// Whether to use exact semantic C# resolution when indexing <paramref name="project"/>: the
     /// per-project <see cref="Project.SemanticCSharp"/> setting wins; otherwise the global
-    /// <c>Indexing:SemanticCSharp</c> setting; otherwise the default, which is now <c>true</c>.
-    /// Semantic resolution is non-lossy (unresolved references fall back to name matching), so it is never
-    /// worse than the syntactic resolver — only more precise. Set <c>Indexing:SemanticCSharp=false</c>
-    /// (globally) or the per-project flag to force the faster name-based resolver.
+    /// <c>Indexing:SemanticCSharp</c> setting applies, which itself defaults to ON when unset (semantic
+    /// resolution is what earns EXTRACTED provenance). Set the global or per-project value to false to opt out.
     /// </summary>
     public static bool UseSemanticCSharp(Project project, IConfiguration config) =>
-        project.SemanticCSharp ?? config.GetValue<bool?>("Indexing:SemanticCSharp") ?? true;
+        project.SemanticCSharp ?? config.GetValue("Indexing:SemanticCSharp", true);
 
 }

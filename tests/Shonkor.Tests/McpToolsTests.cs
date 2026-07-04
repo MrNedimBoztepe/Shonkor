@@ -101,6 +101,65 @@ public class McpToolsTests
         Assert.Contains("Gadget", text);             // the dependent is listed
         Assert.Contains("REFERENCES_TYPE", text);    // grouped by relation
         Assert.Contains("Depends on Widget.", text); // the dependent's AI summary is included
+        Assert.Contains("[extracted]", text);        // 0.1d: each edge is tagged with its provenance tier
+    }
+
+    [Fact]
+    public async Task References_ProvenanceFilter_ExcludesInferredWhenExtractedOnly()
+    {
+        // 0.1d: a caller can demand hard-extracted-only impact, and every edge shows its tier.
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_prov_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var dbPath = Path.Combine(ws, "g.db");
+        var target = Path.Combine(ws, "Target.cs") + "::Target";
+        var hard = Path.Combine(ws, "HardDep.cs") + "::HardDep";
+        var soft = Path.Combine(ws, "SoftDep.cs") + "::SoftDep";
+        try
+        {
+            using (var storage = new SqliteGraphStorageProvider(dbPath))
+            {
+                await storage.InitializeAsync();
+                await storage.UpsertNodesAsync(new[]
+                {
+                    new GraphNode { Id = target, Name = "Target", Type = "Class", FilePath = Path.Combine(ws, "Target.cs"), StartLine = 1, Content = "class Target {}" },
+                    new GraphNode { Id = hard, Name = "HardDep", Type = "Class", FilePath = Path.Combine(ws, "HardDep.cs"), StartLine = 1, Content = "class HardDep { Target t; }" },
+                    new GraphNode { Id = soft, Name = "SoftDep", Type = "Class", FilePath = Path.Combine(ws, "SoftDep.cs"), StartLine = 1, Content = "class SoftDep { Target t; }" }
+                });
+                await storage.UpsertEdgesAsync(new[]
+                {
+                    new GraphEdge { SourceId = hard, TargetId = target, Relationship = "REFERENCES_TYPE", Provenance = Provenance.Extracted },
+                    new GraphEdge { SourceId = soft, TargetId = target, Relationship = "REFERENCES_TYPE", Provenance = Provenance.Inferred }
+                });
+            }
+
+            var registry = new
+            {
+                Organizations = Array.Empty<object>(),
+                Users = Array.Empty<object>(),
+                Projects = new[] { new { Name = "P", Path = ws, DatabasePath = dbPath, OrganizationId = "", RepositoryUrl = "", ApiKey = "" } },
+                ActiveProjectName = "P"
+            };
+            File.WriteAllText(Path.Combine(ws, "projects.json"), JsonSerializer.Serialize(registry));
+
+            var handler = new McpRequestHandler(new ProjectManager(ws), new ContextCapsuleSynthesizer(), "P", lockToContextProject: true);
+
+            // No filter → both dependents, each tagged with its tier.
+            var all = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Target" })));
+            Assert.Contains("HardDep", all);
+            Assert.Contains("SoftDep", all);
+            Assert.Contains("[extracted]", all);
+            Assert.Contains("[inferred]", all);
+
+            // provenance=extracted → the inferred dependent is excluded.
+            var hardOnly = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("references", new { symbol = "Target", provenance = "extracted" })));
+            Assert.Contains("HardDep", hardOnly);
+            Assert.DoesNotContain("SoftDep", hardOnly);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Directory.Delete(ws, true);
+        }
     }
 
     [Fact]

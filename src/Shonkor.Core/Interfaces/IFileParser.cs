@@ -26,6 +26,17 @@ public interface IFileParser
     IReadOnlySet<string> SupportedExtensions { get; }
 
     /// <summary>
+    /// The baseline trust tier of the edges this parser produces. Deterministic, language-exact parsers
+    /// (e.g. Roslyn) leave the default <see cref="Provenance.Extracted"/>; heuristic parsers (regex,
+    /// name-based, or Tree-sitter syntactic patterns without semantic resolution) MUST override this to
+    /// <see cref="Provenance.Inferred"/>. The host stamps each produced edge with the more-uncertain of
+    /// this default and the edge's own <see cref="GraphEdge.Provenance"/>, so a parser that forgets to tag
+    /// an individual edge cannot over-claim, while it can still escalate a specific edge to
+    /// <see cref="Provenance.Ambiguous"/>. Default-implemented so existing parsers/plugins stay valid.
+    /// </summary>
+    Provenance DefaultProvenance => Provenance.Extracted;
+
+    /// <summary>
     /// Declares the node types this parser produces, with metadata for UI filtering.
     /// </summary>
     IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; }

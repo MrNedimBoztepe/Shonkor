@@ -43,6 +43,10 @@ public sealed partial class PhpModuleParser : IFileParser
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".php", ".tpl" }.ToFrozenSet();
 
     /// <inheritdoc />
+    /// <remarks>Regex-based OXID/Smarty extraction — its module/template edges are heuristic, not proven.</remarks>
+    public Provenance DefaultProvenance => Provenance.Inferred;
+
+    /// <inheritdoc />
     public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
     {
         new NodeTypeDescriptor("OxidModule", "Code", true),
