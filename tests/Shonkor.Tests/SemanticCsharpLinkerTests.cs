@@ -138,4 +138,38 @@ public class SemanticCsharpLinkerTests
         Assert.NotNull(callee);
         Assert.Contains("int", callee!.Properties.GetValueOrDefault("parameters", ""));
     }
+
+    [Fact]
+    public async Task OverrideMethod_EmitsOverridesEdge_ToBaseMethod()
+    {
+        // Method-level override chain (beyond the type-level EXTENDS): Derived.Do overrides Base.Do.
+        using var storage = await LinkAsync(
+            ("/repo/Base.cs", "namespace N { public class Base { public virtual void Do() { } } }"),
+            ("/repo/Derived.cs", "namespace N { public class Derived : Base { public override void Do() { } } }"));
+
+        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/Base.cs::Base::Do#0");
+        var overrideEdge = edges.SingleOrDefault(e => e.Relationship == "OVERRIDES");
+        Assert.NotNull(overrideEdge);
+        Assert.Equal("/repo/Derived.cs::Derived::Do#0", overrideEdge!.SourceId);
+        Assert.Equal("/repo/Base.cs::Base::Do#0", overrideEdge.TargetId);
+        // Semantic-resolved → EXTRACTED provenance.
+        Assert.Equal(Provenance.Extracted, overrideEdge.Provenance);
+    }
+
+    [Fact]
+    public async Task InterfaceImplementation_EmitsImplementsMemberEdge_AlongsideTypeLevelImplements()
+    {
+        using var storage = await LinkAsync(
+            ("/repo/IFoo.cs", "namespace N { public interface IFoo { void Bar(); } }"),
+            ("/repo/C.cs", "namespace N { public class C : IFoo { public void Bar() { } } }"));
+
+        // Type-level IMPLEMENTS still holds …
+        var (typeEdges, _) = await storage.GetIncidentEdgesAsync("/repo/IFoo.cs::IFoo");
+        Assert.Contains(typeEdges, e => e.SourceId == "/repo/C.cs::C" && e.Relationship == "IMPLEMENTS");
+
+        // … plus the new member-level edge: C.Bar implements IFoo.Bar.
+        var (memberEdges, _) = await storage.GetIncidentEdgesAsync("/repo/IFoo.cs::IFoo::Bar#0");
+        Assert.Contains(memberEdges, e => e.SourceId == "/repo/C.cs::C::Bar#0"
+            && e.TargetId == "/repo/IFoo.cs::IFoo::Bar#0" && e.Relationship == "IMPLEMENTS_MEMBER");
+    }
 }
