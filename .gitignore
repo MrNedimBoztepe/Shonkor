@@ -55,3 +55,6 @@ nupkg/
 *.nupkg
 publish-test/
 publish/
+
+# Eval: large generated LLM response caches (keep the small result artifacts, ignore the caches)
+eval/cache-*.json
