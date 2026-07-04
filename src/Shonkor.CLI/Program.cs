@@ -1,6 +1,8 @@
 // Licensed to Shonkor under the MIT License.
 
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 using Shonkor.Core.Services;
@@ -117,6 +119,7 @@ public static class Program
         Console.ResetColor();
         Console.WriteLine("    [directory]              The directory to index (defaults to current directory '.')");
         Console.WriteLine("    -c, --config <file>      Path to config json file (defaults to 'shonkor.json')");
+        Console.WriteLine("    --embed                  Generate code embeddings (needs a reachable Ollama) so semantic/hybrid search works");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -204,6 +207,7 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
     {
         var directory = ".";
         var configPath = DefaultConfigFileName;
+        var embed = false;
 
         // Skip command arg index [0]
         var i = 1;
@@ -219,6 +223,10 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
             {
                 configPath = args[i + 1];
                 i++;
+            }
+            else if (args[i] == "--embed")
+            {
+                embed = true;
             }
         }
 
@@ -279,6 +287,14 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
                 Console.WriteLine($"  * {typeStat.Key}: {typeStat.Value}");
             }
 
+            // Opt-in code embeddings (--embed): populate vectors so semantic/hybrid search works on this
+            // CLI-built graph (which otherwise has none — enrichment normally runs only in the web worker).
+            // Requires a reachable embedding backend; if it isn't, the index still succeeds.
+            if (embed)
+            {
+                await RunEmbedPassAsync(storage);
+            }
+
             return 0;
         }
         catch (Exception ex)
@@ -288,6 +304,85 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
             Console.ResetColor();
             return 1;
         }
+    }
+
+    /// <summary>Node types worth embedding for code/doc search — the ones a query is meant to land on.</summary>
+    private static readonly string[] EmbeddableTypes =
+    {
+        "Class", "Interface", "Record", "Struct", "Enum", "Method", "Constructor", "Property", "File", "MarkdownSection"
+    };
+
+    /// <summary>
+    /// Populates code embeddings for the graph so semantic/hybrid search works on a CLI-built database.
+    /// Embedding-only (no LLM summarization): each node's structured code document is embedded and written
+    /// back via <see cref="ISemanticGraphStore.UpdateNodeEmbeddingAsync"/>. Bounded parallelism; a dead
+    /// backend is reported and skipped without failing the (already successful) index.
+    /// </summary>
+    private static async Task RunEmbedPassAsync(IGraphStorageProvider storage)
+    {
+        var config = new ConfigurationBuilder().AddEnvironmentVariables().Build();
+        var source = (config["Embedding:Source"] ?? "code").Trim().ToLowerInvariant();
+        var model = config["EmbeddingService:OllamaModel"] ?? "nomic-embed-text";
+        var maxParallelism = Math.Max(1, int.TryParse(config["SemanticEnrichment:MaxParallelism"], out var mp) ? mp : 4);
+
+        using var httpClient = new HttpClient();
+        var embeddingService = new OllamaEmbeddingService(httpClient, config, NullLogger<OllamaEmbeddingService>.Instance);
+
+        // Probe once so an unreachable OR stalled backend fails fast (bounded), instead of per-node or a
+        // ~minutes-long hang on a backend that accepts the connection but never responds.
+        try
+        {
+            using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var probe = await embeddingService.GenerateEmbeddingAsync("probe", probeCts.Token);
+            if (probe.Length == 0)
+            {
+                Console.WriteLine("\n[embed] Backend returned an empty embedding — skipping. Semantic search will fall back to FTS.");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"\n[embed] Embedding backend unreachable/slow ({ex.Message}). Skipping; semantic search will fall back to FTS.");
+            return;
+        }
+
+        var nodes = await storage.GetNodesByTypesAsync(EmbeddableTypes);
+        var toEmbed = nodes.Where(n => !string.IsNullOrWhiteSpace(n.Content) || !string.IsNullOrWhiteSpace(n.Name)).ToList();
+        if (toEmbed.Count == 0)
+        {
+            Console.WriteLine("\n[embed] No embeddable nodes found.");
+            return;
+        }
+
+        Console.WriteLine($"\n[embed] Generating code embeddings for {toEmbed.Count} nodes (source={source})...");
+        var done = 0;
+        await Parallel.ForEachAsync(
+            toEmbed,
+            new ParallelOptions { MaxDegreeOfParallelism = maxParallelism },
+            async (node, ct) =>
+            {
+                try
+                {
+                    var text = EmbeddingTextBuilder.Build(node, node.Summary, source);
+                    if (string.IsNullOrWhiteSpace(text)) return;
+                    var vector = await embeddingService.GenerateEmbeddingAsync(text, EmbeddingKind.Document, ct);
+                    if (vector.Length > 0)
+                    {
+                        await storage.UpdateNodeEmbeddingAsync(node.Id, vector, model, ct);
+                    }
+                    var n = Interlocked.Increment(ref done);
+                    if (n % 100 == 0) Console.WriteLine($"[embed]   {n}/{toEmbed.Count}...");
+                }
+                catch (Exception ex)
+                {
+                    // Skip a single node's failure; keep embedding the rest.
+                    Console.Error.WriteLine($"[embed] Node '{node.Id}' failed: {ex.Message}");
+                }
+            }).ConfigureAwait(false);
+
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"[embed] Done — {done} embeddings written. Semantic and hybrid search are now available.");
+        Console.ResetColor();
     }
 
     private static async Task<int> ParseAndRunSearchAsync(string[] args)
@@ -480,6 +575,38 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
         }
     }
 
+    /// <summary>
+    /// Returns an <see cref="OllamaEmbeddingService"/> when an Ollama backend is reachable, else <c>null</c>.
+    /// Uses a short-timeout GET on <c>/api/tags</c> so an absent backend (connection refused) returns
+    /// immediately and MCP startup is not delayed. The returned service reuses <paramref name="sharedClient"/>,
+    /// whose lifetime the caller owns for the server's duration.
+    /// </summary>
+    private static async Task<IEmbeddingService?> TryCreateMcpEmbeddingServiceAsync(IConfiguration config, HttpClient sharedClient)
+    {
+        var url = (config["EmbeddingService:OllamaUrl"] ?? "http://localhost:11434").TrimEnd('/');
+        // Probe over IPv4 to avoid the "localhost" -> ::1 first-attempt detour, which on a cold process
+        // can exceed a short timeout before falling back to 127.0.0.1 (a present backend would then be
+        // wrongly seen as absent). An absent backend still fails instantly (connection refused), so a
+        // slightly generous timeout stays fast when Ollama isn't running.
+        var probeUrl = url.Replace("localhost", "127.0.0.1", StringComparison.OrdinalIgnoreCase);
+        try
+        {
+            using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            using var probe = new HttpClient();
+            var response = await probe.GetAsync($"{probeUrl}/api/tags", probeCts.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        return new OllamaEmbeddingService(sharedClient, config, NullLogger<OllamaEmbeddingService>.Instance);
+    }
+
     private static async Task<int> RunMcpServerAsync(string[] args)
     {
         if (args.Length > 1 && args[1].Equals("install", StringComparison.OrdinalIgnoreCase))
@@ -540,8 +667,18 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
                 new MarkdownHierarchyParser(),
                 new GraphQLParser()
             };
+            // Wire an embedding service when a backend is reachable, so search_semantic works over a graph
+            // that has embeddings (built with `shonkor index --embed`). Absent backend → null → FTS-only
+            // (unchanged behaviour, no startup delay: connection-refused returns immediately).
+            var mcpConfig = new ConfigurationBuilder().AddEnvironmentVariables().Build();
+            using var embedHttpClient = new HttpClient();
+            var embeddingService = await TryCreateMcpEmbeddingServiceAsync(mcpConfig, embedHttpClient).ConfigureAwait(false);
+            Console.Error.WriteLine(embeddingService is not null
+                ? "[MCP] Embedding backend detected — semantic search enabled (requires embeddings in the graph)."
+                : "[MCP] No embedding backend — keyword (FTS) + graph search only.");
+
             var server = new McpRequestHandler(pm, synthesizer, contextProjectName, fileParsers: mcpParsers,
-                compilationCache: new SemanticCompilationCache());
+                compilationCache: new SemanticCompilationCache(), embeddingService: embeddingService);
 
             await server.StartAsync().ConfigureAwait(false);
             return 0;

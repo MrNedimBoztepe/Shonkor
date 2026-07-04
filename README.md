@@ -41,12 +41,19 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 
 ## ⚡️ Benchmark: AI Graphs vs. Classic RAG
 
-In a commercial C# test codebase (50 classes), this benchmark compares the performance of a conventional search query (Fulltext RAG) with Shonkor's pre-generated semantic graph:
+`src/Shonkor.Benchmarks` measures the **real shipped retrieval path** on Shonkor's own graph: for each
+query it runs FTS search → 2-hop subgraph → capsule synthesis, and compares the **budget-aware capsule**
+(seed-first, hub-capped) against a **naive full-content dump of the same retrieved subgraph** — i.e. what
+an unbudgeted "send everything" RAG would emit:
 
-* **Token Requirement:** ~1,200 tokens (Shonkor) vs. ~9,800 tokens (Classic RAG) ➡️ **87.7% saved**
-* **Context Latency:** ~6 seconds (Shonkor) vs. ~50 seconds (Classic RAG) ➡️ **7.6x faster**
+* **Token reduction:** ~**87.8 %** aggregate (range 17–97 % per query), bounding a 2-hop hub neighbourhood
+  from >200k tokens down to <40k. Reproduce with `dotnet run --project src/Shonkor.Benchmarks -- shonkor.db`.
 
-Shonkor thus allows a **highly profitable operation** of LLM chatbots, since the expensive context is reduced to an absolute minimum without the LLM losing the architectural overview.
+Retrieval precision over the same graph (`src/Shonkor.Eval`): exact symbol lookup reaches **Precision@1 ≈ 0.98 / Recall@10 ≈ 0.99** (FTS5); for natural-language *intent* queries, embedding **code** (not the 1-sentence summary) lifts **Recall@10 from ~0.27 (FTS) to ~0.93–1.0**. See [`review/results.md`](review/results.md) for full methodology and numbers.
+
+> Note: this compares Shonkor's budgeted capsule to dumping the *same retrieved nodes* in full — it does
+> **not** claim a whole-repo or chunked-RAG comparison. (The previous "87.7 % / 7.6×" figure was a
+> whole-file-vs-summary strawman and has been replaced with this measured, reproducible benchmark.)
 
 ---
 
@@ -56,17 +63,24 @@ The project follows a clean **Clean Architecture** structure:
 
 ```
 src/
-  ├── Shonkor.Core/          # Domain models, interfaces, AST parser & capsule synthesizer
-  ├── Shonkor.Infrastructure/# SQLite graph storage, crawler (SHA256), assembly-plugin registry/loader, cross-tech linker
-  ├── Shonkor.Plugin.Cms/    # Example first-party plugin (Optimizely/Kentico/Sitecore parsers) — built & installed as a ZIP
-  ├── Shonkor.CLI/           # Console interface (init, index, search, capsule, mcp) + MCP server
-  └── Shonkor.Web/           # Minimal APIs, API key middleware & glassmorphic web dashboard (wwwroot)
+  ├── Shonkor.Core/            # Domain models, interfaces, AST parser, capsule synthesizer, hybrid fusion
+  ├── Shonkor.Infrastructure/  # SQLite graph storage, crawler (SHA256), assembly-plugin registry/loader,
+  │                            #   cross-tech + semantic C# linker, embedding/enrichment services
+  ├── Shonkor.Plugin.Sitecore/ # First-party CMS plugins (Sitecore / Kentico / Optimizely content-model
+  ├── Shonkor.Plugin.Kentico/  #   parsers) — each built & installed as a ZIP
+  ├── Shonkor.Plugin.Optimizely/
+  ├── Shonkor.CLI/             # Console interface (init, index, search, capsule, mcp) + MCP server
+  ├── Shonkor.Eval/            # Precision harness: Precision@k / Recall@k / MRR (FTS/semantic/hybrid)
+  ├── Shonkor.Benchmarks/      # Token benchmark of the real capsule path
+  └── Shonkor.Web/             # Minimal APIs, API key middleware & glassmorphic web dashboard (wwwroot)
 tests/
-  └── Shonkor.Tests/         # Unit tests for parser, SQLite CTE, concurrency & type reference linking
+  └── Shonkor.Tests/           # Unit tests for parser, SQLite CTE, concurrency, linking & enrichment
 docs/
-  ├── developer/arc42/        # Developer documentation according to arc42 standard (Chapters 1-8)
-  ├── user/                   # User manuals (setup, CLI, LLM integration)
-  └── architecture/           # Architecture reviews
+  ├── developer/arc42/         # Developer documentation according to arc42 standard (Chapters 1-8)
+  ├── user/                    # User manuals (setup, CLI, LLM integration)
+  └── architecture/            # Architecture reviews
+eval/                          # Golden set + measured baseline for the precision harness
+review/                        # Precision review, improvements, eval plan, roadmap & measured results
 ```
 
 ---

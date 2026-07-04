@@ -195,10 +195,22 @@
   .prj .pbtns button{font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:uppercase; border:1px solid var(--line-2); background:var(--paper); color:var(--ink-2); padding:6px 12px; cursor:pointer}
   .prj .pbtns button:hover{color:var(--ink); border-color:var(--ink-2)}
   .prj .pbtns button.danger:hover{color:var(--err); border-color:var(--err)}
+  .prj .extrow .extp{flex:1; min-width:160px; font-family:var(--mono); font-size:11px; border:1px solid var(--line-2); background:var(--paper); color:var(--ink); padding:5px 8px; outline:none}
+  .prj .extrow .extp:focus{border-color:var(--ink-2)}
+  .prj .extrow .extsave{font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:uppercase; border:1px solid var(--line-2); background:var(--paper); color:var(--ink-2); padding:6px 12px; cursor:pointer}
+  .prj .extrow .extsave:hover{color:var(--ink); border-color:var(--ink-2)}
   .addprj{border:1px dashed var(--line-2); padding:14px 15px; margin-bottom:18px; background:var(--paper-2)}
   .addprj .af{display:flex; gap:8px; margin-top:9px} .addprj .af input{flex:1; font-family:var(--sans); font-size:13px; border:1px solid var(--line-2); background:var(--paper); padding:8px 11px; outline:none}
   .addprj .af input:focus{border-color:var(--ink-2)}
   .addprj button{font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; background:var(--teal); color:var(--paper); border:none; padding:0 16px; cursor:pointer}
+  /* AI settings form */
+  #ai-set .af{display:flex; gap:8px; margin-top:5px}
+  #ai-set .af input{flex:1; font-family:var(--sans); font-size:13px; border:1px solid var(--line-2); background:var(--paper); padding:8px 11px; outline:none}
+  #ai-set .af input:focus{border-color:var(--ink-2)}
+  .airow{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--line-2)}
+  .airow label{font-family:var(--sans); font-size:13px; color:var(--ink-2)}
+  .airow select,.airow input{font-family:var(--sans); font-size:13px; border:1px solid var(--line-2); background:var(--paper); padding:6px 9px; outline:none; min-width:170px}
+  #ai-save{font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; background:var(--teal); color:var(--paper); border:none; padding:8px 18px; cursor:pointer}
   /* Ask — chat */
   .chat{display:flex; flex-direction:column; height:100%}
   .chat-msgs{flex:1; overflow:auto; display:flex; flex-direction:column; gap:12px; padding-bottom:8px}
@@ -920,6 +932,7 @@ async function pluginOp(op, i){
 let _setTab='projects';
 const SET_SECTIONS=[
   {t:'projects', label:'Projects', icon:'<rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="9" width="8" height="11" rx="1"/><path d="M7 11v4h6"/>'},
+  {t:'ai',       label:'AI',       icon:'<path d="M4 5h16v11H9l-4 4v-4H4z"/><path d="M8.5 10.5h.2 M12 10.5h.2 M15.5 10.5h.2"/>'},
   {t:'plugins',  label:'Plugins',  icon:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="13" y="13" width="6" height="6" rx="1"/><path d="M10 7h5v6"/>'}
 ];
 function renderSettings(body){
@@ -931,7 +944,44 @@ function renderSettings(body){
   </div>`;
   body.querySelectorAll('#set-nav button').forEach(b=>b.onclick=()=>{ _setTab=b.getAttribute('data-t'); renderSettings(body); });
   const sb=$('#set-body');
-  if(_setTab==='plugins') renderPlugins(sb); else renderSettingsProjects(sb);
+  if(_setTab==='plugins') renderPlugins(sb); else if(_setTab==='ai') renderSettingsAi(sb); else renderSettingsProjects(sb);
+}
+/* AI / Ollama settings — edits appsettings.Local.json via loopback-only /api/settings. */
+async function renderSettingsAi(c){
+  c.innerHTML = `<div class="secthead">AI &amp; tools</div><div id="ai-set"><div class="sempty">Loading…</div></div>`;
+  let s;
+  try{ const r=await fetch('/api/settings',{headers:H()}); if(!r.ok) throw new Error(r.status); s=await r.json(); }
+  catch(e){ $('#ai-set').innerHTML='<div class="sempty">Settings are only editable from the local machine (loopback).</div>'; return; }
+  const bool=(v,id)=>`<select id="${id}"><option value="true" ${v?'selected':''}>On</option><option value="false" ${!v?'selected':''}>Off</option></select>`;
+  const src=(v)=>`<select id="ai-src"><option value="code" ${v==='code'?'selected':''}>code (recommended)</option><option value="summary" ${v==='summary'?'selected':''}>summary</option></select>`;
+  $('#ai-set').innerHTML = `
+    <div class="seglbl">Generation model (Ask AI) — Ollama</div>
+    <div class="af"><input id="ai-gen-url" value="${escapeHtml(s.semanticAnalyzerUrl||'')}" placeholder="http://localhost:11434"><input id="ai-gen-model" value="${escapeHtml(s.semanticAnalyzerModel||'')}" placeholder="qwen2.5-coder"></div>
+    <div class="seglbl" style="margin-top:10px">Embedding model (semantic/hybrid search) — Ollama</div>
+    <div class="af"><input id="ai-emb-url" value="${escapeHtml(s.embeddingUrl||'')}" placeholder="http://localhost:11434"><input id="ai-emb-model" value="${escapeHtml(s.embeddingModel||'')}" placeholder="nomic-embed-text"></div>
+    <div class="airow"><label>Embedding source</label>${src(s.embeddingSource)}</div>
+    <div class="airow"><label>Exact C# resolution (default)</label>${bool(s.semanticCSharp,'ai-sem')}</div>
+    <div class="airow"><label>Stream answers</label>${bool(s.streamingAnswers,'ai-stream')}</div>
+    <div class="airow"><label>Enrichment batch size</label><input id="ai-bs" type="number" min="1" value="${s.enrichmentBatchSize}"></div>
+    <div class="airow"><label>Enrichment parallelism</label><input id="ai-par" type="number" min="1" value="${s.enrichmentMaxParallelism}"></div>
+    <div class="airow"><label>Drift interval (s) <span class="seglbl">restart needed</span></label><input id="ai-drift" type="number" min="0" value="${s.driftReconcileIntervalSeconds}"></div>
+    <div style="margin-top:12px"><button id="ai-save">Save</button> <span id="ai-status" class="seglbl"></span></div>`;
+  $('#ai-save').onclick=async()=>{
+    const num=id=>{ const v=parseInt($('#'+id).value,10); return isNaN(v)?null:v; };
+    const body={
+      semanticAnalyzerUrl:$('#ai-gen-url').value.trim(), semanticAnalyzerModel:$('#ai-gen-model').value.trim(),
+      embeddingUrl:$('#ai-emb-url').value.trim(), embeddingModel:$('#ai-emb-model').value.trim(),
+      embeddingSource:$('#ai-src').value, semanticCSharp:$('#ai-sem').value==='true',
+      streamingAnswers:$('#ai-stream').value==='true', enrichmentBatchSize:num('ai-bs'),
+      enrichmentMaxParallelism:num('ai-par'), driftReconcileIntervalSeconds:num('ai-drift')
+    };
+    $('#ai-status').textContent='Saving…';
+    try{
+      const r=await fetch('/api/settings',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(r.ok){ toast('AI settings saved'); $('#ai-status').textContent='Saved — applies on the next request (drift needs a restart).'; }
+      else { $('#ai-status').textContent = r.status===403 ? 'Blocked (local-only / dev-only).' : ('Error: '+await r.text().catch(()=>r.status)); }
+    }catch(e){ $('#ai-status').textContent='Save failed.'; }
+  };
 }
 function semLabel(v){ return v===true?'Semantic (exact)':v===false?'Syntactic (fast)':'Global default'; }
 function renderSettingsProjects(c){
@@ -953,6 +1003,7 @@ function paintProjects(){
   el.innerHTML = list.length===0 ? '<div class="sempty">No projects registered yet.</div>' :
     list.map((p,i)=>{ const nm=p.name||p.Name; const path=p.path||p.Path||''; const active=nm===state.activeProject;
       const sem=(p.semanticCSharp ?? p.SemanticCSharp); const isCur=nm===state.project;
+      const exts=(p.externalTypePrefixes ?? p.ExternalTypePrefixes ?? []);
       const opt=(val,lbl)=>`<option value="${val}" ${String(sem)===val?'selected':''}>${lbl}</option>`;
       return `<div class="prj ${active?'act':''}">
         <div class="ph"><span class="pn">${escapeHtml(nm)}</span>${active?'<span class="pbadge active">active</span>':isCur?'<span class="pbadge view">viewing</span>':''}</div>
@@ -967,6 +1018,11 @@ function paintProjects(){
             ${isCur?'':`<button onclick="viewProject(${i})">view</button>`}
             <button class="danger" onclick="deleteProjectUI(${i})">delete</button>
           </div>
+        </div>
+        <div class="prow extrow">
+          <span class="seglbl" title="Namespaces to treat as external/third-party so config references to them are Info, not Warning. Comma-separated; a trailing dot scopes to a namespace, e.g. Dianoga.">External types</span>
+          <input class="extp" id="extp-${i}" placeholder="e.g. Dianoga., Acme.Modules." value="${escapeHtml(exts.join(', '))}">
+          <button class="extsave" onclick="setExternalTypes(${i})">save</button>
         </div>
       </div>`; }).join('');
 }
@@ -996,6 +1052,20 @@ async function setSemantic(i, value){
     if(r.ok){ if('semanticCSharp' in p) p.semanticCSharp=body.SemanticCSharp; p.SemanticCSharp=body.SemanticCSharp;
       toast(j.message||`${nm}: ${semLabel(body.SemanticCSharp)} — reindex to apply`, 4500); }
     else toast('Update failed');
+  }catch(e){ toast('Update failed'); }
+}
+async function setExternalTypes(i){
+  const p=(state.projects||[])[i]; if(!p) return; const nm=p.name||p.Name;
+  const raw=($('#extp-'+i)?.value||'');
+  const prefixes=raw.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
+  try{
+    const r=await fetch(`/api/projects/${encodeURIComponent(nm)}/external-types`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Prefixes:prefixes})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ const saved=j.externalTypePrefixes||j.ExternalTypePrefixes||prefixes;
+      p.externalTypePrefixes=saved; p.ExternalTypePrefixes=saved;
+      const inp=$('#extp-'+i); if(inp) inp.value=saved.join(', ');
+      toast(j.message||`${nm}: ${saved.length} external prefix(es) — reindex to apply`, 4500); }
+    else toast(typeof j==='string'?j:'Update failed');
   }catch(e){ toast('Update failed'); }
 }
 async function setActiveProjectUI(i){
@@ -1080,8 +1150,18 @@ async function sendChat(){
   const recent=_chatHist.slice(-6);
   const composed=recent.length>1 ? recent.map(m=>`${m.role==='user'?'User':'Assistant'}: ${m.text}`).join('\n') : q;
   try{
-    const r=await fetch('/api/ask',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify({query:composed, nodeIds:ids})});
-    if(r.ok){ const d=await r.json(); const ans=d.response||d.Response||'No answer.'; _chatHist.push({role:'assistant',text:ans}); thinking.className='cmsg assistant'; thinking.innerHTML=mdLite(ans); }
+    // Streamed answer (text/plain, token-by-token) so first tokens render immediately.
+    const r=await fetch('/api/ask/stream',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify({query:composed, nodeIds:ids})});
+    if(r.ok && r.body){
+      const reader=r.body.getReader(); const dec=new TextDecoder(); let ans=''; let pending=false;
+      thinking.className='cmsg assistant';
+      while(true){
+        const {done,value}=await reader.read(); if(done) break;
+        ans+=dec.decode(value,{stream:true});
+        if(!pending){ pending=true; requestAnimationFrame(()=>{ thinking.innerHTML=mdLite(ans||'…'); $('#chat-msgs').scrollTop=$('#chat-msgs').scrollHeight; pending=false; }); }
+      }
+      ans+=dec.decode(); ans=ans.trim()||'No answer.'; thinking.innerHTML=mdLite(ans); _chatHist.push({role:'assistant',text:ans});
+    }
     else { thinking.className='cmsg error'; thinking.textContent = r.status>=500 ? "Couldn't reach the AI backend. Make sure Ollama is running with the configured model, then try again." : `Error: ${await r.text().catch(()=>r.status)}`; }
   }catch(e){ thinking.className='cmsg error'; thinking.textContent="Couldn't reach the AI backend. Make sure Ollama is running, then try again."; }
   $('#chat-msgs').scrollTop=$('#chat-msgs').scrollHeight;

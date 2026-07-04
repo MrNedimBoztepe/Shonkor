@@ -1,0 +1,7 @@
+[
+  { "id": "ans-capsule", "query": "context capsule synthesizer", "mode": "ask", "expected": ["ContextCapsuleSynthesizer"], "isAnswerable": true },
+  { "id": "ans-embedding", "query": "ollama embedding service", "mode": "ask", "expected": ["OllamaEmbeddingService"], "isAnswerable": true },
+  { "id": "ans-apikey", "query": "api key middleware", "mode": "ask", "expected": ["ApiKeyMiddleware"], "isAnswerable": true },
+  { "id": "abst-oauth", "query": "How does this project implement OAuth2 PKCE token refresh?", "mode": "ask", "expected": [], "isAnswerable": false },
+  { "id": "abst-redis", "query": "What Redis cache eviction policy does this system use?", "mode": "ask", "expected": [], "isAnswerable": false }
+]

@@ -1355,7 +1355,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         return nodes;
     }
 
-    public async Task UpdateNodeSemanticDataAsync(string nodeId, SemanticAnalysisResult result, float[]? embedding = null, CancellationToken cancellationToken = default)
+    public async Task UpdateNodeSemanticDataAsync(string nodeId, SemanticAnalysisResult result, float[]? embedding = null, string? embeddingModel = null, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
@@ -1428,18 +1428,69 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             command.CommandText =
                 """
                 UPDATE Nodes
-                SET Summary = @Summary, Metadata = @Metadata, NeedsSemanticAnalysis = 0, Embedding = @Embedding
+                SET Summary = @Summary, Metadata = @Metadata, NeedsSemanticAnalysis = 0,
+                    Embedding = @Embedding, EmbeddingDim = @EmbeddingDim, EmbeddingModel = @EmbeddingModel
                 WHERE Id = @Id;
                 """;
             command.Parameters.AddWithValue("@Summary", (object?)result.Summary ?? DBNull.Value);
             command.Parameters.AddWithValue("@Metadata", JsonSerializer.Serialize(properties));
             command.Parameters.AddWithValue("@Embedding", (object?)SqliteRowMapper.EmbeddingToBytes(embedding) ?? DBNull.Value);
+            // TICKET-006: stamp the embedding's dimension AND model so a later change (incl. a same-dim
+            // model swap) is detectable by MarkStaleEmbeddingsForReembedAsync.
+            command.Parameters.AddWithValue("@EmbeddingDim", embedding is { Length: > 0 } ? embedding.Length : (object)DBNull.Value);
+            command.Parameters.AddWithValue("@EmbeddingModel", embedding is { Length: > 0 } && embeddingModel is not null ? embeddingModel : (object)DBNull.Value);
             command.Parameters.AddWithValue("@Id", nodeId);
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<int> MarkStaleEmbeddingsForReembedAsync(int expectedDim, string? expectedModel = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedDim);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        // Clear the vector and re-flag the node so the enrichment worker re-embeds it under the current model.
+        // Stale = a KNOWN dimension that differs, OR (when a model is given) a KNOWN model that differs
+        // (catches a same-dimension model swap). Legacy vectors with NULL dim/model metadata are left as-is
+        // (the query-time dimension guard still protects the search from mixing dimensions).
+        command.CommandText =
+            """
+            UPDATE Nodes
+            SET Embedding = NULL, EmbeddingDim = NULL, EmbeddingModel = NULL, NeedsSemanticAnalysis = 1
+            WHERE Embedding IS NOT NULL
+              AND (
+                    (EmbeddingDim IS NOT NULL AND EmbeddingDim <> @ExpectedDim)
+                 OR (@ExpectedModel IS NOT NULL AND EmbeddingModel IS NOT NULL AND EmbeddingModel <> @ExpectedModel)
+                  );
+            """;
+        command.Parameters.AddWithValue("@ExpectedDim", expectedDim);
+        command.Parameters.AddWithValue("@ExpectedModel", (object?)expectedModel ?? DBNull.Value);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task UpdateNodeEmbeddingAsync(string nodeId, float[]? embedding, string? embeddingModel = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(nodeId);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE Nodes
+            SET Embedding = @Embedding, EmbeddingDim = @EmbeddingDim, EmbeddingModel = @EmbeddingModel
+            WHERE Id = @Id;
+            """;
+        command.Parameters.AddWithValue("@Embedding", (object?)SqliteRowMapper.EmbeddingToBytes(embedding) ?? DBNull.Value);
+        command.Parameters.AddWithValue("@EmbeddingDim", embedding is { Length: > 0 } ? embedding.Length : (object)DBNull.Value);
+        command.Parameters.AddWithValue("@EmbeddingModel", embedding is { Length: > 0 } && embeddingModel is not null ? embeddingModel : (object)DBNull.Value);
+        command.Parameters.AddWithValue("@Id", nodeId);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     #endregion

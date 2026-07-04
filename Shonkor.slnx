@@ -3,6 +3,7 @@
     <Project Path="src/Shonkor.Benchmarks/Shonkor.Benchmarks.csproj" />
     <Project Path="src/Shonkor.CLI/Shonkor.CLI.csproj" />
     <Project Path="src/Shonkor.Core/Shonkor.Core.csproj" />
+    <Project Path="src/Shonkor.Eval/Shonkor.Eval.csproj" />
     <Project Path="src/Shonkor.Infrastructure/Shonkor.Infrastructure.csproj" />
     <Project Path="src/Shonkor.Plugin.Sitecore/Shonkor.Plugin.Sitecore.csproj" />
     <Project Path="src/Shonkor.Plugin.Kentico/Shonkor.Plugin.Kentico.csproj" />

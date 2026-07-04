@@ -1,0 +1,9 @@
+{
+  "_comment": "Measured baseline over shonkor.db (3784 nodes) with Ollama nomic-embed-text + qwen2.5-coder, 2026-06-30. Used by `shonkor-eval --baseline eval/baseline.json` to flag regressions (Precision@k drop > 0.03).",
+  "graph_exact_name": { "cases": 200, "precisionAt1": 0.980, "precisionAtK": 0.196, "recallAtK": 0.993, "mrr": 0.985 },
+  "graph_intent": { "cases": 15, "precisionAt1": 0.200, "precisionAtK": 0.027, "recallAtK": 0.267, "mrr": 0.222 },
+  "semantic_code_intent": { "cases": 15, "precisionAt1": 0.600, "recallAtK": 0.933, "mrr": 0.712 },
+  "semantic_summary_intent": { "cases": 15, "precisionAt1": 0.533, "recallAtK": 0.867, "mrr": 0.673 },
+  "hybrid_code_intent": { "cases": 15, "precisionAt1": 0.600, "recallAtK": 0.933, "mrr": 0.712 },
+  "capsule_token_reduction_vs_naive_dump": 0.878
+}

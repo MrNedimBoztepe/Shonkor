@@ -4,7 +4,7 @@
     {
       "name": "shonkor-web",
       "runtimeExecutable": "dotnet",
-      "runtimeArgs": ["run", "--project", "src/Shonkor.Web", "--urls", "http://localhost:5099"],
+      "runtimeArgs": ["run", "--project", "src/Shonkor.Web", "--", "--urls", "http://localhost:5099", "--environment", "Development"],
       "port": 5099
     }
   ]

@@ -19,6 +19,7 @@ public sealed class GraphIndexScanner
     private readonly IGraphStorageProvider _storage;
     private readonly IReadOnlyList<IFileParser> _parsers;
     private readonly IReadOnlyList<IGraphPostProcessor> _postProcessors;
+    private readonly GraphPostProcessorContext _postProcessorContext;
     private readonly ILogger? _logger;
 
     // Upper bound on the content stored on a File node (full content is still hashed).
@@ -37,7 +38,7 @@ public sealed class GraphIndexScanner
     private readonly bool _semanticCsharp;
     private readonly SemanticCompilationCache? _compilationCache;
 
-    public GraphIndexScanner(IGraphStorageProvider storage, IEnumerable<IFileParser> parsers, ILogger? logger = null, bool semanticCsharp = false, SemanticCompilationCache? compilationCache = null, IEnumerable<IGraphPostProcessor>? postProcessors = null)
+    public GraphIndexScanner(IGraphStorageProvider storage, IEnumerable<IFileParser> parsers, ILogger? logger = null, bool semanticCsharp = false, SemanticCompilationCache? compilationCache = null, IEnumerable<IGraphPostProcessor>? postProcessors = null, GraphPostProcessorContext? postProcessorContext = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(parsers);
@@ -45,6 +46,7 @@ public sealed class GraphIndexScanner
         _storage = storage;
         _parsers = parsers.ToList();
         _postProcessors = postProcessors?.ToList() ?? new List<IGraphPostProcessor>();
+        _postProcessorContext = postProcessorContext ?? GraphPostProcessorContext.Empty;
         _logger = logger;
         _semanticCsharp = semanticCsharp;
         _compilationCache = compilationCache;
@@ -241,7 +243,7 @@ public sealed class GraphIndexScanner
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    var enrichment = await postProcessor.ProcessAsync(view).ConfigureAwait(false);
+                    var enrichment = await postProcessor.ProcessAsync(view, _postProcessorContext).ConfigureAwait(false);
                     if (enrichment.Nodes.Count > 0)
                         await _storage.UpsertNodesAsync(enrichment.Nodes, cancellationToken).ConfigureAwait(false);
                     if (enrichment.Edges.Count > 0)
