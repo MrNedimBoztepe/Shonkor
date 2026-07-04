@@ -43,4 +43,10 @@ public interface IGraphSearch
     /// relationship as a whole rather than around a single node.
     /// </summary>
     Task<IReadOnlyList<GraphEdge>> GetEdgesByRelationshipAsync(string relationship, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns every edge in the whole graph. Used by global topology analyses (centrality, community
+    /// detection) that need the full edge set at once, rather than the per-node or per-relationship views.
+    /// </summary>
+    Task<IReadOnlyList<GraphEdge>> GetAllEdgesAsync(CancellationToken cancellationToken = default);
 }

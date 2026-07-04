@@ -105,6 +105,34 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task Hotspots_RanksCentralNodesByBetweenness()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("hotspots", new { })));
+
+        // Widget is referenced by several types (and reached transitively via Consumer), so it brokers the
+        // most shortest paths — it must rank as a hotspot, and each line carries the centrality metrics.
+        Assert.Contains("hotspot", text);
+        Assert.Contains("Widget", text);
+        Assert.Contains("betweenness=", text);
+    }
+
+    [Fact]
+    public async Task Clusters_ReportsConnectedComponents()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("clusters", new { })));
+
+        // The fixture has several disconnected pieces (Widget graph, Impl/IThing, Calc, isolated tasks) →
+        // more than one connected cluster.
+        Assert.Contains("connected cluster", text);
+    }
+
+    [Fact]
     public async Task References_ProvenanceFilter_ExcludesInferredWhenExtractedOnly()
     {
         // 0.1d: a caller can demand hard-extracted-only impact, and every edge shows its tier.
