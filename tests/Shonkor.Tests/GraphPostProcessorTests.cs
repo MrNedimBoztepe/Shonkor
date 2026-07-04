@@ -140,6 +140,8 @@ public class GraphPostProcessorTests
         var enrichment = await new ClrTypeResolverPostProcessor().ProcessAsync(view);
 
         Assert.Equal(2, enrichment.Edges.Count(e => e.Relationship == "RESOLVES_TO" && e.Properties["confidence"] == "ambiguous"));
+        // Ambiguous multi-candidate resolution must carry the Ambiguous provenance tier, not Extracted.
+        Assert.All(enrichment.Edges.Where(e => e.Relationship == "RESOLVES_TO"), e => Assert.Equal(Provenance.Ambiguous, e.Provenance));
         Assert.Contains(enrichment.Diagnostics, d => d.Code == "sitecore.clrtype-ambiguous" && d.Severity == DiagnosticSeverity.Info);
     }
 

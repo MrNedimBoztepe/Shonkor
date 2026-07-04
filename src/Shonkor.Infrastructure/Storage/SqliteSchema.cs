@@ -55,10 +55,15 @@ internal static class SqliteSchema
                 SourceId     TEXT NOT NULL,
                 TargetId     TEXT NOT NULL,
                 RelationType TEXT NOT NULL,
+                Provenance   INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (SourceId, TargetId, RelationType)
             );
             """,
             cancellationToken).ConfigureAwait(false);
+
+        // Additive migration: edges in a graph created before provenance existed read back as 0 (Extracted),
+        // matching the prior implicit "all edges are hard facts" semantics until they are re-indexed.
+        await TryExecuteAsync(connection, "ALTER TABLE Edges ADD COLUMN Provenance INTEGER NOT NULL DEFAULT 0;", cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_edges_source ON Edges(SourceId);", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_edges_target ON Edges(TargetId);", cancellationToken).ConfigureAwait(false);

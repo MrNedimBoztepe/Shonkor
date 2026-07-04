@@ -194,6 +194,40 @@ public static class McpToolHelpers
             ?? hits.FirstOrDefault();
     }
 
+    /// <summary>
+    /// A compact, lower-cased tag for an edge's provenance tier (<c>[extracted]</c> / <c>[inferred]</c> /
+    /// <c>[ambiguous]</c>), appended to edge lines so an agent sees whether a relationship is a proven fact
+    /// or a heuristic guess — Shonkor's core trust signal.
+    /// </summary>
+    public static string ProvenanceTag(Provenance provenance) => provenance switch
+    {
+        Provenance.Extracted => "[extracted]",
+        Provenance.Inferred => "[inferred]",
+        Provenance.Ambiguous => "[ambiguous]",
+        _ => "[?]"
+    };
+
+    /// <summary>
+    /// Reads the optional <c>provenance</c> filter argument and returns the maximum uncertainty tier to
+    /// admit (edges with a tier at or below it pass): <c>extracted</c> → only proven edges; <c>inferred</c>
+    /// → proven + heuristic, excluding ambiguous; <c>all</c>/<c>ambiguous</c>/missing → no filter (null).
+    /// Lets a caller demand hard-extracted-only impact analysis.
+    /// </summary>
+    public static Provenance? ReadProvenanceFilter(JsonNode? args)
+    {
+        var raw = args?["provenance"]?.ToString();
+        return raw?.Trim().ToLowerInvariant() switch
+        {
+            "extracted" => Provenance.Extracted,
+            "inferred" => Provenance.Inferred,
+            _ => null // "all", "ambiguous", null, or anything unrecognized → no filtering
+        };
+    }
+
+    /// <summary>Whether <paramref name="provenance"/> is admitted by an optional max-uncertainty filter (null = admit all).</summary>
+    public static bool PassesProvenance(Provenance provenance, Provenance? maxUncertainty) =>
+        maxUncertainty is null || (int)provenance <= (int)maxUncertainty;
+
     // ---- JSON-RPC response builders (stateless) ----------------------------------------------------
 
     public static string SendResponse(JsonElement id, object result) =>

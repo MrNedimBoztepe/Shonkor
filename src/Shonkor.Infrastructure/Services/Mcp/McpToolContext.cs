@@ -157,7 +157,8 @@ public sealed class McpToolContext
     /// relationship. <paramref name="emptyMessage"/> is a format string with {0}=name and {1}=type.
     /// </summary>
     public async Task<string> EdgeReportAsync(
-        IGraphStorageProvider storage, string? projectName, string symbol, bool incoming, string verb, string emptyMessage)
+        IGraphStorageProvider storage, string? projectName, string symbol, bool incoming, string verb, string emptyMessage,
+        Provenance? maxProvenance = null)
     {
         var basePath = GetProjectBasePath(projectName);
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
@@ -166,6 +167,7 @@ public sealed class McpToolContext
         var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
         var incident = edges
             .Where(e => !StructuralRelationships.Contains(e.Relationship)
+                        && PassesProvenance(e.Provenance, maxProvenance)
                         && (incoming ? e.TargetId == def.Id && e.SourceId != def.Id
                                      : e.SourceId == def.Id && e.TargetId != def.Id))
             .ToList();
@@ -174,8 +176,9 @@ public sealed class McpToolContext
 
         if (incident.Count == 0) return string.Format(emptyMessage, def.Name, def.Type) + stale;
 
+        var filterNote = maxProvenance is { } mp ? $" (provenance ≤ {mp.ToString().ToLowerInvariant()})" : "";
         var sb = new System.Text.StringBuilder();
-        sb.Append($"'{def.Name}' ({def.Type}) {verb} {incident.Count} node(s):\n");
+        sb.Append($"'{def.Name}' ({def.Type}) {verb} {incident.Count} node(s){filterNote}:\n");
         foreach (var g in incident.GroupBy(e => e.Relationship).OrderByDescending(g => g.Count()))
         {
             foreach (var e in g)
@@ -184,7 +187,7 @@ public sealed class McpToolContext
                 var other = neighbours.GetValueOrDefault(otherId);
                 var name = other?.Name ?? otherId;
                 var summary = other != null && !string.IsNullOrEmpty(other.Summary) ? $"  — {other.Summary}" : "";
-                sb.Append($"{g.Key}\t{name}\t{ToHandle(otherId, basePath)}{summary}\n");
+                sb.Append($"{g.Key}\t{name}\t{ToHandle(otherId, basePath)} {ProvenanceTag(e.Provenance)}{summary}\n");
             }
         }
         return sb.ToString().TrimEnd() + stale;

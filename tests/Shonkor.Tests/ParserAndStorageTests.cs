@@ -154,7 +154,114 @@ public class ParserAndStorageTests
         Assert.Contains(subgraphNodes, n => n.Id == "methodM");
     }
 
+    [Fact]
+    public async Task SqliteGraphStorage_ShouldRoundTripEdgeProvenance()
+    {
+        // Provenance is Shonkor's trust signal: an edge's tier must survive the write→read round-trip,
+        // and an untagged edge must default to Extracted (the deterministic-parser baseline). We assert
+        // across two distinct read paths (by-relationship and subgraph) so no SELECT silently drops it.
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
 
+        // Nodes must exist: the subgraph CTE seeds from the Nodes table.
+        await storage.UpsertNodesAsync(new[]
+        {
+            new GraphNode { Id = "a", Type = "Class", Name = "A" },
+            new GraphNode { Id = "b", Type = "Class", Name = "B" },
+            new GraphNode { Id = "c", Type = "Class", Name = "C" },
+            new GraphNode { Id = "d", Type = "Class", Name = "D" }
+        });
+
+        await storage.UpsertEdgesAsync(new[]
+        {
+            new GraphEdge { SourceId = "a", TargetId = "b", Relationship = "EXTRACTED_REL" }, // no tier → default
+            new GraphEdge { SourceId = "a", TargetId = "c", Relationship = "INFERRED_REL",  Provenance = Provenance.Inferred },
+            new GraphEdge { SourceId = "a", TargetId = "d", Relationship = "AMBIGUOUS_REL", Provenance = Provenance.Ambiguous }
+        });
+
+        // Path 1: by-relationship read.
+        Assert.Equal(Provenance.Extracted, (await storage.GetEdgesByRelationshipAsync("EXTRACTED_REL")).Single().Provenance);
+        Assert.Equal(Provenance.Inferred, (await storage.GetEdgesByRelationshipAsync("INFERRED_REL")).Single().Provenance);
+        Assert.Equal(Provenance.Ambiguous, (await storage.GetEdgesByRelationshipAsync("AMBIGUOUS_REL")).Single().Provenance);
+
+        // Path 2: subgraph traversal (GetEdgesBetweenNodesAsync) must carry the same tier.
+        var (_, subEdges) = await storage.GetSubgraphAsync(new[] { "a", "c" }, 1);
+        Assert.Equal(Provenance.Inferred, subEdges.Single(e => e.Relationship == "INFERRED_REL").Provenance);
+    }
+
+    [Fact]
+    public async Task Indexing_WithoutSemanticBackend_IsDeterministicAndModelFree()
+    {
+        // 0.3: the core index path is deterministic and LLM-free — it takes no ISemanticAnalyzer, so a scan
+        // produces no AI Summary and no Embedding, and every edge is a parser/heuristic tier (Extracted or
+        // Inferred), never a model-fabricated relation. This is the CI guard for "no cloud, no guessing in
+        // the core" — model enrichment is a strictly separate, opt-in pass.
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_nollm_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "Foo.cs"),
+                "namespace D; public class Foo { public Bar B; } public class Bar {}");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            var nodes = await storage.GetAllNodesAsync();
+            Assert.NotEmpty(nodes);
+            Assert.All(nodes, n => Assert.True(string.IsNullOrEmpty(n.Summary), $"'{n.Name}' has an AI summary — the core index path must not call a model."));
+            Assert.All(nodes, n => Assert.Null(n.Embedding));
+
+            var (_, edges) = await storage.GetSubgraphAsync(nodes.Select(n => n.Id).ToList(), 1);
+            Assert.NotEmpty(edges);
+            Assert.All(edges, e => Assert.True(
+                e.Provenance is Provenance.Extracted or Provenance.Inferred,
+                $"Edge {e.Relationship} has tier {e.Provenance} — the model-free path must never exceed Inferred."));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public async Task Scanner_ShouldStampParserDefaultProvenance()
+    {
+        // Enforcement (0.1c): the scanner stamps each parser's edges with the parser's DefaultProvenance,
+        // so deterministic Roslyn edges stay Extracted while heuristic JS edges become Inferred — even
+        // though neither parser tags provenance per edge.
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_prov_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser(), new JavaScriptParser() });
+
+            var csFile = Path.Combine(dir, "Foo.cs");
+            await File.WriteAllTextAsync(csFile, "namespace D; public class Foo { public void Bar() {} }");
+            await scanner.ScanFileAsync(csFile);
+
+            var jsFile = Path.Combine(dir, "app.js");
+            await File.WriteAllTextAsync(jsFile, "import { x } from './other';");
+            await scanner.ScanFileAsync(jsFile);
+
+            // Deterministic Roslyn CONTAINS edges → Extracted (parser default is Extracted).
+            var contains = await storage.GetEdgesByRelationshipAsync("CONTAINS");
+            Assert.NotEmpty(contains);
+            Assert.All(contains, e => Assert.Equal(Provenance.Extracted, e.Provenance));
+
+            // Heuristic JS IMPORTS edge → Inferred (stamped from the JavaScriptParser default).
+            var imports = await storage.GetEdgesByRelationshipAsync("IMPORTS");
+            Assert.NotEmpty(imports);
+            Assert.All(imports, e => Assert.Equal(Provenance.Inferred, e.Provenance));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
 
     [Fact]
     public async Task SqliteGraphStorage_ShouldHandleConcurrentOperationsWithoutCorruption()
@@ -255,10 +362,13 @@ public class ParserAndStorageTests
 
         // Assert: traversing out from the definition reaches its user via REFERENCES_TYPE.
         var (_, edges) = await storage.GetSubgraphAsync(new[] { "GraphNode.cs::GraphNode" }, 1);
-        Assert.Contains(edges, e =>
+        var refEdge = edges.FirstOrDefault(e =>
             e.Relationship == "REFERENCES_TYPE" &&
             e.SourceId == "Repository.cs::Repository" &&
             e.TargetId == "GraphNode.cs::GraphNode");
+        Assert.NotNull(refEdge);
+        // Name-based cross-tech resolution to a single definition is Inferred, never Extracted.
+        Assert.Equal(Provenance.Inferred, refEdge.Provenance);
     }
 
     [Fact]
