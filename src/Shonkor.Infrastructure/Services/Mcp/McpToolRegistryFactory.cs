@@ -15,6 +15,8 @@ public static class McpToolRegistryFactory
     {
         // Group 1 — memory & stats
         new GetStatsTool(),
+        new HotspotsTool(),
+        new ClustersTool(),
         new VerifyExistsTool(),
         new GetOpenThreadsTool(),
         new RecordTool(),

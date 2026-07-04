@@ -2,6 +2,7 @@
 
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Shonkor.Core.Services;
 using static Shonkor.Infrastructure.Services.Mcp.McpToolHelpers;
 
 namespace Shonkor.Infrastructure.Services.Mcp.Tools;
@@ -45,6 +46,121 @@ public sealed class GetStatsTool : IMcpTool
                 : null
         };
         return SendToolResponse(id, JsonSerializer.Serialize(formattedStats));
+    }
+}
+
+/// <summary>Change-risk hotspots: the graph's highest-betweenness nodes ("god nodes"), purely topological.</summary>
+public sealed class HotspotsTool : IMcpTool
+{
+    public string Name => "hotspots";
+
+    public object GetSchema() => new
+    {
+        name = "hotspots",
+        description = "Rank the graph's change-risk hotspots ('god nodes') by betweenness centrality over the coupling subgraph (structural containment excluded): the nodes through which the most shortest dependency paths pass, so a change there has the widest blast radius. Returns 'name  type  handle  betweenness=… degree=…', highest first. Purely topological — no model, no embeddings.",
+        inputSchema = new
+        {
+            type = "object",
+            properties = new
+            {
+                limit = new { type = "integer", description = "How many top hotspots to return (default 15, max 100)." },
+                projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+            }
+        }
+    };
+
+    public async Task<string> ExecuteAsync(JsonElement id, JsonObject? args, McpToolContext ctx)
+    {
+        var projectName = args?["projectName"]?.ToString();
+        var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
+        var basePath = ctx.GetProjectBasePath(projectName);
+        var limit = Math.Clamp(ReadInt(args?["limit"], 15), 1, 100);
+
+        var nodes = await storage.GetAllNodesAsync().ConfigureAwait(false);
+        var edges = await storage.GetAllEdgesAsync().ConfigureAwait(false);
+        var scores = GraphAnalytics.Centrality(nodes, edges);
+
+        var byId = nodes.ToDictionary(n => n.Id);
+        var ranked = scores
+            .Where(s => s.Degree > 0)
+            .OrderByDescending(s => s.Betweenness)
+            .ThenByDescending(s => s.Degree)
+            .Take(limit)
+            .ToList();
+
+        if (ranked.Count == 0)
+        {
+            return SendToolResponse(id, "No coupling edges in the graph — nothing to rank. (Hotspots need semantic edges like REFERENCES_TYPE/CALLS; run an index first.)");
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"Top {ranked.Count} change-risk hotspot(s) by betweenness centrality:\n");
+        foreach (var s in ranked)
+        {
+            var node = byId.GetValueOrDefault(s.NodeId);
+            var name = node?.Name ?? s.NodeId;
+            var type = node?.Type ?? "?";
+            sb.Append($"{name}\t{type}\t{ToHandle(s.NodeId, basePath)}\tbetweenness={s.Betweenness:0.##} degree={s.Degree}\n");
+        }
+        return SendToolResponse(id, sb.ToString().TrimEnd());
+    }
+}
+
+/// <summary>Connected-component clusters over the coupling graph — surfaces isolated modules / dead code.</summary>
+public sealed class ClustersTool : IMcpTool
+{
+    public string Name => "clusters";
+
+    public object GetSchema() => new
+    {
+        name = "clusters",
+        description = "Group the graph into connected-component clusters over the coupling subgraph (structural containment excluded): one giant cluster is normal; SMALL clusters are isolated modules or likely-dead subsystems worth a look. Returns the cluster count, the largest cluster's size, and the members of the smallest clusters. Purely topological — no model, deterministic.",
+        inputSchema = new
+        {
+            type = "object",
+            properties = new
+            {
+                maxSmallClusters = new { type = "integer", description = "How many of the smallest clusters to list with members (default 10, max 50)." },
+                projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+            }
+        }
+    };
+
+    public async Task<string> ExecuteAsync(JsonElement id, JsonObject? args, McpToolContext ctx)
+    {
+        var projectName = args?["projectName"]?.ToString();
+        var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
+        var basePath = ctx.GetProjectBasePath(projectName);
+        var maxSmall = Math.Clamp(ReadInt(args?["maxSmallClusters"], 10), 1, 50);
+
+        var nodes = await storage.GetAllNodesAsync().ConfigureAwait(false);
+        var edges = await storage.GetAllEdgesAsync().ConfigureAwait(false);
+        var communities = GraphAnalytics.DetectCommunities(nodes, edges);
+        if (communities.Count == 0)
+        {
+            return SendToolResponse(id, "The graph is empty — nothing to cluster.");
+        }
+
+        var byId = nodes.ToDictionary(n => n.Id);
+        var clusters = communities
+            .GroupBy(kv => kv.Value, kv => kv.Key)
+            .Select(g => g.ToList())
+            .OrderBy(members => members.Count)
+            .ToList();
+
+        var largest = clusters[^1].Count;
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"{clusters.Count} connected cluster(s); largest = {largest} node(s). Smallest {Math.Min(maxSmall, clusters.Count)} (candidates for isolated/dead code):\n");
+        foreach (var members in clusters.Take(maxSmall))
+        {
+            var names = members
+                .Take(8)
+                .Select(mid => byId.TryGetValue(mid, out var n) ? n.Name : mid);
+            var more = members.Count > 8 ? $" … (+{members.Count - 8})" : "";
+            var head = ToHandle(members[0], basePath);
+            sb.Append($"  [{members.Count}]\t{head}\t{string.Join(", ", names)}{more}\n");
+        }
+        return SendToolResponse(id, sb.ToString().TrimEnd());
     }
 }
 
