@@ -41,6 +41,7 @@ public static class McpToolRegistryFactory
         new CallHierarchyTool(),
         new ImplementationsOfTool(),
         new FindPathTool(),
+        new SurprisingConnectionsTool(),
 
         // Group 5 — edit loop
         new ReindexFileTool(),

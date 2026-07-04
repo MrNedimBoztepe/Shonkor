@@ -12,6 +12,7 @@ namespace Shonkor.Tests;
 public class GraphAnalyticsTests
 {
     private static GraphNode N(string id) => new() { Id = id, Name = id, Type = "Class" };
+    private static GraphNode NE(string id, params float[] embedding) => new() { Id = id, Name = id, Type = "Class", Embedding = embedding };
     private static GraphEdge E(string s, string t, string rel = "CALLS") => new() { SourceId = s, TargetId = t, Relationship = rel };
 
     [Fact]
@@ -137,5 +138,36 @@ public class GraphAnalyticsTests
         var second = GraphAnalytics.DetectCommunities(nodes, edges);
 
         Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void SurprisingConnections_SimilarButUnlinked_AreFound_LinkedPairsExcluded()
+    {
+        // A and B have identical embeddings but no edge → surprising. A—C are similar AND linked → excluded.
+        // D is orthogonal to everything → never surprising.
+        var nodes = new[]
+        {
+            NE("A", 1f, 0f, 0f),
+            NE("B", 1f, 0f, 0f),
+            NE("C", 0.99f, 0.1f, 0f),
+            NE("D", 0f, 0f, 1f)
+        };
+        var edges = new[] { E("A", "C") };
+
+        var sc = GraphAnalytics.SurprisingConnections(nodes, edges, minSimilarity: 0.9);
+
+        Assert.Contains(sc, r => r.SourceId == "A" && r.TargetId == "B");   // similar + unlinked
+        Assert.DoesNotContain(sc, r => r.SourceId == "A" && r.TargetId == "C"); // similar but already linked
+        Assert.DoesNotContain(sc, r => r.SourceId == "D" || r.TargetId == "D"); // orthogonal
+        Assert.All(sc, r => Assert.True(r.Similarity >= 0.9));
+    }
+
+    [Fact]
+    public void SurprisingConnections_NoEmbeddings_ReturnsEmpty()
+    {
+        var nodes = new[] { N("A"), N("B") };
+        var edges = Array.Empty<GraphEdge>();
+
+        Assert.Empty(GraphAnalytics.SurprisingConnections(nodes, edges));
     }
 }

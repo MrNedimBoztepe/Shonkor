@@ -380,6 +380,63 @@ public sealed class ImplementationsOfTool : IMcpTool
     }
 }
 
+/// <summary>Embedding-derived "surprising connections": semantically similar but structurally unlinked pairs.</summary>
+public sealed class SurprisingConnectionsTool : IMcpTool
+{
+    public string Name => "surprising_connections";
+
+    public object GetSchema() => new
+    {
+        name = "surprising_connections",
+        description = "Find 'surprising connections': node pairs whose embeddings are highly similar yet have NO direct edge between them — code that looks semantically related but carries no structural dependency (candidate missing links or duplication). These are INFERRED, embedding-derived hints — never proven relationships. Requires an embedding pass to have run; returns 'A ~ B  similarity=…', strongest first.",
+        inputSchema = new
+        {
+            type = "object",
+            properties = new
+            {
+                limit = new { type = "integer", description = "Max pairs to return (default 20, max 100)." },
+                minSimilarity = new { type = "number", description = "Cosine-similarity threshold in 0..1 (default 0.85). Higher = fewer, more confident pairs." },
+                projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+            }
+        }
+    };
+
+    public async Task<string> ExecuteAsync(JsonElement id, JsonObject? args, McpToolContext ctx)
+    {
+        var projectName = args?["projectName"]?.ToString();
+        var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
+        var basePath = ctx.GetProjectBasePath(projectName);
+        var limit = Math.Clamp(ReadInt(args?["limit"], 20), 1, 100);
+        var minSim = Math.Clamp(ReadDouble(args?["minSimilarity"], 0.85), 0.0, 1.0);
+
+        // Bound the O(N²) comparison; embeddings past this cap are not compared.
+        const int maxNodes = 1000;
+        var nodes = await storage.GetNodesWithEmbeddingsAsync(maxNodes).ConfigureAwait(false);
+        if (nodes.Count < 2)
+        {
+            return SendToolResponse(id, "Fewer than two embedded nodes — run an embedding/enrichment pass first (surprising-connection detection needs vectors).");
+        }
+
+        var edges = await storage.GetAllEdgesAsync().ConfigureAwait(false);
+        var pairs = GraphAnalytics.SurprisingConnections(nodes, edges, minSim, limit);
+        if (pairs.Count == 0)
+        {
+            return SendToolResponse(id, $"No surprising connections at similarity ≥ {minSim:0.##} — no semantically-similar-but-unlinked pairs found among {nodes.Count} embedded node(s).");
+        }
+
+        var byId = nodes.ToDictionary(n => n.Id);
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"{pairs.Count} surprising connection(s) — semantically similar but NOT structurally linked (INFERRED, embedding-derived):\n");
+        foreach (var p in pairs)
+        {
+            var a = byId.GetValueOrDefault(p.SourceId);
+            var b = byId.GetValueOrDefault(p.TargetId);
+            sb.Append($"{a?.Name ?? p.SourceId} ~ {b?.Name ?? p.TargetId}\tsimilarity={p.Similarity:0.###}\t{ToHandle(p.SourceId, basePath)} ~ {ToHandle(p.TargetId, basePath)}\n");
+        }
+        return SendToolResponse(id, sb.ToString().TrimEnd());
+    }
+}
+
 /// <summary>The shortest connection chain between two symbols, with real edge directions.</summary>
 public sealed class FindPathTool : IMcpTool
 {

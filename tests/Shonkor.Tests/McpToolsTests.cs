@@ -120,6 +120,49 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task SurprisingConnections_FindsSimilarButUnlinkedNodes()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_surprise_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var dbPath = Path.Combine(ws, "g.db");
+        try
+        {
+            using (var storage = new SqliteGraphStorageProvider(dbPath))
+            {
+                await storage.InitializeAsync();
+                // Two nodes with identical embeddings and NO edge between them → a surprising connection.
+                await storage.UpsertNodesAsync(new[]
+                {
+                    new GraphNode { Id = Path.Combine(ws, "Alpha.cs") + "::Alpha", Name = "Alpha", Type = "Class", FilePath = Path.Combine(ws, "Alpha.cs"), StartLine = 1, Content = "class Alpha {}", Embedding = new[] { 1f, 0f, 0f } },
+                    new GraphNode { Id = Path.Combine(ws, "Beta.cs") + "::Beta", Name = "Beta", Type = "Class", FilePath = Path.Combine(ws, "Beta.cs"), StartLine = 1, Content = "class Beta {}", Embedding = new[] { 1f, 0f, 0f } }
+                });
+            }
+
+            var registry = new
+            {
+                Organizations = Array.Empty<object>(),
+                Users = Array.Empty<object>(),
+                Projects = new[] { new { Name = "P", Path = ws, DatabasePath = dbPath, OrganizationId = "", RepositoryUrl = "", ApiKey = "" } },
+                ActiveProjectName = "P"
+            };
+            File.WriteAllText(Path.Combine(ws, "projects.json"), JsonSerializer.Serialize(registry));
+
+            var handler = new McpRequestHandler(new ProjectManager(ws), new ContextCapsuleSynthesizer(), "P", lockToContextProject: true);
+            var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("surprising_connections", new { })));
+
+            Assert.Contains("Alpha", text);
+            Assert.Contains("Beta", text);
+            Assert.Contains("similarity=", text);
+            Assert.Contains("INFERRED", text); // must be labelled as inferred, never presented as a proven edge
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Directory.Delete(ws, true);
+        }
+    }
+
+    [Fact]
     public async Task Clusters_ReportsConnectedComponents()
     {
         var (pm, synth, _) = await SetupAsync();

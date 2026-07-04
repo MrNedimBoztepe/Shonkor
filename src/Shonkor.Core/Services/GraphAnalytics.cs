@@ -175,4 +175,80 @@ public static class GraphAnalytics
         for (var i = 0; i < count; i++) communities[ids[i]] = component[i];
         return communities;
     }
+
+    /// <summary>A pair of nodes that are semantically similar but not directly linked in the graph.</summary>
+    public sealed record SurprisingConnection(string SourceId, string TargetId, double Similarity);
+
+    /// <summary>
+    /// Finds "surprising connections": node pairs whose embeddings are highly similar (cosine ≥
+    /// <paramref name="minSimilarity"/>) yet which have NO direct edge between them — code that looks
+    /// semantically related but carries no structural dependency. Deterministic given the embeddings; the
+    /// similarity is embedding-derived, so any consumer must treat these as INFERRED, never EXTRACTED
+    /// (they are not proven relationships). Only nodes with an embedding of matching dimension are compared.
+    /// O(N²·dim) — the caller should bound N (e.g. cap the nodes it passes). Returns the top pairs by
+    /// similarity, each unordered pair once (source id ordinal-less-than target id).
+    /// </summary>
+    public static IReadOnlyList<SurprisingConnection> SurprisingConnections(
+        IReadOnlyList<GraphNode> nodes,
+        IReadOnlyList<GraphEdge> edges,
+        double minSimilarity = 0.85,
+        int maxResults = 20,
+        bool includeStructural = false)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+        ArgumentNullException.ThrowIfNull(edges);
+
+        // Keep only nodes that actually carry an embedding.
+        var embedded = nodes.Where(n => n.Embedding is { Length: > 0 }).ToList();
+        if (embedded.Count < 2) return Array.Empty<SurprisingConnection>();
+
+        // Directly-linked pairs (undirected, non-structural) are excluded — an existing edge is not surprising.
+        var linked = new HashSet<(string, string)>();
+        foreach (var e in edges)
+        {
+            if (!includeStructural && StructuralRelationships.Contains(e.Relationship)) continue;
+            linked.Add(OrderedPair(e.SourceId, e.TargetId));
+        }
+
+        var results = new List<SurprisingConnection>();
+        for (var i = 0; i < embedded.Count; i++)
+        {
+            for (var j = i + 1; j < embedded.Count; j++)
+            {
+                var a = embedded[i];
+                var b = embedded[j];
+                if (a.Embedding!.Length != b.Embedding!.Length) continue; // dimension mismatch — not comparable
+                if (linked.Contains(OrderedPair(a.Id, b.Id))) continue;   // already structurally linked
+
+                var sim = CosineSimilarity(a.Embedding, b.Embedding);
+                if (sim < minSimilarity) continue;
+
+                var (s, t) = OrderedPair(a.Id, b.Id);
+                results.Add(new SurprisingConnection(s, t, sim));
+            }
+        }
+
+        return results
+            .OrderByDescending(r => r.Similarity)
+            .ThenBy(r => r.SourceId, StringComparer.Ordinal)
+            .ThenBy(r => r.TargetId, StringComparer.Ordinal)
+            .Take(maxResults)
+            .ToList();
+    }
+
+    private static (string, string) OrderedPair(string a, string b) =>
+        string.CompareOrdinal(a, b) <= 0 ? (a, b) : (b, a);
+
+    private static double CosineSimilarity(float[] a, float[] b)
+    {
+        double dot = 0, na = 0, nb = 0;
+        for (var i = 0; i < a.Length; i++)
+        {
+            dot += (double)a[i] * b[i];
+            na += (double)a[i] * a[i];
+            nb += (double)b[i] * b[i];
+        }
+        if (na == 0 || nb == 0) return 0;
+        return dot / (Math.Sqrt(na) * Math.Sqrt(nb));
+    }
 }
