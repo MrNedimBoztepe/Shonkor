@@ -63,7 +63,7 @@ public static class CrossTechLinker
                 var scNorm = NormalizeName(scItem.Name);
                 if (scNorm == jsNorm)
                 {
-                    newEdges.Add(new GraphEdge { SourceId = jsComp.Id, TargetId = scItem.Id, Relationship = "BINDS_TO" });
+                    newEdges.Add(new GraphEdge { SourceId = jsComp.Id, TargetId = scItem.Id, Relationship = "BINDS_TO", Provenance = Provenance.Inferred });
                 }
             }
         }
@@ -78,7 +78,7 @@ public static class CrossTechLinker
                 var match = jsComponents.FirstOrDefault(js => NormalizeName(js.Name) == normComp);
                 if (match != null)
                 {
-                    newEdges.Add(new GraphEdge { SourceId = match.Id, TargetId = scItem.Id, Relationship = "BINDS_TO" });
+                    newEdges.Add(new GraphEdge { SourceId = match.Id, TargetId = scItem.Id, Relationship = "BINDS_TO", Provenance = Provenance.Inferred });
                 }
             }
 
@@ -90,7 +90,7 @@ public static class CrossTechLinker
                 var match = csharpClasses.FirstOrDefault(c => string.Equals(c.Name, controllerClass, StringComparison.OrdinalIgnoreCase));
                 if (match != null)
                 {
-                    newEdges.Add(new GraphEdge { SourceId = match.Id, TargetId = scItem.Id, Relationship = "CONTROLLER_OF" });
+                    newEdges.Add(new GraphEdge { SourceId = match.Id, TargetId = scItem.Id, Relationship = "CONTROLLER_OF", Provenance = Provenance.Inferred });
                 }
             }
         }
@@ -107,7 +107,7 @@ public static class CrossTechLinker
                     var match = sitecoreTemplates.FirstOrDefault(t => NormalizeName(t.Name) == normTemp);
                     if (match != null)
                     {
-                        newEdges.Add(new GraphEdge { SourceId = gqlNode.Id, TargetId = match.Id, Relationship = "QUERIES_TEMPLATE" });
+                        newEdges.Add(new GraphEdge { SourceId = gqlNode.Id, TargetId = match.Id, Relationship = "QUERIES_TEMPLATE", Provenance = Provenance.Inferred });
                     }
                 }
             }
@@ -145,11 +145,14 @@ public static class CrossTechLinker
                         continue; // Reference to a type not defined in this codebase (e.g. BCL) -> no edge.
                     }
 
+                    // Name-based resolution: a unique same-name definition is Inferred (heuristic but singular);
+                    // several same-named definitions across namespaces are Ambiguous (one of many candidates).
+                    var tier = definitions.Count > 1 ? Provenance.Ambiguous : Provenance.Inferred;
                     foreach (var definition in definitions)
                     {
                         if (definition.Id == node.Id) continue; // skip self
 
-                        newEdges.Add(new GraphEdge { SourceId = node.Id, TargetId = definition.Id, Relationship = "REFERENCES_TYPE" });
+                        newEdges.Add(new GraphEdge { SourceId = node.Id, TargetId = definition.Id, Relationship = "REFERENCES_TYPE", Provenance = tier });
                     }
                 }
             }
@@ -188,7 +191,8 @@ public static class CrossTechLinker
                 {
                     SourceId = node.Id,
                     TargetId = moduleId,
-                    Relationship = "BELONGS_TO_MODULE"
+                    Relationship = "BELONGS_TO_MODULE",
+                    Provenance = Provenance.Inferred
                 });
             }
         }
@@ -261,10 +265,12 @@ public static class CrossTechLinker
             {
                 if (!definitionsByName.TryGetValue(typeName, out var definitions)) continue;
 
+                // See the full-scan linker: unique name match = Inferred, multiple candidates = Ambiguous.
+                var tier = definitions.Count > 1 ? Provenance.Ambiguous : Provenance.Inferred;
                 foreach (var definition in definitions)
                 {
                     if (definition.Id == node.Id) continue; // skip self
-                    newEdges.Add(new GraphEdge { SourceId = node.Id, TargetId = definition.Id, Relationship = "REFERENCES_TYPE" });
+                    newEdges.Add(new GraphEdge { SourceId = node.Id, TargetId = definition.Id, Relationship = "REFERENCES_TYPE", Provenance = tier });
                 }
             }
         }

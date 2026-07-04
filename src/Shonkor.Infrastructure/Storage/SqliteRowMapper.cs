@@ -69,8 +69,21 @@ internal static class SqliteRowMapper
         {
             SourceId = reader.GetString(reader.GetOrdinal("SourceId")),
             TargetId = reader.GetString(reader.GetOrdinal("TargetId")),
-            Relationship = reader.GetString(reader.GetOrdinal("RelationType"))
+            Relationship = reader.GetString(reader.GetOrdinal("RelationType")),
+            Provenance = ReadProvenance(reader)
         };
+
+    /// <summary>
+    /// Reads the edge's provenance tier tolerantly: a query that does not select the Provenance column
+    /// (or a legacy NULL) maps to <see cref="Provenance.Extracted"/>, preserving the prior semantics.
+    /// </summary>
+    private static Provenance ReadProvenance(SqliteDataReader reader)
+    {
+        int ordinal;
+        try { ordinal = reader.GetOrdinal("Provenance"); }
+        catch (IndexOutOfRangeException) { return Provenance.Extracted; }
+        return reader.IsDBNull(ordinal) ? Provenance.Extracted : (Provenance)reader.GetInt32(ordinal);
+    }
 
     /// <summary>
     /// Serializes the node's dynamic properties into a JSON string for the Metadata column,

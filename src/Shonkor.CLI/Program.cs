@@ -252,8 +252,10 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
                 Console.WriteLine($"Loaded {pluginLoad.Parsers.Count} active plugin parser(s).");
             }
 
-            // Opt-in semantic C# linking (exact REFERENCES_TYPE/IMPLEMENTS/EXTENDS/CALLS via Roslyn).
-            var semanticCsharp = string.Equals(Environment.GetEnvironmentVariable("SHONKOR_SEMANTIC_CSHARP"), "true", StringComparison.OrdinalIgnoreCase);
+            // Semantic C# linking (exact REFERENCES_TYPE/IMPLEMENTS/EXTENDS/CALLS via Roslyn) is ON by default
+            // — it is what raises those edges to EXTRACTED provenance. Opt out with SHONKOR_SEMANTIC_CSHARP=false
+            // on very large repos where the per-scan Roslyn compilation is too heavy.
+            var semanticCsharp = !string.Equals(Environment.GetEnvironmentVariable("SHONKOR_SEMANTIC_CSHARP"), "false", StringComparison.OrdinalIgnoreCase);
             var scanner = new GraphIndexScanner(storage, parsers, semanticCsharp: semanticCsharp, postProcessors: pluginLoad.PostProcessors);
 
             Console.WriteLine("Scanning and indexing files... (this may take a few moments)");

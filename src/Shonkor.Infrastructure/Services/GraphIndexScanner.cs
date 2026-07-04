@@ -152,7 +152,7 @@ public sealed class GraphIndexScanner
                 {
                     var (nodes, edges) = await parser.ParseAsync(filePath, content).ConfigureAwait(false);
                     foreach (var node in nodes) allNodesToUpsert.Add(node);
-                    foreach (var edge in edges) allEdgesToUpsert.Add(edge);
+                    foreach (var edge in edges) allEdgesToUpsert.Add(StampProvenance(edge, parser.DefaultProvenance));
                 }
 
                 // Create a File node to represent the scanned file itself.
@@ -591,7 +591,7 @@ public sealed class GraphIndexScanner
         {
             var (parsedNodes, parsedEdges) = await parser.ParseAsync(fullPath, content).ConfigureAwait(false);
             nodes.AddRange(parsedNodes);
-            edges.AddRange(parsedEdges);
+            foreach (var edge in parsedEdges) edges.Add(StampProvenance(edge, parser.DefaultProvenance));
         }
 
         var storedContent = content.Length > MaxFileNodeContentLength ? content[..MaxFileNodeContentLength] : content;
@@ -666,6 +666,16 @@ public sealed class GraphIndexScanner
             await CrossTechLinker.RelinkFileReferenceTypesAsync(_storage, referencer, cancellationToken).ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// Elevates an edge to the more-uncertain of its parser's baseline tier and the edge's own tier
+    /// (Extracted &lt; Inferred &lt; Ambiguous). A deterministic parser (default Extracted) leaves edges
+    /// untouched; a heuristic parser (default Inferred) raises every untagged edge to Inferred while a
+    /// per-edge Ambiguous escalation is preserved. This is the enforcement point that keeps the
+    /// provenance signal honest even if a parser forgets to tag an individual edge.
+    /// </summary>
+    private static GraphEdge StampProvenance(GraphEdge edge, Provenance parserDefault) =>
+        (int)parserDefault > (int)edge.Provenance ? edge with { Provenance = parserDefault } : edge;
 
     private static string ComputeSha256Hash(string input)
     {

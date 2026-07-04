@@ -25,6 +25,7 @@ public sealed class ReferencesTool : IMcpTool
                 symbol = new { type = "string", description = "The type/method/symbol name to analyze (e.g. 'GraphNode'). 'query' is accepted as an alias." },
                 direction = new { type = "string", description = "'used_by' (incoming — what references it, default) or 'uses' (outgoing — what it depends on)." },
                 depth = new { type = "integer", description = "1 (default) = direct only (flat list); >1 = transitive (max 6). used_by+depth>1 = ranked blast radius with [test] flags; uses+depth>1 = dependency tree." },
+                provenance = new { type = "string", description = "Optional trust filter over edges: 'extracted' = only compiler-proven relationships; 'inferred' = proven + heuristic (excludes ambiguous); 'all' (default) = every edge. Each edge is tagged with its tier ([extracted]/[inferred]/[ambiguous]) regardless." },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "symbol" }
@@ -43,6 +44,7 @@ public sealed class ReferencesTool : IMcpTool
         var direction = (args?["direction"]?.ToString() ?? "used_by").ToLowerInvariant();
         var usedBy = direction is "used_by" or "used-by" or "callers" or "incoming";
         var depth = Math.Clamp(ReadInt(args?["depth"], 1), 1, 6);
+        var maxProv = ReadProvenanceFilter(args);
 
         // depth 1 → flat, grouped-by-relation report (direct dependents / dependencies).
         if (depth <= 1)
@@ -50,10 +52,12 @@ public sealed class ReferencesTool : IMcpTool
             var report = usedBy
                 ? await ctx.EdgeReportAsync(storage, projectName, symbol, incoming: true,
                     verb: "is referenced by",
-                    emptyMessage: "Nothing references '{0}' ({1}) — safe to change in isolation, or it is an entry point.").ConfigureAwait(false)
+                    emptyMessage: "Nothing references '{0}' ({1}) — safe to change in isolation, or it is an entry point.",
+                    maxProvenance: maxProv).ConfigureAwait(false)
                 : await ctx.EdgeReportAsync(storage, projectName, symbol, incoming: false,
                     verb: "depends on",
-                    emptyMessage: "'{0}' ({1}) depends on nothing in the graph — it is self-contained or a leaf.").ConfigureAwait(false);
+                    emptyMessage: "'{0}' ({1}) depends on nothing in the graph — it is self-contained or a leaf.",
+                    maxProvenance: maxProv).ConfigureAwait(false);
             return SendToolResponse(id, report);
         }
 
@@ -68,7 +72,7 @@ public sealed class ReferencesTool : IMcpTool
         if (usedBy)
         {
             const int maxNodes = 200;
-            var affected = new Dictionary<string, (int Depth, string Rel, GraphNode? Node)>(StringComparer.Ordinal);
+            var affected = new Dictionary<string, (int Depth, string Rel, GraphNode? Node, Provenance Prov)>(StringComparer.Ordinal);
             var visited = new HashSet<string>(StringComparer.Ordinal) { refDef.Id };
             var frontier = new List<string> { refDef.Id };
 
@@ -82,8 +86,9 @@ public sealed class ReferencesTool : IMcpTool
                     {
                         if (e.TargetId != nodeId || e.SourceId == nodeId) continue;          // incoming only
                         if (StructuralRelationships.Contains(e.Relationship)) continue;       // skip containment
+                        if (!PassesProvenance(e.Provenance, maxProv)) continue;               // trust filter
                         if (!visited.Add(e.SourceId)) continue;
-                        affected[e.SourceId] = (d, e.Relationship, neighbours.GetValueOrDefault(e.SourceId));
+                        affected[e.SourceId] = (d, e.Relationship, neighbours.GetValueOrDefault(e.SourceId), e.Provenance);
                         next.Add(e.SourceId);
                         if (affected.Count >= maxNodes) break;
                     }
@@ -121,7 +126,7 @@ public sealed class ReferencesTool : IMcpTool
                     var name = a.Node?.Name ?? a.Node?.Id ?? "?";
                     var handle = ToHandle(a.Node?.Id ?? string.Empty, refBasePath);
                     var testTag = LooksLikeTest(a.Node?.FilePath) ? "  [test]" : "";
-                    sb.Append($"  {a.Rel}\t{name}\t{handle}{testTag}\n");
+                    sb.Append($"  {a.Rel}\t{name}\t{handle} {ProvenanceTag(a.Prov)}{testTag}\n");
                 }
             }
             return SendToolResponse(id, sb.ToString().TrimEnd() + await ctx.StaleSuffixAsync(storage, refDef).ConfigureAwait(false));
@@ -143,13 +148,14 @@ public sealed class ReferencesTool : IMcpTool
                 if (level > depth || emitted >= maxNodes) return;
                 var (edges, neighbours) = await storage.GetIncidentEdgesAsync(nodeId).ConfigureAwait(false);
                 var step = edges.Where(e => depRelations.Contains(e.Relationship)
+                    && PassesProvenance(e.Provenance, maxProv)
                     && e.SourceId == nodeId && e.TargetId != nodeId).ToList();
                 foreach (var e in step.OrderBy(e => e.Relationship))
                 {
                     if (emitted >= maxNodes) { sb.Append(new string(' ', level * 2)).Append("… (truncated)\n"); break; }
                     var otherId = e.TargetId;
                     var other = neighbours.GetValueOrDefault(otherId);
-                    sb.Append(new string(' ', level * 2)).Append($"--{e.Relationship}--> {other?.Name ?? otherId} ({other?.Type ?? "?"})");
+                    sb.Append(new string(' ', level * 2)).Append($"--{e.Relationship}--> {other?.Name ?? otherId} ({other?.Type ?? "?"}) {ProvenanceTag(e.Provenance)}");
                     emitted++;
                     if (!visited.Add(otherId)) { sb.Append("  ↺\n"); continue; }
                     sb.Append('\n');
@@ -178,6 +184,7 @@ public sealed class FindUsagesTool : IMcpTool
             properties = new
             {
                 symbol = new { type = "string", description = "The type/method/symbol name whose usages to find (e.g. 'GraphNode'). 'query' is accepted as an alias." },
+                provenance = new { type = "string", description = "Optional trust filter: 'extracted' = only compiler-proven usages; 'inferred' = proven + heuristic (excludes ambiguous); 'all' (default) = every usage. Each line is tagged with its tier regardless." },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "symbol" }
@@ -194,6 +201,7 @@ public sealed class FindUsagesTool : IMcpTool
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var basePath = ctx.GetProjectBasePath(projectName);
+        var maxProv = ReadProvenanceFilter(args);
 
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (def == null)
@@ -204,14 +212,16 @@ public sealed class FindUsagesTool : IMcpTool
         var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
         // Real usages only — exclude structural containment (e.g. the enclosing type/file).
         var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id
-            && !StructuralRelationships.Contains(e.Relationship)).ToList();
+            && !StructuralRelationships.Contains(e.Relationship)
+            && PassesProvenance(e.Provenance, maxProv)).ToList();
         if (incoming.Count == 0)
         {
             return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found in the graph.");
         }
 
+        var filterNote = maxProv is { } mp ? $" (provenance ≤ {mp.ToString().ToLowerInvariant()})" : "";
         var sb = new System.Text.StringBuilder();
-        sb.Append($"{incoming.Count} usage(s) of '{def.Name}':\n");
+        sb.Append($"{incoming.Count} usage(s) of '{def.Name}'{filterNote}:\n");
         foreach (var e in incoming.OrderBy(e => e.Relationship))
         {
             var user = neighbours.GetValueOrDefault(e.SourceId);
@@ -220,7 +230,7 @@ public sealed class FindUsagesTool : IMcpTool
             if (user?.StartLine is int line) loc += $":{line}";
             var snippet = FirstLineMentioning(user?.Content, def.Name);
             var snippetText = snippet != null ? $"  ⟶ {snippet}" : "";
-            sb.Append($"{e.Relationship}\t{name}\t{loc}{snippetText}\n");
+            sb.Append($"{e.Relationship}\t{name}\t{loc} {ProvenanceTag(e.Provenance)}{snippetText}\n");
         }
         return SendToolResponse(id, sb.ToString().TrimEnd() + await ctx.StaleSuffixAsync(storage, def).ConfigureAwait(false));
     }

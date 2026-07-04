@@ -43,6 +43,10 @@ public class WebPipelineTests : IClassFixture<WebPipelineTests.AppFactory>
         // Unset (null) falls back to the global default.
         Assert.False(Shonkor.Web.EndpointHelpers.UseSemanticCSharp(new Project { SemanticCSharp = null }, globalOff));
         Assert.True(Shonkor.Web.EndpointHelpers.UseSemanticCSharp(new Project { SemanticCSharp = null }, globalOn));
+
+        // Neither per-project nor global set → semantic resolution is ON by default (Phase 1.1).
+        var globalUnset = new Microsoft.Extensions.Configuration.ConfigurationManager();
+        Assert.True(Shonkor.Web.EndpointHelpers.UseSemanticCSharp(new Project { SemanticCSharp = null }, globalUnset));
     }
 
     [Fact]

@@ -1,5 +1,13 @@
 # Concept: Language breadth (deeper graphs for more languages)
 
+> **DECISION (2026-07-04) — superseded to Option B (Tree-sitter breadth).** The roadmap-synthesis
+> review revised the earlier "A-minus / deepen-C#" default: we WILL pursue Tree-sitter-backed
+> syntactic breadth as a plugin family, on the explicit condition that Tree-sitter-derived edges are
+> tagged **`INFERRED`** (never `EXTRACTED`), so the precision/provenance moat stays intact even as
+> coverage widens. Prerequisite: the provenance model (Phase 0.1/0.2) lands *first* — breadth before
+> provenance would dilute the graph's trust signal. The depth-vs-breadth analysis below remains valid
+> as the rationale for *why the INFERRED tag is non-negotiable*; only the go/no-go changed.
+
 **Status:** Scoping (no code yet) · **Tension:** runs against the session's "A-minus / deepen C#" decision — read this before committing. · **Tracked in Shonkor (Brain graph):** `get_open_threads`
 
 ## Problem / goal

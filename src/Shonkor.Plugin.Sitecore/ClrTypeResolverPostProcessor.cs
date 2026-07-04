@@ -56,7 +56,8 @@ public sealed class ClrTypeResolverPostProcessor : IGraphPostProcessor
             {
                 if (matches.Count == 1)
                 {
-                    edges.Add(new GraphEdge { SourceId = clr.Id, TargetId = matches[0].Id, Relationship = "RESOLVES_TO" });
+                    // Unique simple-name match — heuristic (not compiler-proven), so Inferred, not Extracted.
+                    edges.Add(new GraphEdge { SourceId = clr.Id, TargetId = matches[0].Id, Relationship = "RESOLVES_TO", Provenance = Provenance.Inferred });
                 }
                 else
                 {
@@ -68,6 +69,7 @@ public sealed class ClrTypeResolverPostProcessor : IGraphPostProcessor
                             SourceId = clr.Id,
                             TargetId = match.Id,
                             Relationship = "RESOLVES_TO",
+                            Provenance = Provenance.Ambiguous,
                             Properties = new Dictionary<string, string> { ["confidence"] = "ambiguous" }
                         });
                     }
