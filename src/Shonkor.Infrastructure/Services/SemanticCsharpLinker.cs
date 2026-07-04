@@ -12,8 +12,9 @@ namespace Shonkor.Infrastructure.Services;
 
 /// <summary>
 /// Semantic post-scan linker for C#: builds a Roslyn compilation over the project's source and emits
-/// EXACT <c>IMPLEMENTS</c>/<c>EXTENDS</c>/<c>REFERENCES_TYPE</c>/<c>CALLS</c> edges, resolved to node ids
-/// via the <c>SemanticModel</c> — where <see cref="CrossTechLinker"/>'s syntactic name matching is
+/// EXACT <c>IMPLEMENTS</c>/<c>EXTENDS</c>/<c>REFERENCES_TYPE</c>/<c>CALLS</c>/<c>OVERRIDES</c>/
+/// <c>IMPLEMENTS_MEMBER</c> edges, resolved to node ids via the <c>SemanticModel</c> — where
+/// <see cref="CrossTechLinker"/>'s syntactic name matching is
 /// ambiguous (same-named types in different namespaces). Reuses <see cref="RoslynSemantics"/>; node ids
 /// match the parser via <see cref="CsharpNodeId"/>. Part of the semantic C# core (A-minus) project.
 /// </summary>
@@ -28,8 +29,10 @@ public static class SemanticCsharpLinker
     private const string Extends = "EXTENDS";
     private const string ReferencesType = "REFERENCES_TYPE";
     private const string Calls = "CALLS";
+    private const string Overrides = "OVERRIDES";
+    private const string ImplementsMember = "IMPLEMENTS_MEMBER";
 
-    private static readonly string[] SemanticRelationships = { Implements, Extends, ReferencesType, Calls };
+    private static readonly string[] SemanticRelationships = { Implements, Extends, ReferencesType, Calls, Overrides, ImplementsMember };
 
     /// <summary>
     /// Reads the <c>.cs</c> files under <paramref name="directoryPath"/> (skipping bin/obj), builds a
@@ -254,6 +257,50 @@ public static class SemanticCsharpLinker
                 var callerId = enclosingMethod is null ? null : RoslynSemantics.ToNodeId(model.GetDeclaredSymbol(enclosingMethod));
                 if (callerId is null || callerId == calleeId) continue;
                 edges.Add((callerId, calleeId, Calls));
+            }
+
+            // OVERRIDES — an override member to the base member it overrides (method-level override chain,
+            // beyond the type-level EXTENDS). External bases (e.g. object.ToString) have no node → skipped.
+            foreach (var memberDecl in root.DescendantNodes().OfType<MemberDeclarationSyntax>())
+            {
+                if (memberDecl is not (MethodDeclarationSyntax or PropertyDeclarationSyntax)) continue;
+                if (model.GetDeclaredSymbol(memberDecl) is not { IsOverride: true } declared) continue;
+
+                var overridden = declared switch
+                {
+                    IMethodSymbol m => (ISymbol?)m.OverriddenMethod,
+                    IPropertySymbol p => p.OverriddenProperty,
+                    _ => null
+                };
+                var memberId = RoslynSemantics.ToNodeId(declared);
+                var overriddenId = RoslynSemantics.ToNodeId(overridden);
+                if (memberId is null || overriddenId is null || memberId == overriddenId) continue;
+                edges.Add((memberId, overriddenId, Overrides));
+            }
+
+            // IMPLEMENTS_MEMBER — the concrete member that satisfies an interface member (method-level
+            // counterpart to the type-level IMPLEMENTS). Emitted only when the implementing member is declared
+            // in THIS tree, so the scoped relink (which clears/re-emits per file) stays consistent for partials.
+            foreach (var typeDecl in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(typeDecl) is not INamedTypeSymbol typeSymbol) continue;
+                if (typeSymbol.TypeKind == TypeKind.Interface) continue;
+
+                foreach (var iface in typeSymbol.AllInterfaces)
+                {
+                    foreach (var member in iface.GetMembers())
+                    {
+                        if (member.Kind is not (SymbolKind.Method or SymbolKind.Property)) continue;
+                        var impl = typeSymbol.FindImplementationForInterfaceMember(member);
+                        if (impl is null) continue;
+                        if (!impl.DeclaringSyntaxReferences.Any(r => r.SyntaxTree.FilePath == tree.FilePath)) continue;
+
+                        var implId = RoslynSemantics.ToNodeId(impl);
+                        var memberId = RoslynSemantics.ToNodeId(member);
+                        if (implId is null || memberId is null || implId == memberId) continue;
+                        edges.Add((implId, memberId, ImplementsMember));
+                    }
+                }
             }
         }
     }
