@@ -236,6 +236,168 @@ public static class GraphAnalytics
             .ToList();
     }
 
+    /// <summary>
+    /// Detects communities by MODULARITY (deterministic Louvain: local moving + aggregation) over the
+    /// coupling subgraph — unlike <see cref="DetectCommunities"/> (connected components), this splits a
+    /// single CONNECTED graph into cohesive sub-communities where intra-group coupling outweighs inter-group.
+    /// Fully deterministic: fixed node order, current-community-preferred / smallest-id tie-break, so the same
+    /// graph always yields the same partition (no randomness). Structural containment excluded unless
+    /// <paramref name="includeStructural"/>. Returns each node's community id (small sequential ints).
+    /// </summary>
+    public static IReadOnlyDictionary<string, int> DetectModularityCommunities(
+        IReadOnlyList<GraphNode> nodes,
+        IReadOnlyList<GraphEdge> edges,
+        bool includeStructural = false)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+        ArgumentNullException.ThrowIfNull(edges);
+
+        var ids = new List<string>(nodes.Count);
+        var index = new Dictionary<string, int>(nodes.Count, StringComparer.Ordinal);
+        foreach (var n in nodes)
+        {
+            if (index.ContainsKey(n.Id)) continue;
+            index[n.Id] = ids.Count;
+            ids.Add(n.Id);
+        }
+        var count = ids.Count;
+        if (count == 0) return new Dictionary<string, int>();
+
+        // Level-0 weighted adjacency (parallel edges accumulate weight); no self-loops yet.
+        var adj = new Dictionary<int, double>[count];
+        for (var i = 0; i < count; i++) adj[i] = new Dictionary<int, double>();
+        foreach (var e in edges)
+        {
+            if (!includeStructural && StructuralRelationships.Contains(e.Relationship)) continue;
+            if (!index.TryGetValue(e.SourceId, out var u) || !index.TryGetValue(e.TargetId, out var v)) continue;
+            if (u == v) continue;
+            adj[u][v] = adj[u].GetValueOrDefault(v) + 1.0;
+            adj[v][u] = adj[v].GetValueOrDefault(u) + 1.0;
+        }
+        var self = new double[count];
+
+        var twoM = 0.0;
+        for (var i = 0; i < count; i++) twoM += WeightedDegree(adj[i], self[i]);
+        var m = twoM / 2.0;
+
+        var origToLevel = new int[count];
+        for (var i = 0; i < count; i++) origToLevel[i] = i;
+
+        if (m > 0)
+        {
+            var curAdj = adj;
+            var curSelf = self;
+            var curCount = count;
+            while (true)
+            {
+                var comm = LouvainLocalMoving(curAdj, curSelf, curCount, m);
+                var numComm = curCount == 0 ? 0 : comm.Max() + 1;
+                for (var i = 0; i < count; i++) origToLevel[i] = comm[origToLevel[i]];
+                if (numComm == curCount) break; // no merging happened — converged
+                (curAdj, curSelf) = LouvainAggregate(curAdj, curSelf, comm, numComm);
+                curCount = numComm;
+            }
+        }
+
+        var canonical = new Dictionary<int, int>();
+        var result = new Dictionary<string, int>(count, StringComparer.Ordinal);
+        for (var i = 0; i < count; i++)
+        {
+            var c = origToLevel[i];
+            if (!canonical.TryGetValue(c, out var cid)) { cid = canonical.Count; canonical[c] = cid; }
+            result[ids[i]] = cid;
+        }
+        return result;
+    }
+
+    private static double WeightedDegree(Dictionary<int, double> neighbours, double selfLoop)
+    {
+        var d = selfLoop * 2.0;
+        foreach (var w in neighbours.Values) d += w;
+        return d;
+    }
+
+    /// <summary>One Louvain level: greedily moves each node to the neighbouring community with the largest
+    /// positive modularity gain until stable; returns a canonicalized community id per node.</summary>
+    private static int[] LouvainLocalMoving(Dictionary<int, double>[] adj, double[] self, int n, double m)
+    {
+        var community = new int[n];
+        var k = new double[n];
+        var sigmaTot = new double[n];
+        for (var i = 0; i < n; i++) { community[i] = i; k[i] = WeightedDegree(adj[i], self[i]); sigmaTot[i] = k[i]; }
+        var twoM = 2.0 * m;
+
+        var improved = true;
+        for (var pass = 0; pass < 100 && improved; pass++)
+        {
+            improved = false;
+            for (var i = 0; i < n; i++)
+            {
+                var ci = community[i];
+                sigmaTot[ci] -= k[i];
+                community[i] = -1;
+
+                // Weight from i to each neighbouring community (i already removed).
+                var nbr = new Dictionary<int, double>();
+                foreach (var kv in adj[i])
+                {
+                    var cj = community[kv.Key];
+                    if (cj < 0) continue;
+                    nbr[cj] = nbr.GetValueOrDefault(cj) + kv.Value;
+                }
+                nbr.TryAdd(ci, 0.0); // staying is always a candidate
+
+                // Gain of joining community c ∝ w(i,c) - Σtot[c]·k[i]/2m. Prefer ci, else smallest id, on tie.
+                var bestC = ci;
+                var bestGain = nbr[ci] - sigmaTot[ci] * k[i] / twoM;
+                foreach (var kv in nbr.OrderBy(x => x.Key))
+                {
+                    var gain = kv.Value - sigmaTot[kv.Key] * k[i] / twoM;
+                    if (gain > bestGain + 1e-12) { bestGain = gain; bestC = kv.Key; }
+                }
+
+                community[i] = bestC;
+                sigmaTot[bestC] += k[i];
+                if (bestC != ci) improved = true;
+            }
+        }
+
+        var canon = new Dictionary<int, int>();
+        var res = new int[n];
+        for (var i = 0; i < n; i++)
+        {
+            if (!canon.TryGetValue(community[i], out var cid)) { cid = canon.Count; canon[community[i]] = cid; }
+            res[i] = cid;
+        }
+        return res;
+    }
+
+    /// <summary>Collapses each community into a super-node: internal edges become self-loops, inter-community
+    /// edges become weighted super-edges. Total edge weight (and thus m) is preserved.</summary>
+    private static (Dictionary<int, double>[] Adj, double[] Self) LouvainAggregate(
+        Dictionary<int, double>[] adj, double[] self, int[] comm, int numComm)
+    {
+        var newAdj = new Dictionary<int, double>[numComm];
+        for (var c = 0; c < numComm; c++) newAdj[c] = new Dictionary<int, double>();
+        var newSelf = new double[numComm];
+
+        for (var i = 0; i < adj.Length; i++) newSelf[comm[i]] += self[i];
+
+        for (var i = 0; i < adj.Length; i++)
+        {
+            var ci = comm[i];
+            foreach (var kv in adj[i])
+            {
+                var j = kv.Key;
+                if (j < i) continue; // count each undirected edge once
+                var cj = comm[j];
+                if (ci == cj) newSelf[ci] += kv.Value;
+                else { newAdj[ci][cj] = newAdj[ci].GetValueOrDefault(cj) + kv.Value; newAdj[cj][ci] = newAdj[cj].GetValueOrDefault(ci) + kv.Value; }
+            }
+        }
+        return (newAdj, newSelf);
+    }
+
     private static (string, string) OrderedPair(string a, string b) =>
         string.CompareOrdinal(a, b) <= 0 ? (a, b) : (b, a);
 

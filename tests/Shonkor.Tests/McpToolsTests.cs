@@ -163,16 +163,19 @@ public class McpToolsTests
     }
 
     [Fact]
-    public async Task Clusters_ReportsConnectedComponents()
+    public async Task Clusters_ReportsModularityCommunities_AndComponents()
     {
         var (pm, synth, _) = await SetupAsync();
         var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
 
-        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("clusters", new { })));
+        // Default mode = modularity communities.
+        var modularity = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("clusters", new { })));
+        Assert.Contains("modularity community", modularity);
 
-        // The fixture has several disconnected pieces (Widget graph, Impl/IThing, Calc, isolated tasks) →
-        // more than one connected cluster.
-        Assert.Contains("connected cluster", text);
+        // Explicit components mode: the fixture has several disconnected pieces (Widget graph, Impl/IThing,
+        // Calc, isolated tasks) → more than one connected cluster.
+        var comps = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("clusters", new { mode = "components" })));
+        Assert.Contains("connected cluster", comps);
     }
 
     [Fact]
