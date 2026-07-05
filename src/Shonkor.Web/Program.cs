@@ -152,6 +152,7 @@ app.MapAdminEndpoints();
 // Dashboard / local API endpoints.
 app.MapStatsEndpoints();
 app.MapSearchEndpoints();
+app.MapSurprisingConnectionsEndpoints();
 app.MapIndexEndpoints();
 app.MapProjectEndpoints();
 app.MapBrowseEndpoints();
