@@ -56,5 +56,6 @@ nupkg/
 publish-test/
 publish/
 
-# Eval: large generated LLM response caches (keep the small result artifacts, ignore the caches)
-eval/cache-*.json
+# Bench: per-run, DB-dependent output of the Shonkor.Bench harness (reproduce by running it).
+bench/report.md
+bench/metrics.json

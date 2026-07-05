@@ -40,21 +40,22 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 
 ---
 
-## ⚡️ Benchmark: AI Graphs vs. Classic RAG
+## ⚡️ Benchmark
 
-`src/Shonkor.Benchmarks` measures the **real shipped retrieval path** on Shonkor's own graph: for each
-query it runs FTS search → 2-hop subgraph → capsule synthesis, and compares the **budget-aware capsule**
-(seed-first, hub-capped) against a **naive full-content dump of the same retrieved subgraph** — i.e. what
-an unbudgeted "send everything" RAG would emit:
+`src/Shonkor.Bench` is a single, reproducible harness over a built graph DB. Run it with
+`dotnet run --project src/Shonkor.Bench -- shonkor.db` — it writes `bench/report.md` and `bench/metrics.json`,
+and `--baseline bench/metrics.json` gates retrieval Precision@k against a stored run (exit 2 on a regression).
+It measures two things:
 
-* **Token reduction:** ~**87.8 %** aggregate (range 17–97 % per query), bounding a 2-hop hub neighbourhood
-  from >200k tokens down to <40k. Reproduce with `dotnet run --project src/Shonkor.Benchmarks -- shonkor.db`.
+* **Token reduction** — the budget-aware capsule (seed-first, hub-capped) vs a **naive full-content dump of
+  the same retrieved subgraph** (FTS → 2-hop subgraph → capsule synthesis). On Shonkor's own graph: **~68 %**
+  aggregate reduction over the seed queries.
+* **Retrieval precision** — Precision@1/@k, Recall@k, MRR for FTS5 and (when an Ollama embedding backend is
+  reachable) vector search, over an auto-bootstrapped self-retrieval golden set. Exact symbol lookup reaches
+  **Precision@1 ≈ 0.97 / Recall@10 ≈ 0.99** (FTS5).
 
-Retrieval precision over the same graph (`src/Shonkor.Eval`): exact symbol lookup reaches **Precision@1 ≈ 0.98 / Recall@10 ≈ 0.99** (FTS5); for natural-language *intent* queries, embedding **code** (not the 1-sentence summary) lifts **Recall@10 from ~0.27 (FTS) to ~0.93–1.0**. See [`review/results.md`](review/results.md) for full methodology and numbers.
-
-> Note: this compares Shonkor's budgeted capsule to dumping the *same retrieved nodes* in full — it does
-> **not** claim a whole-repo or chunked-RAG comparison. (The previous "87.7 % / 7.6×" figure was a
-> whole-file-vs-summary strawman and has been replaced with this measured, reproducible benchmark.)
+> Honest by construction: the token comparison is the budgeted capsule vs the *same retrieved nodes* dumped
+> in full — NOT a whole-repo or chunked-RAG strawman. Numbers are DB-dependent; reproduce with the command above.
 
 ---
 
@@ -71,8 +72,7 @@ src/
   ├── Shonkor.Plugin.Kentico/  #   parsers) — each built & installed as a ZIP
   ├── Shonkor.Plugin.Optimizely/
   ├── Shonkor.CLI/             # Console interface (init, index, search, capsule, mcp) + MCP server
-  ├── Shonkor.Eval/            # Precision harness: Precision@k / Recall@k / MRR (FTS/semantic/hybrid)
-  ├── Shonkor.Benchmarks/      # Token benchmark of the real capsule path
+  ├── Shonkor.Bench/           # Unified benchmark harness: token reduction + retrieval precision
   └── Shonkor.Web/             # Minimal APIs, API key middleware & glassmorphic web dashboard (wwwroot)
 tests/
   └── Shonkor.Tests/           # Unit tests for parser, SQLite CTE, concurrency, linking & enrichment
@@ -80,8 +80,6 @@ docs/
   ├── developer/arc42/         # Developer documentation according to arc42 standard (Chapters 1-8)
   ├── user/                    # User manuals (setup, CLI, LLM integration)
   └── architecture/            # Architecture reviews
-eval/                          # Golden set + measured baseline for the precision harness
-review/                        # Precision review, improvements, eval plan, roadmap & measured results
 ```
 
 ---
