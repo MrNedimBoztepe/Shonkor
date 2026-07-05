@@ -603,6 +603,38 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<GraphNode>> GetNodesWithEmbeddingsAsync(int limit, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash, Summary, Embedding
+            FROM Nodes
+            WHERE Embedding IS NOT NULL
+            LIMIT @limit;
+            """;
+        command.Parameters.AddWithValue("@limit", limit <= 0 ? int.MaxValue : limit);
+
+        var nodes = new List<GraphNode>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var embeddingOrdinal = reader.GetOrdinal("Embedding");
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var node = SqliteRowMapper.ReadNode(reader);
+            if (!reader.IsDBNull(embeddingOrdinal))
+            {
+                var blob = (byte[])reader.GetValue(embeddingOrdinal);
+                var floats = new float[blob.Length / 4];
+                Buffer.BlockCopy(blob, 0, floats, 0, floats.Length * 4);
+                node.Embedding = floats;
+            }
+            nodes.Add(node);
+        }
+        return nodes;
+    }
+
+    /// <inheritdoc />
     public async Task DeleteByFilePathAsync(string filePath, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);

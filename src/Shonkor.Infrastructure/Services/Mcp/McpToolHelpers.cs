@@ -67,6 +67,26 @@ public static class McpToolHelpers
         }
     }
 
+    /// <summary>Reads a double tool argument tolerantly (JSON number or numeric string), else <paramref name="fallback"/>.</summary>
+    public static double ReadDouble(JsonNode? value, double fallback)
+    {
+        if (value is null) return fallback;
+        try
+        {
+            return value.GetValueKind() switch
+            {
+                JsonValueKind.Number => value.GetValue<double>(),
+                JsonValueKind.String => double.TryParse(value.GetValue<string>(),
+                    System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : fallback,
+                _ => fallback
+            };
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
     /// <summary>
     /// Heuristic for <c>related_tests</c>: whether a file path looks like a test file across common
     /// ecosystems (xUnit/NUnit <c>*.Tests</c>, Go <c>_test</c>, Python <c>test_</c>, JS <c>.spec.</c>/
