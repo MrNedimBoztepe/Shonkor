@@ -17,6 +17,7 @@ public static class McpToolRegistryFactory
         new GetStatsTool(),
         new HotspotsTool(),
         new ClustersTool(),
+        new AuditTool(),
         new VerifyExistsTool(),
         new GetOpenThreadsTool(),
         new RecordTool(),

@@ -2,6 +2,7 @@
 
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Shonkor.Core.Models;
 using Shonkor.Core.Services;
 using static Shonkor.Infrastructure.Services.Mcp.McpToolHelpers;
 
@@ -166,6 +167,111 @@ public sealed class ClustersTool : IMcpTool
             var head = ToHandle(members[0], basePath);
             sb.Append($"  [{members.Count}]\t{head}\t{string.Join(", ", names)}{more}\n");
         }
+        return SendToolResponse(id, sb.ToString().TrimEnd());
+    }
+}
+
+/// <summary>One-call onboarding/audit briefing: size, trust mix, god nodes, modules, dead clusters, next steps.</summary>
+public sealed class AuditTool : IMcpTool
+{
+    public string Name => "audit";
+
+    public object GetSchema() => new
+    {
+        name = "audit",
+        description = "One-call onboarding/audit briefing of the whole graph as Markdown: size, the EXTRACTED/INFERRED/AMBIGUOUS trust mix, the top change-risk hotspots ('god nodes'), the module structure (modularity communities), isolated/likely-dead clusters, and a few suggested starter questions with the exact tool call to run. Purely topological — no model. Great first call on an unfamiliar codebase.",
+        inputSchema = new
+        {
+            type = "object",
+            properties = new
+            {
+                projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
+            }
+        }
+    };
+
+    public async Task<string> ExecuteAsync(JsonElement id, JsonObject? args, McpToolContext ctx)
+    {
+        var projectName = args?["projectName"]?.ToString();
+        var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
+
+        var stats = await storage.GetStatisticsAsync().ConfigureAwait(false);
+        if (stats.TotalNodes == 0)
+        {
+            return SendToolResponse(id, "The graph is empty — run an index first (e.g. `shonkor index .`).");
+        }
+
+        var nodes = await storage.GetAllNodesAsync().ConfigureAwait(false);
+        var edges = await storage.GetAllEdgesAsync().ConfigureAwait(false);
+        var byId = nodes.ToDictionary(n => n.Id);
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("# Graph Audit\n\n");
+        sb.Append($"**{stats.TotalNodes}** nodes, **{stats.TotalEdges}** edges. ");
+        var topTypes = stats.NodesByType.OrderByDescending(kv => kv.Value).Take(5).Select(kv => $"{kv.Key} ({kv.Value})");
+        sb.Append($"Top node types: {string.Join(", ", topTypes)}.\n");
+
+        // Trust mix — the provenance breakdown across all edges.
+        var total = Math.Max(1, edges.Count);
+        var ext = edges.Count(e => e.Provenance == Provenance.Extracted);
+        var inf = edges.Count(e => e.Provenance == Provenance.Inferred);
+        var amb = edges.Count(e => e.Provenance == Provenance.Ambiguous);
+        sb.Append("\n## Trust mix (edge provenance)\n");
+        sb.Append($"- EXTRACTED (compiler-proven): {ext} ({100.0 * ext / total:0.#}%)\n");
+        sb.Append($"- INFERRED (heuristic/cross-tech): {inf} ({100.0 * inf / total:0.#}%)\n");
+        sb.Append($"- AMBIGUOUS (multi-candidate): {amb} ({100.0 * amb / total:0.#}%)\n");
+
+        // Change-risk hotspots by betweenness centrality.
+        var scores = GraphAnalytics.Centrality(nodes, edges);
+        var godNodes = scores.Where(s => s.Degree > 0)
+            .OrderByDescending(s => s.Betweenness).ThenByDescending(s => s.Degree)
+            .Take(8).ToList();
+        sb.Append("\n## Change-risk hotspots (god nodes)\n");
+        if (godNodes.Count == 0) sb.Append("- none — the coupling graph has no brokers.\n");
+        foreach (var s in godNodes)
+        {
+            var n = byId.GetValueOrDefault(s.NodeId);
+            sb.Append($"- {n?.Name ?? s.NodeId} ({n?.Type ?? "?"}) — betweenness {s.Betweenness:0.#}, degree {s.Degree}\n");
+        }
+
+        // Module structure by modularity.
+        var modSizes = GraphAnalytics.DetectModularityCommunities(nodes, edges)
+            .GroupBy(kv => kv.Value).Select(g => g.Count()).OrderByDescending(x => x).ToList();
+        sb.Append("\n## Modules (cohesive communities)\n");
+        sb.Append($"- {modSizes.Count} communities; largest {modSizes.FirstOrDefault()} nodes; sizes: {string.Join(", ", modSizes.Take(8))}{(modSizes.Count > 8 ? " …" : "")}\n");
+
+        // Isolated clusters (connected components) — small ones are dead-code candidates.
+        var isolated = GraphAnalytics.DetectCommunities(nodes, edges)
+            .GroupBy(kv => kv.Value, kv => kv.Key).Select(g => g.ToList())
+            .Where(c => c.Count <= 3).OrderBy(c => c.Count).Take(6).ToList();
+        sb.Append("\n## Isolated clusters (dead-code candidates)\n");
+        if (isolated.Count == 0) sb.Append("- none (no tiny disconnected islands).\n");
+        foreach (var c in isolated)
+        {
+            var names = c.Take(4).Select(mid => byId.TryGetValue(mid, out var n) ? n.Name : mid);
+            sb.Append($"- [{c.Count}] {string.Join(", ", names)}\n");
+        }
+
+        // Suggested next steps with concrete tool calls.
+        sb.Append("\n## Suggested starting points\n");
+        if (godNodes.Count > 0)
+        {
+            var g0 = byId.GetValueOrDefault(godNodes[0].NodeId)?.Name ?? godNodes[0].NodeId;
+            sb.Append($"- Blast radius of the top hotspot: `references symbol={g0}`\n");
+            if (godNodes.Count > 1)
+            {
+                var g1 = byId.GetValueOrDefault(godNodes[1].NodeId)?.Name ?? godNodes[1].NodeId;
+                sb.Append($"- How the two top hotspots connect: `find_path from={g0} to={g1}`\n");
+            }
+        }
+        if (isolated.Count > 0) sb.Append("- Review isolated modules: `clusters mode=components`\n");
+        sb.Append("- Full module structure: `clusters` · hotspot ranking: `hotspots` · similar-but-unlinked code: `surprising_connections`\n");
+
+        if (stats.ReindexRecommended)
+        {
+            sb.Append($"\n> ⚠ Graph built under node-id scheme v{stats.SchemeVersion} < current v{stats.CurrentSchemeVersion} — run a full re-index to migrate method/constructor ids.\n");
+        }
+
         return SendToolResponse(id, sb.ToString().TrimEnd());
     }
 }
