@@ -48,11 +48,14 @@ and `--baseline bench/metrics.json` gates retrieval Precision@k against a stored
 It measures two things:
 
 * **Token reduction** — the budget-aware capsule (seed-first, hub-capped) vs a **naive full-content dump of
-  the same retrieved subgraph** (FTS → 2-hop subgraph → capsule synthesis). On Shonkor's own graph: **~68 %**
-  aggregate reduction over the seed queries.
+  the same retrieved subgraph** (FTS → 2-hop subgraph → capsule synthesis). On Shonkor's own graph (~1.8k
+  nodes, fresh index): **~41 %** aggregate reduction over the seed queries; the figure scales with graph
+  size / hub density (a larger graph with fatter 2-hop neighbourhoods cuts more).
 * **Retrieval precision** — Precision@1/@k, Recall@k, MRR for FTS5 and (when an Ollama embedding backend is
-  reachable) vector search, over an auto-bootstrapped self-retrieval golden set. Exact symbol lookup reaches
-  **Precision@1 ≈ 0.97 / Recall@10 ≈ 0.99** (FTS5).
+  reachable) vector search. Exact symbol lookup reaches **Precision@1 ≈ 0.95 / Recall@10 ≈ 0.99** (FTS5, over
+  an auto-bootstrapped self-retrieval set). On the curated natural-language *intent* set (`--set
+  bench/golden/intent.json`), FTS alone only reaches Recall@10 ≈ 0.28, while **vector search lifts it to ≈ 0.98** —
+  the payoff of embedding code, not just keywords.
 
 > Honest by construction: the token comparison is the budgeted capsule vs the *same retrieved nodes* dumped
 > in full — NOT a whole-repo or chunked-RAG strawman. Numbers are DB-dependent; reproduce with the command above.
