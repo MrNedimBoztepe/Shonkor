@@ -192,6 +192,23 @@ public class SemanticCsharpLinkerTests
     }
 
     [Fact]
+    public async Task ObjectCreation_EmitsInstantiatesEdge_FromMethodToConstructedType()
+    {
+        // `new Foo()` in Make() → a method-level INSTANTIATES edge to the Foo type (distinct from the
+        // type-level REFERENCES_TYPE the return-type/usage also produces).
+        using var storage = await LinkAsync(
+            ("/repo/Foo.cs", "namespace N { public class Foo { } }"),
+            ("/repo/Maker.cs", "namespace N { public class Maker { public Foo Make() { return new Foo(); } } }"));
+
+        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/Foo.cs::Foo");
+        var inst = edges.SingleOrDefault(e => e.Relationship == "INSTANTIATES");
+        Assert.NotNull(inst);
+        Assert.Equal("/repo/Maker.cs::Maker::Make#0", inst!.SourceId);
+        Assert.Equal("/repo/Foo.cs::Foo", inst.TargetId);
+        Assert.Equal(Provenance.Extracted, inst.Provenance); // semantic-resolved
+    }
+
+    [Fact]
     public async Task InterfaceImplementation_EmitsImplementsMemberEdge_AlongsideTypeLevelImplements()
     {
         using var storage = await LinkAsync(

@@ -13,8 +13,8 @@ namespace Shonkor.Infrastructure.Services;
 /// <summary>
 /// Semantic post-scan linker for C#: builds a Roslyn compilation over the project's source and emits
 /// EXACT <c>IMPLEMENTS</c>/<c>EXTENDS</c>/<c>REFERENCES_TYPE</c>/<c>CALLS</c>/<c>OVERRIDES</c>/
-/// <c>IMPLEMENTS_MEMBER</c> edges, resolved to node ids via the <c>SemanticModel</c> — where
-/// <see cref="CrossTechLinker"/>'s syntactic name matching is
+/// <c>IMPLEMENTS_MEMBER</c>/<c>INSTANTIATES</c> edges, resolved to node ids via the <c>SemanticModel</c> —
+/// where <see cref="CrossTechLinker"/>'s syntactic name matching is
 /// ambiguous (same-named types in different namespaces). Reuses <see cref="RoslynSemantics"/>; node ids
 /// match the parser via <see cref="CsharpNodeId"/>. Part of the semantic C# core (A-minus) project.
 /// </summary>
@@ -31,8 +31,9 @@ public static class SemanticCsharpLinker
     private const string Calls = "CALLS";
     private const string Overrides = "OVERRIDES";
     private const string ImplementsMember = "IMPLEMENTS_MEMBER";
+    private const string Instantiates = "INSTANTIATES";
 
-    private static readonly string[] SemanticRelationships = { Implements, Extends, ReferencesType, Calls, Overrides, ImplementsMember };
+    private static readonly string[] SemanticRelationships = { Implements, Extends, ReferencesType, Calls, Overrides, ImplementsMember, Instantiates };
 
     /// <summary>
     /// Reads the <c>.cs</c> files under <paramref name="directoryPath"/> (skipping bin/obj), builds a
@@ -257,6 +258,31 @@ public static class SemanticCsharpLinker
                 var callerId = enclosingMethod is null ? null : RoslynSemantics.ToNodeId(model.GetDeclaredSymbol(enclosingMethod));
                 if (callerId is null || callerId == calleeId) continue;
                 edges.Add((callerId, calleeId, Calls));
+            }
+
+            // INSTANTIATES — each object creation (`new Foo()`, incl. `new()`), from the enclosing method
+            // (or, in a field initializer, the enclosing type) to the CONSTRUCTED TYPE. Distinct from
+            // REFERENCES_TYPE: it is method-level and means "actually creates instances of", not just "mentions".
+            foreach (var creation in root.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
+            {
+                if (model.GetSymbolInfo(creation).Symbol is not IMethodSymbol { MethodKind: MethodKind.Constructor } ctor) continue;
+                var typeId = RoslynSemantics.ToNodeId(ctor.ContainingType);
+                if (typeId is null) continue;
+
+                var enclosingMethodDecl = creation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+                string? sourceId;
+                if (enclosingMethodDecl is not null)
+                {
+                    sourceId = RoslynSemantics.ToNodeId(model.GetDeclaredSymbol(enclosingMethodDecl));
+                }
+                else
+                {
+                    // Field/property initializer (no enclosing method) — attribute to the enclosing type.
+                    var enclosingTypeDecl = creation.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
+                    sourceId = enclosingTypeDecl is null ? null : RoslynSemantics.ToNodeId(model.GetDeclaredSymbol(enclosingTypeDecl));
+                }
+                if (sourceId is null || sourceId == typeId) continue;
+                edges.Add((sourceId, typeId, Instantiates));
             }
 
             // OVERRIDES — an override member to the base member it overrides (method-level override chain,
