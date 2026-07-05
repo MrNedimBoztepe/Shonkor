@@ -170,4 +170,59 @@ public class GraphAnalyticsTests
 
         Assert.Empty(GraphAnalytics.SurprisingConnections(nodes, edges));
     }
+
+    [Fact]
+    public void DetectModularityCommunities_TwoTrianglesBridged_SplitIntoTwo()
+    {
+        // The case connected-components CANNOT split: two dense triangles joined by ONE bridge C—D.
+        // Modularity keeps the triangles as separate communities (intra-coupling ≫ the single inter-edge).
+        var nodes = new[] { N("A"), N("B"), N("C"), N("D"), N("E"), N("F") };
+        var edges = new[]
+        {
+            E("A", "B"), E("B", "C"), E("A", "C"),   // triangle 1
+            E("D", "E"), E("E", "F"), E("D", "F"),   // triangle 2
+            E("C", "D")                              // bridge
+        };
+
+        var comm = GraphAnalytics.DetectModularityCommunities(nodes, edges);
+
+        Assert.Equal(comm["A"], comm["B"]);
+        Assert.Equal(comm["B"], comm["C"]);
+        Assert.Equal(comm["D"], comm["E"]);
+        Assert.Equal(comm["E"], comm["F"]);
+        Assert.NotEqual(comm["A"], comm["D"]);
+        Assert.Equal(2, comm.Values.Distinct().Count());
+    }
+
+    [Fact]
+    public void DetectModularityCommunities_IsDeterministic_AcrossRuns()
+    {
+        var nodes = new[] { N("A"), N("B"), N("C"), N("D"), N("E"), N("F") };
+        var edges = new[] { E("A", "B"), E("B", "C"), E("A", "C"), E("D", "E"), E("E", "F"), E("D", "F"), E("C", "D") };
+
+        Assert.Equal(
+            GraphAnalytics.DetectModularityCommunities(nodes, edges),
+            GraphAnalytics.DetectModularityCommunities(nodes, edges));
+    }
+
+    [Fact]
+    public void DetectModularityCommunities_DisconnectedPieces_StaySeparate()
+    {
+        // Two disconnected edges + one isolated node → three communities.
+        var nodes = new[] { N("A"), N("B"), N("C"), N("D"), N("ISO") };
+        var edges = new[] { E("A", "B"), E("C", "D") };
+
+        var comm = GraphAnalytics.DetectModularityCommunities(nodes, edges);
+
+        Assert.Equal(comm["A"], comm["B"]);
+        Assert.Equal(comm["C"], comm["D"]);
+        Assert.NotEqual(comm["A"], comm["C"]);
+        Assert.Equal(3, comm.Values.Distinct().Count());
+    }
+
+    [Fact]
+    public void DetectModularityCommunities_Empty_ReturnsEmpty()
+    {
+        Assert.Empty(GraphAnalytics.DetectModularityCommunities(Array.Empty<GraphNode>(), Array.Empty<GraphEdge>()));
+    }
 }

@@ -106,7 +106,7 @@ public sealed class HotspotsTool : IMcpTool
     }
 }
 
-/// <summary>Connected-component clusters over the coupling graph — surfaces isolated modules / dead code.</summary>
+/// <summary>Clusters the graph by coupling: modularity communities (default) or connected components.</summary>
 public sealed class ClustersTool : IMcpTool
 {
     public string Name => "clusters";
@@ -114,12 +114,13 @@ public sealed class ClustersTool : IMcpTool
     public object GetSchema() => new
     {
         name = "clusters",
-        description = "Group the graph into connected-component clusters over the coupling subgraph (structural containment excluded): one giant cluster is normal; SMALL clusters are isolated modules or likely-dead subsystems worth a look. Returns the cluster count, the largest cluster's size, and the members of the smallest clusters. Purely topological — no model, deterministic.",
+        description = "Group the graph into clusters over the coupling subgraph (structural containment excluded). mode='modularity' (default) finds cohesive communities by MODULARITY — it splits even one connected graph into modules where internal coupling outweighs external; mode='components' finds connected components — one giant cluster is normal and SMALL clusters are isolated modules / likely-dead code. Returns the cluster count, the largest cluster's size, and the members of the smallest clusters. Purely topological — no model, deterministic.",
         inputSchema = new
         {
             type = "object",
             properties = new
             {
+                mode = new { type = "string", description = "'modularity' (default, cohesive communities) or 'components' (connected components / isolated modules)." },
                 maxSmallClusters = new { type = "integer", description = "How many of the smallest clusters to list with members (default 10, max 50)." },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             }
@@ -132,10 +133,13 @@ public sealed class ClustersTool : IMcpTool
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var basePath = ctx.GetProjectBasePath(projectName);
         var maxSmall = Math.Clamp(ReadInt(args?["maxSmallClusters"], 10), 1, 50);
+        var components = (args?["mode"]?.ToString() ?? "modularity").ToLowerInvariant() is "components" or "component";
 
         var nodes = await storage.GetAllNodesAsync().ConfigureAwait(false);
         var edges = await storage.GetAllEdgesAsync().ConfigureAwait(false);
-        var communities = GraphAnalytics.DetectCommunities(nodes, edges);
+        var communities = components
+            ? GraphAnalytics.DetectCommunities(nodes, edges)
+            : GraphAnalytics.DetectModularityCommunities(nodes, edges);
         if (communities.Count == 0)
         {
             return SendToolResponse(id, "The graph is empty — nothing to cluster.");
@@ -149,8 +153,10 @@ public sealed class ClustersTool : IMcpTool
             .ToList();
 
         var largest = clusters[^1].Count;
+        var label = components ? "connected cluster" : "modularity community";
+        var tail = components ? " (candidates for isolated/dead code)" : "";
         var sb = new System.Text.StringBuilder();
-        sb.Append($"{clusters.Count} connected cluster(s); largest = {largest} node(s). Smallest {Math.Min(maxSmall, clusters.Count)} (candidates for isolated/dead code):\n");
+        sb.Append($"{clusters.Count} {label}(ies); largest = {largest} node(s). Smallest {Math.Min(maxSmall, clusters.Count)}{tail}:\n");
         foreach (var members in clusters.Take(maxSmall))
         {
             var names = members
