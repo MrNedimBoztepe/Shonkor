@@ -16,12 +16,12 @@ Shonkor now features a native "Ask AI" capability directly within its web dashbo
 ### Setup
 1. Ensure [Ollama](https://ollama.com/) is installed and running locally on port `11434`.
 2. Pull a suitable model, e.g., `ollama run qwen2.5-coder`.
-3. In the Shonkor Web Dashboard, click the **Settings** icon to ensure the Ollama URL and model are configured.
+3. In the Shonkor Web Dashboard, open **Settings → AI** to set the Ollama URL, generation model, embedding model and related options (loopback-only; applied without a restart).
 
 ### Usage
-- **Search:** Use the search bar in the dashboard. You can toggle between **Semantic Search** (Brain icon) and **Keyword Search** (Network icon).
-- **Ask AI:** Once search results are displayed, a sparkling **"Ask AI"** button appears. Clicking this sends the top retrieved code nodes (with perfectly scoped `StartLine` and `EndLine` boundaries) directly to Ollama.
-- **Result:** The LLM synthesizes a precise answer based *strictly* on the provided architectural context, preventing hallucinations.
+- **Search:** Use the search bar in the dashboard. "Brain" mode runs **hybrid** search (FTS + vector Reciprocal Rank Fusion); the Network icon is plain keyword search.
+- **Ask AI:** Once search results are displayed, a sparkling **"Ask AI"** button appears. Clicking this sends the top retrieved code nodes (with perfectly scoped `StartLine` and `EndLine` boundaries) to Ollama and **streams the answer token-by-token**.
+- **Result:** The LLM answers *strictly* from the provided context and is instructed to say so when the context doesn't cover the question. Each claim is asked to carry a source citation `[Name @ file:lines]`, and generation runs at `temperature=0` so the same context yields a reproducible answer. (Answer quality still depends on the local model; the citation always resolves to the real graph node.)
 
 ---
 
@@ -93,7 +93,8 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 |------|---------|------|
 | `locate` | Pure "Where is X?" → `name -> file:line` | Most minimal output, ideal first step |
 | `search_graph` | FTS5 keyword search; one line per match | `verbose: true` for full JSON |
-| `search_semantic` | Vector/meaning search ("where is auth handled?") | **Only listed when an embedding backend is wired** (web server + Ollama); not present in the local stdio CLI |
+| `search_semantic` | Vector/meaning search ("where is auth handled?"), over **code embeddings** (not just the summary) | **Only listed when an embedding backend is wired** (web server + Ollama, or the stdio CLI with a reachable backend); needs nodes embedded via the enrichment worker or `shonkor index --embed` |
+| `search_hybrid` | Best-of-both: **Reciprocal Rank Fusion** of keyword (FTS) + vector results | Same capability gate as `search_semantic`; degrades to FTS ranking without embeddings. Also exposed as `GET /api/search/hybrid` (the dashboard's "Brain" mode) |
 
 **Read — show me the code**
 | Tool | Purpose | Note |
@@ -102,18 +103,25 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 | `get_source` | The EXACT source body of a symbol + `file:start-end` | Reads types via line-range locally; `maxChars` caps large bodies |
 | `outline` | A file's type/member structure as an indented `CONTAINS` tree | See what's in a file without reading it |
 | `get_subgraph` | N-hop traversal around seed nodes | Compact `NODES`/`EDGES` text; `verbose: true` for JSON; `maxChars` budget |
-| `generate_capsule` | Markdown capsule with Mermaid + code | `maxChars` caps to a token budget |
+| `generate_capsule` | Markdown capsule with Mermaid + code | Seed-first, relevance-ranked, hub-capped; `maxChars` caps the code budget so a 2-hop expansion can't explode the prompt |
 | `architecture` | Module building-block view + Mermaid cross-module dependency diagram | For **arc42 docs**/onboarding: types per module (key ones first), aggregated module edges |
 
 **Analyze — impact & relationships**
 | Tool | Purpose | Note |
 |------|---------|------|
 | `references` | Reference/impact over `REFERENCES_TYPE`/`IMPLEMENTS`/`EXTENDS`. `direction=used_by` (default) = *"what breaks if I change it?"*; `direction=uses` = its footprint | `depth=1` = flat list grouped by relation (AI summaries); `depth>1` = transitive — ranked blast radius with `[test]` flags (`used_by`) or indented tree (`uses`); structural containment excluded |
-| `call_hierarchy` | Method-level **callers** / **callees**, indented to a depth, over `CALLS` | Needs semantic indexing (`Indexing:SemanticCSharp`); recursion marked |
+| `call_hierarchy` | Method-level **callers** / **callees**, indented to a depth, over `CALLS` | Needs semantic indexing (`Indexing:SemanticCSharp`, **on by default**); recursion marked |
 | `find_usages` | Call/reference sites **with a code snippet** at each (graph-aware grep) | `relation  name  file:line  ⟶ <usage line>` |
 | `find_path` | Shortest connection chain between two symbols | `A --REL--> B <--REL-- C`, real edge directions |
 | `implementations_of` | Types that implement an interface / extend a base type | `IMPLEMENTS`/`EXTENDS`, with `file:line` + summaries |
 | `verify_exists` | Fact-check a symbol exists **before** asserting it | `YES`/`NO` + nearest names — anti-hallucination |
+
+**Insight — whole-graph topology** (deterministic; no model, over the coupling subgraph with structural containment excluded)
+| Tool | Purpose | Note |
+|------|---------|------|
+| `hotspots` | Change-risk "god nodes" ranked by **betweenness centrality** — the nodes most shortest-paths flow through, so a change there has the widest blast radius | `name  type  handle  betweenness=… degree=…`, highest first; `limit` (default 15) |
+| `clusters` | Group the graph into clusters. `mode=modularity` (default) = cohesive communities; `mode=components` = connected components, where **small clusters flag isolated modules / likely-dead code** | Returns cluster count, largest size, and members of the smallest clusters (`maxSmallClusters`) |
+| `surprising_connections` | Node pairs whose **embeddings are similar but that have no edge** — candidate missing links or duplication | Requires an embedding pass; `A ~ B  similarity=…` strongest first; `minSimilarity` (default 0.85). Inferred hints, never proven relationships |
 
 **Plan & apply a change**
 | Tool | Purpose | Note |

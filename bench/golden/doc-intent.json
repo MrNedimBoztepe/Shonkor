@@ -1,0 +1,1202 @@
+[
+  {
+    "Id": "doc-Activate",
+    "Query": "Marks a plugin so the loader picks it up. Does not load here",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\PluginRegistry.cs::PluginRegistry::Activate#1"
+    ]
+  },
+  {
+    "Id": "doc-ActivePlugins",
+    "Query": "The plugins that are currently",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\PluginRegistry.cs::PluginRegistry::ActivePlugins#0"
+    ]
+  },
+  {
+    "Id": "doc-AnalyzeNodeAsync",
+    "Query": "Analyzes the content of a node and returns a semantic summary and extracted concepts",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\ISemanticAnalyzer.cs::ISemanticAnalyzer::AnalyzeNodeAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-ApplyEditsAsync",
+    "Query": "Applies the given changed files to the cached compilation (reading their current on-disk content) and returns the updated compilation. A changed file that no longer exists is removed; a new one is added; an existing one has its tree replace",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\SemanticCompilationCache.cs::SemanticCompilationCache::ApplyEditsAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-AttachEdgesAsync",
+    "Query": "Batch-loads the edges touching all hit nodes in a single query and assembles the final list, preserving the input ordering",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteGraphStorageProvider.cs::SqliteGraphStorageProvider::AttachEdgesAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-Build",
+    "Query": "s the embedding document for under the given source mode",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\EmbeddingTextBuilder.cs::EmbeddingTextBuilder::Build#3"
+    ]
+  },
+  {
+    "Id": "doc-BuildCompilationForDirectoryAsync",
+    "Query": "Builds a Roslyn compilation over the.cs files under (skipping bin/obj), or null when there are none. Shared by the full pass and the incremental reconcile (drift): the compilation needs ALL sources to resolve symbols, but the caller can the",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\SemanticCsharpLinker.cs::SemanticCsharpLinker::BuildCompilationForDirectoryAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-BuildCompilationFromTrees",
+    "Query": "Builds a compilation from already-parsed syntax trees (used by the incremental compilation cache)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\RoslynSemantics.cs::RoslynSemantics::BuildCompilationFromTrees#1"
+    ]
+  },
+  {
+    "Id": "doc-BuildLocalJson",
+    "Query": "Merges the non-null fields of into (the current appsettings.Local.json, or null/empty) and returns the new pretty-printed JSON. Pure \u2014 no IO",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\Services\\SettingsStore.cs::SettingsStore::BuildLocalJson#2"
+    ]
+  },
+  {
+    "Id": "doc-BuildParserMap",
+    "Query": "Maps each supported file extension to the parsers that handle it",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\GraphIndexScanner.cs::GraphIndexScanner::BuildParserMap#0"
+    ]
+  },
+  {
+    "Id": "doc-BuildQuery",
+    "Query": "Builds the grounding prompt that asks the model to hypothesise the link, and to be explicit that it is a guess",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\SurprisingConnectionExplainer.cs::SurprisingConnectionExplainer::BuildQuery#2"
+    ]
+  },
+  {
+    "Id": "doc-BuildRagPrompt",
+    "Query": "Builds the grounded RAG prompt: per-node citation labels, an abstention instruction, and a security framing that the context is untrusted data (not commands). Shared by the blocking and streaming paths",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\OllamaSemanticAnalyzer.cs::OllamaSemanticAnalyzer::BuildRagPrompt#2"
+    ]
+  },
+  {
+    "Id": "doc-BuildSignature",
+    "Query": "Builds a compact signature line for a node from its stored properties (no body): a method/ constructor as modifiers returnType Name(params), a property as modifiers type Name, and a type as modifiers kind Name",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::BuildSignature#1"
+    ]
+  },
+  {
+    "Id": "doc-CheckFreshnessAsync",
+    "Query": "Reports whether a single file\u0027s graph representation is in sync with its on-disk content (see), without modifying the graph",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\GraphIndexScanner.cs::GraphIndexScanner::CheckFreshnessAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-Ci",
+    "Query": "95% confidence half-width (normal approximation) so a small golden set reads as a range, not a false-pre sion point estimate",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Bench\\BenchModels.cs::MetricSet::Ci#1"
+    ]
+  },
+  {
+    "Id": "doc-CollectEdgesAsync",
+    "Query": "Walks the given (each resolved against the whole) and collects the semantic edges they originate. Shared by the full link and the scoped relink",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\SemanticCsharpLinker.cs::SemanticCsharpLinker::CollectEdgesAsync#5"
+    ]
+  },
+  {
+    "Id": "doc-CollectFromTypeSyntax",
+    "Query": "Extracts the simple type name(s) from a, recursing through nullable/array/pointer/tuple wrappers and generic type arguments. Predefined types (int, string, \u2026) and var / void are ignored",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\RoslynAstParser.cs::CSharpDeclarationWalker::CollectFromTypeSyntax#2"
+    ]
+  },
+  {
+    "Id": "doc-CollectReferencedTypeNames",
+    "Query": "Collects the distinct simple names of all types referenced within a type declaration (base types, field/property types, method return \u0026 parameter types, local declarations, object creations, and generic type arguments), excluding the declar",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\RoslynAstParser.cs::CSharpDeclarationWalker::CollectReferencedTypeNames#2"
+    ]
+  },
+  {
+    "Id": "doc-CompilePluginDll",
+    "Query": "Compiles the demo plugin source into a real.dll on disk (test setup only, not runtime)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\tests\\Shonkor.Tests\\AssemblyPluginLoaderTests.cs::AssemblyPluginLoaderTests::CompilePluginDll#1"
+    ]
+  },
+  {
+    "Id": "doc-ComputeBackoff",
+    "Query": "Exponential backoff: 30s, 60s, 120s, \u2026 capped at",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\Services\\SemanticEnrichmentService.cs::SemanticEnrichmentService::ComputeBackoff#1"
+    ]
+  },
+  {
+    "Id": "doc-ConstructorOverloadSpan",
+    "Query": "Constructor counterpart of (overloads share the type\u0027s name, so only arity discriminates)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\RoslynAstParser.cs::CSharpDeclarationWalker::ConstructorOverloadSpan#2"
+    ]
+  },
+  {
+    "Id": "doc-Deactivate",
+    "Query": "Marks a plugin so it is no longer loaded",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\PluginRegistry.cs::PluginRegistry::Deactivate#1"
+    ]
+  },
+  {
+    "Id": "doc-DefinitionNames",
+    "Query": "The distinct names of the type-definition nodes in",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\GraphIndexScanner.cs::GraphIndexScanner::DefinitionNames#1"
+    ]
+  },
+  {
+    "Id": "doc-DefinitionsByNameAsync",
+    "Query": "Resolves the given (simple) names to C# definition nodes (Class/Interface/Record/Struct/Enum), keyed by name \u2014 the basis for reference resolvers (e.g. a config type string \u2192 its declaring class node)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphView.cs::IGraphView::DefinitionsByNameAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-DeleteByFilePathAsync",
+    "Query": "Deletes all nodes and associated edges that originate from the specified file path. Used during incremental re-indexing to remove stale data before re-parsing",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::DeleteByFilePathAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-DeleteByFilePathsAsync",
+    "Query": "Deletes all nodes and associated edges for many file paths in a single transaction. Preferred over looping when clearing a large changeset (first index, branch switch, bulk re-scan), where per-file transactions dominate the cost",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::DeleteByFilePathsAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-DeleteOutgoingEdgesByFilePathAsync",
+    "Query": "Deletes edges of the given that ORIGINATE from any node in (outgoing edges). Used to clear a referencer\u0027s stale outgoing edges before a scoped relink, without re-parsing that file",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::DeleteOutgoingEdgesByFilePathAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-DetectDriftAsync",
+    "Query": "Compares the on-disk working tree under against the graph and reports drift, WITHOUT modifying the graph. Uses the same SHA256 content hashes as the incremental scan",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\GraphIndexScanner.cs::GraphIndexScanner::DetectDriftAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-EdgeReportAsync",
+    "Query": "Shared body for references at depth 1 (incoming = used_by, outgoing = uses): resolves the symbol, keeps the edges incident to it in the requested direction, and renders them grouped by relationship. is a format string with {0}=name and {1}=",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolContext.cs::McpToolContext::EdgeReportAsync#7"
+    ]
+  },
+  {
+    "Id": "doc-EdgesByRelationshipAsync",
+    "Query": "All edges of a given across the whole graph \u2014 the basis for structural rules that reason over a relationship globally (e.g. Helix layer-dependency checks over the C# coupling edges). Returns dangling edges too; resolve endpoints via",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphView.cs::IGraphView::EdgesByRelationshipAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-EmbeddingToBytes",
+    "Query": "Packs a float embedding into a little-endian byte blob, or returns null when absent",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteRowMapper.cs::SqliteRowMapper::EmbeddingToBytes#1"
+    ]
+  },
+  {
+    "Id": "doc-EndScan",
+    "Query": "Releases an index-scan slot previously claimed via",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\ProjectManager.cs::ProjectManager::EndScan#1"
+    ]
+  },
+  {
+    "Id": "doc-EnsureHashed",
+    "Query": "Hashes unless it is empty or already hashed (idempotent migration helper)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\TokenHasher.cs::TokenHasher::EnsureHashed#1"
+    ]
+  },
+  {
+    "Id": "doc-EnumerateCandidateFiles",
+    "Query": "Enumerates the files under that match the parser extensions and are not excluded by. Shared by the full scan and drift detection so both see the exact same candidate set",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\GraphIndexScanner.cs::GraphIndexScanner::EnumerateCandidateFiles#3"
+    ]
+  },
+  {
+    "Id": "doc-EstablishCrossTechnologyConnectionsAsync",
+    "Query": "Executes the post-processing phase, mapping cross-technology edges and Helix architecture modules",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\CrossTechLinker.cs::CrossTechLinker::EstablishCrossTechnologyConnectionsAsync#4"
+    ]
+  },
+  {
+    "Id": "doc-EstablishSemanticEdgesAsync",
+    "Query": "Reads the.cs files under (skipping bin/obj), builds a compilation, and links the semantic edges into",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\SemanticCsharpLinker.cs::SemanticCsharpLinker::EstablishSemanticEdgesAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-ExecuteAsync",
+    "Query": "Executes the tool and returns a complete JSON-RPC response string (success or error), built via",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\IMcpTool.cs::IMcpTool::ExecuteAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-ExecuteNonQueryAsync",
+    "Query": "Executes a non-query SQL statement against the given connection",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteGraphStorageProvider.cs::SqliteGraphStorageProvider::ExecuteNonQueryAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-ExecuteScalarAsync",
+    "Query": "Executes a scalar SQL query and returns the result cast to",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteGraphStorageProvider.cs::SqliteGraphStorageProvider::ExecuteScalarAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-ExplainAsync",
+    "Query": "Generates the explanation via (both nodes supplied as grounding context) and returns it prefixed with",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\SurprisingConnectionExplainer.cs::SurprisingConnectionExplainer::ExplainAsync#4"
+    ]
+  },
+  {
+    "Id": "doc-ExtractBaseTemplates",
+    "Query": "F2 \u2014 Template inheritance. The __Base template field holds a pipe-separated list of base template GUIDs; emits item --INHERITS_FROM--\u003E baseTemplate edges",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Plugin.Sitecore\\SitecoreUnicornPlugin.cs::SitecoreUnicornPlugin::ExtractBaseTemplates#3"
+    ]
+  },
+  {
+    "Id": "doc-ExtractChangedFiles",
+    "Query": "Extracts the distinct set of changed file paths (added/modified/removed) from a GitHub push payload\u0027s commits[]. Returns an empty list when the payload has none (the caller then falls back to a full scan). Malformed payloads yield an empty ",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\Endpoints\\WebhookEndpoints.cs::WebhookEndpoints::ExtractChangedFiles#1"
+    ]
+  },
+  {
+    "Id": "doc-ExtractRelativeLinks",
+    "Query": "Detects relative file links in the Markdown content and creates REFERENCES edges from the current file to each referenced path",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\MarkdownHierarchyParser.cs::MarkdownHierarchyParser::ExtractRelativeLinks#3"
+    ]
+  },
+  {
+    "Id": "doc-ExtractRenderings",
+    "Query": "F1 \u2014 Presentation graph. Parses the Sitecore layout XML stored in __Renderings / __Final Renderings and emits, per rendering instance: item --HAS_RENDERING(placeholder,uid)--\u003E renderingDefinitionItem item --USES_DATASOURCE(rendering,placeho",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Plugin.Sitecore\\SitecoreUnicornPlugin.cs::SitecoreUnicornPlugin::ExtractRenderings#4"
+    ]
+  },
+  {
+    "Id": "doc-ExtractSections",
+    "Query": "Splits the content by Markdown header lines and creates a MarkdownSection node for each section, along with a CONTAINS edge from the file node to each section",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\MarkdownHierarchyParser.cs::MarkdownHierarchyParser::ExtractSections#4"
+    ]
+  },
+  {
+    "Id": "doc-ExtractSimpleTypeName",
+    "Query": "The simple (unqualified) type name of a syntax, or null for forms we don\u0027t name-match (predefined keywords, arrays, tuples, var)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\SemanticCsharpLinker.cs::SemanticCsharpLinker::ExtractSimpleTypeName#1"
+    ]
+  },
+  {
+    "Id": "doc-ExtractZipSafely",
+    "Query": "Extracts a ZIP, rejecting any entry whose path escapes the target directory (zip-slip)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\PluginRegistry.cs::PluginRegistry::ExtractZipSafely#2"
+    ]
+  },
+  {
+    "Id": "doc-Fail",
+    "Query": "Logs the full exception server-side but returns only a generic message to the client, so internal paths/stack details are never leaked over the API",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\EndpointHelpers.cs::EndpointHelpers::Fail#2"
+    ]
+  },
+  {
+    "Id": "doc-FilePathOf",
+    "Query": "The declaring file path encoded in a C# node id (everything before the first \u0022::\u0022), or null",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Plugin.Sitecore\\HelixViolationPostProcessor.cs::HelixViolationPostProcessor::FilePathOf#1"
+    ]
+  },
+  {
+    "Id": "doc-Find",
+    "Query": "Returns the tool with the given name, or null if none is registered",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolRegistry.cs::McpToolRegistry::Find#1"
+    ]
+  },
+  {
+    "Id": "doc-FindPathAsync",
+    "Query": "Returns the shortest path from to as an ordered list (first element is the source, with a null relation), or null if the target is not reachable within. When the two ids are equal, a single-step path is returned",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\GraphPathFinder.cs::GraphPathFinder::FindPathAsync#5"
+    ]
+  },
+  {
+    "Id": "doc-FindProjectByPath",
+    "Query": "Resolves the registered project that contains the given directory (deepest/longest path match), or null if none matches. Used to derive context purely from the caller\u0027s working directory, independent of the shared, mutable ActiveProjectName",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\ProjectManager.cs::ProjectManager::FindProjectByPath#1"
+    ]
+  },
+  {
+    "Id": "doc-FirstLineMentioning",
+    "Query": "Returns the first non-empty line of that mentions (trimmed, capped at 160 chars), or null \u2014 a grep-like usage snippet for find_usages",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::FirstLineMentioning#2"
+    ]
+  },
+  {
+    "Id": "doc-FixedTimeEquals",
+    "Query": "Constant-time string comparison to prevent timing side-channels on key/secret checks",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\Middleware\\ApiKeyMiddleware.cs::ApiKeyMiddleware::FixedTimeEquals#2"
+    ]
+  },
+  {
+    "Id": "doc-ForMember",
+    "Query": "Node id for a (non-overloadable) member \u2014 e.g. a property \u2014 of a type",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\CsharpNodeId.cs::CsharpNodeId::ForMember#3"
+    ]
+  },
+  {
+    "Id": "doc-ForType",
+    "Query": "Node id for a type declaration in",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\CsharpNodeId.cs::CsharpNodeId::ForType#2"
+    ]
+  },
+  {
+    "Id": "doc-FromHandle",
+    "Query": "Expands a @/\u003Crelative\u003E handle back to a real node id; other values pass through unchanged",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::FromHandle#2"
+    ]
+  },
+  {
+    "Id": "doc-GenerateEmbeddingAsync",
+    "Query": "Kind-aware embedding. Default implementation ignores and delegates to, so existing implementations keep working unchanged; backends that benefit from task prefixes override this",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IEmbeddingService.cs::IEmbeddingService::GenerateEmbeddingAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-GenerateRAGResponseAsync",
+    "Query": "Synthesizes a natural language answer to the user\u0027s query based on the provided graph context",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\ISemanticAnalyzer.cs::ISemanticAnalyzer::GenerateRAGResponseAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-GetAllEdgesAsync",
+    "Query": "Returns every edge in the whole graph. Used by global topology analyses (centrality, community detection) that need the full edge set at once, rather than the per-node or per-relationship views",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphSearch.cs::IGraphSearch::GetAllEdgesAsync#1"
+    ]
+  },
+  {
+    "Id": "doc-GetAllIndexedFilePathsAsync",
+    "Query": "Retrieves all File node paths currently stored in the graph",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::GetAllIndexedFilePathsAsync#1"
+    ]
+  },
+  {
+    "Id": "doc-GetAllNodesAsync",
+    "Query": "Retrieves all nodes from the graph store",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::GetAllNodesAsync#1"
+    ]
+  },
+  {
+    "Id": "doc-GetClients",
+    "Query": "The supported clients for the current OS, with per-OS config locations",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.CLI\\McpInstaller.cs::McpInstaller::GetClients#0"
+    ]
+  },
+  {
+    "Id": "doc-GetContentHashesAsync",
+    "Query": "Returns the stored content hash for each of the given File node IDs (paths) that exist, keyed by node ID. Used for fast incremental-scan change detection without loading content",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::GetContentHashesAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetDefinitionsByNamesAsync",
+    "Query": "Resolves the given type names to their definition nodes (Class/Interface/Record/Struct/Enum), keyed by name (a name may map to several same-named definitions across namespaces/files). Lets a scoped relink resolve only the names a file refer",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::GetDefinitionsByNamesAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetDiagnosticsAsync",
+    "Query": "Reads diagnostics, optionally filtered by minimum severity and/or code, highest severity first",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IDiagnosticStore.cs::IDiagnosticStore::GetDiagnosticsAsync#4"
+    ]
+  },
+  {
+    "Id": "doc-GetEdgesBetweenNodesAsync",
+    "Query": "Retrieves all edges where both source and target are in the given set of node IDs",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteGraphStorageProvider.cs::SqliteGraphStorageProvider::GetEdgesBetweenNodesAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-GetEdgesByRelationshipAsync",
+    "Query": "Returns every edge of a given relationship type across the whole graph. Used by global structural analyses (e.g. Helix layer-dependency checks over the C# coupling relationships) that reason over a relationship as a whole rather than around",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphSearch.cs::IGraphSearch::GetEdgesByRelationshipAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetGroupedCountsAsync",
+    "Query": "Executes a grouped COUNT query and returns the results as a dictionary",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteGraphStorageProvider.cs::SqliteGraphStorageProvider::GetGroupedCountsAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-GetHelixModule",
+    "Query": "Parsen des Helix Layer und Moduls aus Datei- oder Sitecore-Pfade",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\CrossTechLinker.cs::CrossTechLinker::GetHelixModule#2"
+    ]
+  },
+  {
+    "Id": "doc-GetIncidentEdgesAsync",
+    "Query": "Returns the edges directly incident to a single node \u2014 those where it is the source or the target \u2014 together with the nodes on the other end of each edge, keyed by id. Cheaper and more precise than a 1-hop when only a node\u0027s direct dependen",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphSearch.cs::IGraphSearch::GetIncidentEdgesAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetNodeAsync",
+    "Query": "The node with the given id, or null if none exists (the basis for unresolved-reference checks)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphView.cs::IGraphView::GetNodeAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetNodeByIdAsync",
+    "Query": "Retrieves a single node by its identifier, or null if it does not exist",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::GetNodeByIdAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetNodeIdSchemeVersionAsync",
+    "Query": "Returns the node-id scheme version this graph was built under (see). A value below the current version means the graph holds ids in an outdated format and a full re-index is recommended. Unstamped legacy graphs read 0",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::GetNodeIdSchemeVersionAsync#1"
+    ]
+  },
+  {
+    "Id": "doc-GetNodesByFilePathAsync",
+    "Query": "Retrieves all nodes whose equals (the symbols declared in that file). Used by the scoped relink after a single-file re-index",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::GetNodesByFilePathAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetNodesByTypesAsync",
+    "Query": "Retrieves nodes filtered by a set of types",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::GetNodesByTypesAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetNodesPendingSemanticAnalysisAsync",
+    "Query": "Retrieves nodes that are pending semantic analysis",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\ISemanticGraphStore.cs::ISemanticGraphStore::GetNodesPendingSemanticAnalysisAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetNodesWithEmbeddingsAsync",
+    "Query": "Returns up to nodes that carry an embedding vector (the vector populated), for embedding-based analyses such as surprising-connection detection. A non-positive limit means all",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphSearch.cs::IGraphSearch::GetNodesWithEmbeddingsAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetOrBuildAsync",
+    "Query": "Returns the cached compilation for the directory, building it once if absent. May be null when the directory has no.cs files",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\SemanticCompilationCache.cs::SemanticCompilationCache::GetOrBuildAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetProjectBasePath",
+    "Query": "Resolves the filesystem root of the requested (or context) project, for path shortening",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolContext.cs::McpToolContext::GetProjectBasePath#1"
+    ]
+  },
+  {
+    "Id": "doc-GetReferencingFilePathsAsync",
+    "Query": "Returns the distinct file paths that reference any of the given type names (via the reverse index maintained from referencedTypes). Used by drift Layer 2: when a file renames/removes a type, only its referencers need their incoming edges re",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::GetReferencingFilePathsAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetRelatedEdgesForNodesAsync",
+    "Query": "Retrieves, in a single query, all edges touching any of the specified node IDs, grouped per node ID. Replaces the previous per-node N\u002B1 lookup",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteGraphStorageProvider.cs::SqliteGraphStorageProvider::GetRelatedEdgesForNodesAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-GetSchema",
+    "Query": "The schema object advertised in tools/list (name \u002B description \u002B inputSchema)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\IMcpTool.cs::IMcpTool::GetSchema#0"
+    ]
+  },
+  {
+    "Id": "doc-GetSchemas",
+    "Query": "The schemas to advertise in tools/list, filtered by each tool\u0027s availability gate",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolRegistry.cs::McpToolRegistry::GetSchemas#1"
+    ]
+  },
+  {
+    "Id": "doc-GetStatisticsAsync",
+    "Query": "Returns aggregate statistics about the current state of the knowledge graph",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::GetStatisticsAsync#1"
+    ]
+  },
+  {
+    "Id": "doc-GetStorageForRequestAsync",
+    "Query": "Resolves the storage provider for the current request\u0027s tenant, taken from the X-Project-Name header (set authoritatively by), falling back to the active project when absent",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\EndpointHelpers.cs::EndpointHelpers::GetStorageForRequestAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-GetStorageProviderAsync",
+    "Query": "Returns an initialized storage provider for the given project (or the active project when is null/empty), without blocking the calling thread during first-time schema initialization. Providers are cached per project, so only the first call ",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\ProjectManager.cs::ProjectManager::GetStorageProviderAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-GetSubgraphAsync",
+    "Query": "Generates a subgraph by expanding outward from the specified seed nodes, by the given number of hops along edges in either direction",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphSearch.cs::IGraphSearch::GetSubgraphAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-GetUserByToken",
+    "Query": "Looks up a user by their (plaintext) API token. Tokens are stored hashed, so the presented token is hashed and compared constant-time. Use in auth-critical paths (identical here, kept for call-site clarity)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\ProjectManager.Users.cs::ProjectManager::GetUserByToken#1"
+    ]
+  },
+  {
+    "Id": "doc-GetUserByTokenConstantTime",
+    "Query": "Looks up a user by their presented (plaintext) API token using a constant-time hash comparison. Use this for every authentication code path",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\ProjectManager.Users.cs::ProjectManager::GetUserByTokenConstantTime#1"
+    ]
+  },
+  {
+    "Id": "doc-GuidsIn",
+    "Query": "All distinct normalised GUIDs found in a field value (e.g. a pipe-separated multilist)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Plugin.Sitecore\\SitecoreCmsConstants.cs::SitecoreCmsConstants::GuidsIn#1"
+    ]
+  },
+  {
+    "Id": "doc-HandleAgents",
+    "Query": "Prints a ready-to-paste AGENTS.md / CLAUDE.md section so an AI assistant reflexively uses the Shonkor graph (and its edit-validation loop) instead of grepping. Written to stdout \u2014 the user decides where to put it (e.g. \u0060shonkor agents \u003E\u003E AG",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.CLI\\Program.cs::Program::HandleAgents#0"
+    ]
+  },
+  {
+    "Id": "doc-HandlePlugin",
+    "Query": "Plugin lifecycle CLI: install a ZIP (inert), then explicitly activate it. Resolves the workspace like the MCP server (SHONKOR_WORKSPACE, else walk up to the registry marker)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.CLI\\Program.cs::Program::HandlePlugin#1"
+    ]
+  },
+  {
+    "Id": "doc-Hash",
+    "Query": "Returns the lowercase hex SHA-256 of (64 chars)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\TokenHasher.cs::TokenHasher::Hash#1"
+    ]
+  },
+  {
+    "Id": "doc-HeadAndTail",
+    "Query": "Bounds to chars while keeping BOTH ends of a large symbol (TICKET-105): the head carries the signature/opening, the tail carries return/cleanup logic \u2014 so a query targeting either end can still match, instead of only the head being embedded",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\EmbeddingTextBuilder.cs::EmbeddingTextBuilder::HeadAndTail#2"
+    ]
+  },
+  {
+    "Id": "doc-HeaderPattern",
+    "Query": "Matches Markdown header lines (e.g., # Title, ## Section, ### Subsection). Captures the header level (number of # characters) and the header text",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\MarkdownHierarchyParser.cs::MarkdownHierarchyParser::HeaderPattern#0"
+    ]
+  },
+  {
+    "Id": "doc-IncidentEdgesAsync",
+    "Query": "The edges incident to a node (where it is source or target), with the other-end nodes keyed by id",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphView.cs::IGraphView::IncidentEdgesAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-InitializeAsync",
+    "Query": "Initializes the storage backend, creating required schemas, collections, and indexes if they do not already exist",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphStore.cs::IGraphStore::InitializeAsync#1"
+    ]
+  },
+  {
+    "Id": "doc-InstallFromZip",
+    "Query": "Installs a plugin from a ZIP package: validates the plugin.json manifest and host-API compatibility, extracts the package into {workspace}/plugins/{id}/, and records it as \u2014 INERT. The plugin runs nothing until",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\PluginRegistry.cs::PluginRegistry::InstallFromZip#1"
+    ]
+  },
+  {
+    "Id": "doc-Invalidate",
+    "Query": "Drops the cached compilation for a directory (e.g. after a full scan rebuilt the whole graph)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\SemanticCompilationCache.cs::SemanticCompilationCache::Invalidate#1"
+    ]
+  },
+  {
+    "Id": "doc-IsAvailable",
+    "Query": "Whether this tool should be advertised/usable for the given context. Defaults to always available; capability-gated tools (e.g. semantic search) override this",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\IMcpTool.cs::IMcpTool::IsAvailable#1"
+    ]
+  },
+  {
+    "Id": "doc-IsBackendUnavailable",
+    "Query": "True when the exception indicates the HTTP backend is unreachable or timed out (connection refused, DNS failure, request timeout), as opposed to a per-node logic error",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\Services\\SemanticEnrichmentService.cs::SemanticEnrichmentService::IsBackendUnavailable#1"
+    ]
+  },
+  {
+    "Id": "doc-IsExactNameMatch",
+    "Query": "The single source of truth for \u0022this node IS the symbol\u0022 (case-insensitive name equality)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::IsExactNameMatch#2"
+    ]
+  },
+  {
+    "Id": "doc-IsLikelyBinaryAsync",
+    "Query": "Heuristically determines whether a file is binary by scanning the first few KB for a NUL byte. Text source files virtually never contain NUL; most binary formats do within their header",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\GraphIndexScanner.cs::GraphIndexScanner::IsLikelyBinaryAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-IsLikelyInterface",
+    "Query": "Uses a naming convention heuristic to determine if a base type name refers to an interface. Interface names conventionally start with \u0027I\u0027 followed by an uppercase letter",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\RoslynAstParser.cs::CSharpDeclarationWalker::IsLikelyInterface#1"
+    ]
+  },
+  {
+    "Id": "doc-IsLoopback",
+    "Query": "True when the request originates from the loopback interface (local dashboard)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\EndpointHelpers.cs::EndpointHelpers::IsLoopback#1"
+    ]
+  },
+  {
+    "Id": "doc-IsSemanticProject",
+    "Query": "Whether the effective project opts into semantic indexing and a compilation cache is wired",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolContext.cs::McpToolContext::IsSemanticProject#1"
+    ]
+  },
+  {
+    "Id": "doc-LinkAsync",
+    "Query": "Parses \u002B upserts the parser nodes for each file, then runs the semantic linker over them",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\tests\\Shonkor.Tests\\SemanticCsharpLinkerTests.cs::SemanticCsharpLinkerTests::LinkAsync#1"
+    ]
+  },
+  {
+    "Id": "doc-List",
+    "Query": "All registered plugins (any state)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\PluginRegistry.cs::PluginRegistry::List#0"
+    ]
+  },
+  {
+    "Id": "doc-LoadActive",
+    "Query": "Loads every active plugin in the workspace. Failures are isolated: a plugin that won\u0027t load is marked in the registry and skipped, so one bad plugin never blocks the others. The returned result must be disposed once the parsers are done",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\AssemblyPluginLoader.cs::AssemblyPluginLoader::LoadActive#1@3076"
+    ]
+  },
+  {
+    "Id": "doc-LooksHashed",
+    "Query": "True when already looks like a SHA-256 hex digest",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\TokenHasher.cs::TokenHasher::LooksHashed#1"
+    ]
+  },
+  {
+    "Id": "doc-LooksLikeTest",
+    "Query": "Heuristic for related_tests: whether a file path looks like a test file across common ecosystems (xUnit/NUnit *.Tests, Go _test, Python test_, JS.spec. /.test. / __tests__)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::LooksLikeTest#1"
+    ]
+  },
+  {
+    "Id": "doc-LouvainAggregate",
+    "Query": "Collapses each community into a super-node: internal edges become self-loops, inter-community edges become weighted super-edges. Total edge weight (and thus m) is preserved",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\GraphAnalytics.cs::GraphAnalytics::LouvainAggregate#4"
+    ]
+  },
+  {
+    "Id": "doc-LouvainLocalMoving",
+    "Query": "One Louvain level: greedily moves each node to the neighbouring community with the largest positive modularity gain until stable; returns a canonicalized community id per node",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\GraphAnalytics.cs::GraphAnalytics::LouvainLocalMoving#4"
+    ]
+  },
+  {
+    "Id": "doc-MakeZip",
+    "Query": "Builds a plugin ZIP with the given manifest JSON and a (fake) entry assembly",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\tests\\Shonkor.Tests\\PluginRegistryTests.cs::PluginRegistryTests::MakeZip#5"
+    ]
+  },
+  {
+    "Id": "doc-MarkFailed",
+    "Query": "Records an activation failure (used by the loader when an active plugin won\u0027t load)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\PluginRegistry.cs::PluginRegistry::MarkFailed#2"
+    ]
+  },
+  {
+    "Id": "doc-MetadataExtendPattern",
+    "Query": "Matches entries in the OXID metadata \u0027extend\u0027 array. Captures the core class (key) and the module class (value)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\PhpModuleParser.cs::PhpModuleParser::MetadataExtendPattern#0"
+    ]
+  },
+  {
+    "Id": "doc-MethodOverloadSpan",
+    "Query": "Returns the declaration\u0027s source offset when the enclosing type declares more than one method with the same name and arity (a same-arity overload group), so their node ids can be made distinct; otherwise null (the common, non-overloaded cas",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\RoslynAstParser.cs::CSharpDeclarationWalker::MethodOverloadSpan#3"
+    ]
+  },
+  {
+    "Id": "doc-ModuleOf",
+    "Query": "Resolves the Helix (layer, module) a node belongs to from its file path, or null if outside any layer",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Plugin.Sitecore\\HelixViolationPostProcessor.cs::HelixViolationPostProcessor::ModuleOf#1"
+    ]
+  },
+  {
+    "Id": "doc-NodesByTypeAsync",
+    "Query": "All nodes of a given",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IGraphView.cs::IGraphView::NodesByTypeAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-NormalizeGuid",
+    "Query": "Canonicalises a Sitecore GUID to lowercase, dashed, brace-less form (matches the Unicorn parser)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Plugin.Sitecore\\SitecoreCmsConstants.cs::SitecoreCmsConstants::NormalizeGuid#1"
+    ]
+  },
+  {
+    "Id": "doc-OpenConnectionAsync",
+    "Query": "Opens a fresh connection for a single operation. The caller owns and disposes it",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteGraphStorageProvider.cs::SqliteGraphStorageProvider::OpenConnectionAsync#1"
+    ]
+  },
+  {
+    "Id": "doc-OverloadSpan",
+    "Query": "Returns the declaration\u0027s source offset when has a same-kind, same-arity overload sibling in its containing type \u2014 mirroring the parser\u0027s Method so node and edge ids match. Returns null for non-overloaded methods (stable name#arity id)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\RoslynSemantics.cs::RoslynSemantics::OverloadSpan#1"
+    ]
+  },
+  {
+    "Id": "doc-ParseApiVersion",
+    "Query": "Parses a \u0022major.minor\u0022 API version, tolerating a missing or malformed minor (treated as 0)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\PluginRegistry.cs::PluginRegistry::ParseApiVersion#1"
+    ]
+  },
+  {
+    "Id": "doc-ParseAsync",
+    "Query": "Parses the given file content and extracts graph nodes and edges",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Interfaces\\IFileParser.cs::IFileParser::ParseAsync#2"
+    ]
+  },
+  {
+    "Id": "doc-ParseClassDeclarations",
+    "Query": "Detects PHP class declarations with extends clauses and creates OxidModule nodes with EXTENDS edges to the base class",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\PhpModuleParser.cs::PhpModuleParser::ParseClassDeclarations#4"
+    ]
+  },
+  {
+    "Id": "doc-ParseImports",
+    "Query": "Parses the JavaScript content and extracts nodes from the program body, creating IMPORTS edges from the component to each import source",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\JavaScriptParser.cs::JavaScriptParser::ParseImports#4"
+    ]
+  },
+  {
+    "Id": "doc-ParseMetadataExtensions",
+    "Query": "Parses the OXID metadata.php file to extract the \u0027extend\u0027 array, which maps core OXID classes to their module-level extensions. Creates EXTENDS edges from the module class to the core class",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\PhpModuleParser.cs::PhpModuleParser::ParseMetadataExtensions#3"
+    ]
+  },
+  {
+    "Id": "doc-ParsePhpFile",
+    "Query": "Parses a PHP file to extract class declarations and, for metadata files, the \u0027extend\u0027 array mapping core classes to module extensions",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\PhpModuleParser.cs::PhpModuleParser::ParsePhpFile#4"
+    ]
+  },
+  {
+    "Id": "doc-ParseSmartyTemplate",
+    "Query": "Parses Smarty template files to detect [{block name=\u0022...\u0022}] declarations. Creates a node for the template file and OVERRIDES_BLOCK edges for each block",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\PhpModuleParser.cs::PhpModuleParser::ParseSmartyTemplate#4"
+    ]
+  },
+  {
+    "Id": "doc-PassesProvenance",
+    "Query": "Whether is admitted by an optional max-uncertainty filter (null = admit all)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::PassesProvenance#2"
+    ]
+  },
+  {
+    "Id": "doc-PhpClassExtendsPattern",
+    "Query": "Matches PHP class declarations with optional extends clause. Captures the class name and the base class name",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\PhpModuleParser.cs::PhpModuleParser::PhpClassExtendsPattern#0"
+    ]
+  },
+  {
+    "Id": "doc-PluginsEnabled",
+    "Query": "Global kill-switch for the assembly-plugin system. The real trust gate is now per-plugin activation (installing a plugin runs nothing), so this defaults to ON; set Security:EnablePlugins=false to hard-disable loading every plugin regardless",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\EndpointHelpers.cs::EndpointHelpers::PluginsEnabled#1"
+    ]
+  },
+  {
+    "Id": "doc-ProcessAsync",
+    "Query": "Older single-argument entrypoint \u2014 runs with no user-configured external prefixes",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Plugin.Sitecore\\ClrTypeResolverPostProcessor.cs::ClrTypeResolverPostProcessor::ProcessAsync#1"
+    ]
+  },
+  {
+    "Id": "doc-ProcessBatchAsync",
+    "Query": "Enriches a batch of nodes with bounded parallelism: each node is summarized, its summary embedded, and the result persisted. The analyze\u2192embed pair for one node stays sequential (the embedding needs the summary), but separate nodes run conc",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\Services\\SemanticEnrichmentService.cs::SemanticEnrichmentService::ProcessBatchAsync#9"
+    ]
+  },
+  {
+    "Id": "doc-ProcessPendingNodesAsync",
+    "Query": "Processes one batch per project. Returns true when the semantic backend appears unreachable (so the caller can trip the circuit breaker); false on normal completion",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\Services\\SemanticEnrichmentService.cs::SemanticEnrichmentService::ProcessPendingNodesAsync#1"
+    ]
+  },
+  {
+    "Id": "doc-ProvenanceTag",
+    "Query": "A compact, lower-cased tag for an edge\u0027s provenance tier ( [extracted] / [inferred] / [ambiguous]), appended to edge lines so an agent sees whether a relationship is a proven fact or a heuristic guess \u2014 Shonkor\u0027s core trust signal",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::ProvenanceTag#1"
+    ]
+  },
+  {
+    "Id": "doc-Read",
+    "Query": "Effective current values (config value or the same defaults the services use)",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\Services\\SettingsStore.cs::SettingsStore::Read#1"
+    ]
+  },
+  {
+    "Id": "doc-ReadAndVerifyAsync",
+    "Query": "Reads the raw request body and verifies GitHub\u0027s HMAC-SHA256 signature (X-Hub-Signature-256) against the configured secret. Returns the raw bytes on success",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Web\\Endpoints\\WebhookEndpoints.cs::WebhookEndpoints::ReadAndVerifyAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-ReadDouble",
+    "Query": "Reads a double tool argument tolerantly (JSON number or numeric string), else",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::ReadDouble#2"
+    ]
+  },
+  {
+    "Id": "doc-ReadEdge",
+    "Query": "Reads a from the current row of a data reader",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteRowMapper.cs::SqliteRowMapper::ReadEdge#1"
+    ]
+  },
+  {
+    "Id": "doc-ReadInt",
+    "Query": "Reads an integer tool argument tolerantly: accepts a JSON number (int or float) or a numeric string, returning for null/missing/non-numeric input instead of throwing",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::ReadInt#2"
+    ]
+  },
+  {
+    "Id": "doc-ReadNode",
+    "Query": "Reads a from the current row, mapping dedicated columns to typed properties and the JSON metadata blob back into",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteRowMapper.cs::SqliteRowMapper::ReadNode#1"
+    ]
+  },
+  {
+    "Id": "doc-ReadProvenance",
+    "Query": "Reads the edge\u0027s provenance tier tolerantly: a query that does not select the Provenance column (or a legacy NULL) maps to, preserving the prior semantics",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Storage\\SqliteRowMapper.cs::SqliteRowMapper::ReadProvenance#1"
+    ]
+  },
+  {
+    "Id": "doc-ReadProvenanceFilter",
+    "Query": "Reads the optional provenance filter argument and returns the maximum uncertainty tier to admit (edges with a tier at or below it pass): extracted \u2192 only proven edges; inferred \u2192 proven \u002B heuristic, excluding ambiguous; all / ambiguous /mis",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::ReadProvenanceFilter#1"
+    ]
+  },
+  {
+    "Id": "doc-ReadSymbol",
+    "Query": "Reads the target symbol for symbol-oriented tools, accepting query as a lenient alias of symbol",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolHelpers.cs::McpToolHelpers::ReadSymbol#1"
+    ]
+  },
+  {
+    "Id": "doc-ReconcileDriftAsync",
+    "Query": "Drift Layer 3 (reconcile-from-drift): detects drift against the working tree and re-indexes ONLY the changed/new/deleted files surgically (each via, which does the Layer 1\u002B2 scoped relink), instead of a whole-tree rescan. Catches out-of-ban",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\GraphIndexScanner.cs::GraphIndexScanner::ReconcileDriftAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-ReconcilePathsAsync",
+    "Query": "Drift Layer 4 (git-aware / explicit-set reconcile): re-indexes a KNOWN set of changed paths (e.g. from git diff --name-only or a webhook push payload) surgically via \u2014 without hashing the whole tree. Relative paths are resolved against",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\GraphIndexScanner.cs::GraphIndexScanner::ReconcilePathsAsync#3"
+    ]
+  },
+  {
+    "Id": "doc-RecordNodeAsync",
+    "Query": "Shared implementation for the record tool: creates a typed knowledge node, links it to the supplied via, persists both, and returns the JSON-RPC tool response built by",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\Mcp\\McpToolContext.cs::McpToolContext::RecordNodeAsync#10"
+    ]
+  },
+  {
+    "Id": "doc-ReferenceAssemblies",
+    "Query": "The host\u0027s reference assemblies (TPA list), used as compilation references without a build",
+    "Mode": null,
+    "Expected": [
+      "C:\\Projects\\Brain\\src\\Shonkor.Core\\Services\\RoslynSemantics.cs::RoslynSemantics::ReferenceAssemblies#0"
+    ]
+  }
+]

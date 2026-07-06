@@ -105,6 +105,96 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task Hotspots_RanksCentralNodesByBetweenness()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("hotspots", new { })));
+
+        // Widget is referenced by several types (and reached transitively via Consumer), so it brokers the
+        // most shortest paths — it must rank as a hotspot, and each line carries the centrality metrics.
+        Assert.Contains("hotspot", text);
+        Assert.Contains("Widget", text);
+        Assert.Contains("betweenness=", text);
+    }
+
+    [Fact]
+    public async Task SurprisingConnections_FindsSimilarButUnlinkedNodes()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_surprise_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var dbPath = Path.Combine(ws, "g.db");
+        try
+        {
+            using (var storage = new SqliteGraphStorageProvider(dbPath))
+            {
+                await storage.InitializeAsync();
+                // Two nodes with identical embeddings and NO edge between them → a surprising connection.
+                await storage.UpsertNodesAsync(new[]
+                {
+                    new GraphNode { Id = Path.Combine(ws, "Alpha.cs") + "::Alpha", Name = "Alpha", Type = "Class", FilePath = Path.Combine(ws, "Alpha.cs"), StartLine = 1, Content = "class Alpha {}", Embedding = new[] { 1f, 0f, 0f } },
+                    new GraphNode { Id = Path.Combine(ws, "Beta.cs") + "::Beta", Name = "Beta", Type = "Class", FilePath = Path.Combine(ws, "Beta.cs"), StartLine = 1, Content = "class Beta {}", Embedding = new[] { 1f, 0f, 0f } }
+                });
+            }
+
+            var registry = new
+            {
+                Organizations = Array.Empty<object>(),
+                Users = Array.Empty<object>(),
+                Projects = new[] { new { Name = "P", Path = ws, DatabasePath = dbPath, OrganizationId = "", RepositoryUrl = "", ApiKey = "" } },
+                ActiveProjectName = "P"
+            };
+            File.WriteAllText(Path.Combine(ws, "projects.json"), JsonSerializer.Serialize(registry));
+
+            var handler = new McpRequestHandler(new ProjectManager(ws), new ContextCapsuleSynthesizer(), "P", lockToContextProject: true);
+            var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("surprising_connections", new { })));
+
+            Assert.Contains("Alpha", text);
+            Assert.Contains("Beta", text);
+            Assert.Contains("similarity=", text);
+            Assert.Contains("INFERRED", text); // must be labelled as inferred, never presented as a proven edge
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Directory.Delete(ws, true);
+        }
+    }
+
+    [Fact]
+    public async Task Clusters_ReportsModularityCommunities_AndComponents()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        // Default mode = modularity communities.
+        var modularity = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("clusters", new { })));
+        Assert.Contains("modularity community", modularity);
+
+        // Explicit components mode: the fixture has several disconnected pieces (Widget graph, Impl/IThing,
+        // Calc, isolated tasks) → more than one connected cluster.
+        var comps = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("clusters", new { mode = "components" })));
+        Assert.Contains("connected cluster", comps);
+    }
+
+    [Fact]
+    public async Task Audit_ProducesBriefingWithTrustMixAndHotspots()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("audit", new { })));
+
+        Assert.Contains("# Graph Audit", text);
+        Assert.Contains("Trust mix", text);
+        Assert.Contains("EXTRACTED", text);
+        Assert.Contains("god nodes", text);
+        Assert.Contains("Suggested starting points", text);
+        Assert.Contains("Widget", text); // the central node shows up as a hotspot / suggested reference
+    }
+
+    [Fact]
     public async Task References_ProvenanceFilter_ExcludesInferredWhenExtractedOnly()
     {
         // 0.1d: a caller can demand hard-extracted-only impact, and every edge shows its tier.
@@ -786,6 +876,37 @@ public class McpToolsTests
 
         Assert.Contains("unavailable", text);
         Assert.Contains("search_graph", text); // points the caller at the keyword fallback
+    }
+
+    [Fact]
+    public async Task SearchHybrid_FusesFtsAndVector_RanksExpectedNodeFirst()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        // Query vector aligned with Widget [1,0,0]; the text "Widget" also matches FTS — both retrievers
+        // surface Widget, so the RRF fusion must rank it first.
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true,
+            embeddingService: new StubEmbeddingService(new[] { 1f, 0f, 0f }));
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("search_hybrid", new { query = "Widget" })));
+
+        Assert.Contains("Widget", text);
+        Assert.True(text.IndexOf("Widget", StringComparison.Ordinal)
+                  < text.IndexOf("Gadget", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SearchHybrid_WithoutEmbeddingBackend_IsNotListed()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        // No embedding service (stdio/CLI case) -> search_hybrid is capability-gated out of tools/list.
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var listed = await handler.ProcessJsonRpcMessageAsync(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
+
+        Assert.NotNull(listed);
+        Assert.DoesNotContain("search_hybrid", listed);
     }
 
     [Fact]

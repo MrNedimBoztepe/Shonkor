@@ -40,8 +40,11 @@ public static class GraphRagEndpoints
                 var maxHops = request.Hops ?? 2;
                 var (nodes, edges) = await storage.GetSubgraphAsync(seeds, maxHops);
 
-                // Generate the token-optimized architecture capsule (Markdown)
-                var markdown = synthesizer.Synthesize(nodes, edges);
+                // Generate the token-optimized architecture capsule (Markdown). Budget-aware (TICKET-003):
+                // seeds render in full, the rest fills a ~3k-token code budget by structural relevance so a
+                // 2-hop hub expansion can't blow up the external LLM's context.
+                var markdown = synthesizer.Synthesize(nodes, edges,
+                    new CapsuleOptions { SeedIds = seeds, MaxContentChars = 12000, MaxNodes = 40 });
 
                 // Return a clean JSON response tailored for LLMs
                 return Results.Ok(new 

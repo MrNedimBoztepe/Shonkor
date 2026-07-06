@@ -11,7 +11,7 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 ## 🌟 Features
 
 * **Multi-Language AST Parsing**:
-  * **C# (.cs)**: Full Roslyn integration for extracting namespaces, classes, interfaces, records, structs, enums, properties, constructors, and methods – including inheritance (`IMPLEMENTS`/`EXTENDS`) and **type reference edges** (`REFERENCES_TYPE`) for true impact analysis. **Semantic resolution is ON by default** (`Indexing:SemanticCSharp` / opt out with `SHONKOR_SEMANTIC_CSHARP=false`): a Roslyn `SemanticModel` resolves references **exactly** (disambiguating same-named types across namespaces) and adds method-level `CALLS` edges. Exactly-resolved edges are tagged `EXTRACTED` provenance; heuristic name-based ones fall back to `INFERRED`.
+  * **C# (.cs)**: Full Roslyn integration for extracting namespaces, classes, interfaces, records, structs, enums, properties, constructors, and methods – including inheritance (`IMPLEMENTS`/`EXTENDS`) and **type reference edges** (`REFERENCES_TYPE`) for true impact analysis. **Semantic resolution is ON by default** (`Indexing:SemanticCSharp` / opt out with `SHONKOR_SEMANTIC_CSHARP=false`): a Roslyn `SemanticModel` resolves references **exactly** (disambiguating same-named types across namespaces) and adds method-level `CALLS`, `OVERRIDES` (override→base member), `IMPLEMENTS_MEMBER` (concrete member→interface member) and `INSTANTIATES` (`new T()` call site→constructed type) edges. Exactly-resolved edges are tagged `EXTRACTED` provenance; heuristic name-based ones fall back to `INFERRED`.
   * **JavaScript/TypeScript (.js, .jsx, .ts, .tsx)**: Extraction of ES imports, React components, and backend APIs.
   * **PHP (.php, .tpl)**: Regex-based module parser for OXID eShop with module extends and Smarty template blocks.
   * **Sitecore SCS (.yml, .yaml)**: Template and layout dependencies (Unicorn/SCS).
@@ -24,29 +24,47 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
   * **Start here**: `orient` (one-call session bootstrap — graph size, tool palette, the edit loop). Run `shonkor agents` to print an AGENTS.md/CLAUDE.md snippet so assistants reach for the graph reflexively.
   * **Find**: `search_graph` (FTS5), `locate`, `search_semantic` (vector/meaning — only listed when an embedding backend is wired).
   * **Read**: `signature` (signature only), `get_source` (exact symbol body + `file:start-end`), `outline` (file structure), `get_subgraph`, `generate_capsule`, `architecture` (arc42 building-block view + Mermaid module-dependency diagram, for docs/onboarding).
-  * **Analyze**: `references` (`direction=used_by` = who references it / `uses` = what it uses; `depth=1` flat, `depth>1` transitive — ranked blast radius with affected tests flagged, or a dependency tree), `call_hierarchy` (method-level callers/callees over `CALLS`; semantic mode), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).
+  * **Analyze**: `references` (`direction=used_by` = who references it / `uses` = what it uses; `depth=1` flat, `depth>1` transitive — ranked blast radius with affected tests flagged, or a dependency tree; `provenance=extracted|inferred|all` trust filter), `call_hierarchy` (method-level callers/callees over `CALLS`; semantic mode), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).
+  * **Topology & onboarding** (embedding-free, deterministic): `audit` (one-call briefing: size, EXTRACTED/INFERRED trust mix, god nodes, modules, dead clusters, suggested next calls), `hotspots` (change-risk nodes by betweenness centrality), `clusters` (`mode=modularity` cohesive communities / `mode=components` isolated dead code), `surprising_connections` (embedding-similar-but-unlinked pairs — INFERRED hints).
   * **Plan & apply**: `edit_plan` (a concrete edit checklist), `rename_plan` (overload-precise rename sites from the graph's exact edges, not name-grep), `related_tests` (transitive test impact — exactly what to run after a change), `reindex_file` (refresh one file after editing — relinks its `REFERENCES_TYPE` edges), `check_edit` (compile-check a C# file after editing — Roslyn syntax + semantic errors, self-contained, no `dotnet build`).
   * **Review**: `review` (a code-review briefing for a set of changed files — per-file compile check + aggregated transitive impact + the tests to run + top risks).
   * **Freshness (anti-drift)**: `freshness` (with a `path` = one file's sync state; without = project-wide drift report: changed / new / deleted). The analysis/read tools also **auto-flag** a result whose underlying file changed since indexing (`⚠ … EDITED since indexing — run reindex_file`), so an agent never silently trusts stale data.
   * **Memory**: `get_open_threads`, `record` (`type` = decision / milestone / task / question).
   * See the [LLM Integration Manual](docs/user/llm_integration.md) for the full reference.
 * **Visual Web Dashboard**: A glassmorphic web interface with interactive 2D force-directed graph visualization (`force-graph`, WebGL Canvas), live physics, code preview (Prism.js), capsule creator, project and plugin management.
-  * **Dual Search Modes**: Toggle between FTS5 Keyword Search (Network icon) and Vector-based Semantic Search (Brain icon).
-  * **Ask AI (GraphRAG)**: Instantly generate AI answers based on the retrieved code context nodes using a local Ollama model directly in the dashboard UI.
+  * **Search Modes**: Keyword (FTS5) or, in "Brain" mode, **Hybrid** search — Reciprocal Rank Fusion of FTS + vector similarity (falls back to keyword when no embeddings/backend are present).
+  * **Ask AI (GraphRAG)**: Generate AI answers grounded in the retrieved code context nodes using a local Ollama model, **streamed token-by-token** with per-claim source citations.
+  * **AI Settings**: Configure the Ollama endpoints/models, embedding source, answer streaming, and the semantic-C# default from the dashboard's Settings → **AI** tab (loopback-only writes; applied without a restart).
   * **Impact & Dependencies panel**: Selecting a node shows its authoritative "Referenced by" / "Depends on" lists (with AI summaries), and a **Find Path** tool traces the shortest connection to any other symbol.
 * **Multi-Project Registry**: Manage multiple codebases in parallel (`projects.json`), each with its own database.
 * **Powerful CLI**: Automation via `init`, `index`, `search`, `capsule`, and `mcp`.
 
 ---
 
-## ⚡️ Benchmark: AI Graphs vs. Classic RAG
+## ⚡️ Benchmark
 
-In a commercial C# test codebase (50 classes), this benchmark compares the performance of a conventional search query (Fulltext RAG) with Shonkor's pre-generated semantic graph:
+`src/Shonkor.Bench` is a single, reproducible harness over a built graph DB. Run it with
+`dotnet run --project src/Shonkor.Bench -- shonkor.db` — it writes `bench/report.md` and `bench/metrics.json`,
+and `--baseline bench/metrics.json` gates retrieval Precision@k against a stored run (exit 2 on a regression).
+It measures:
 
-* **Token Requirement:** ~1,200 tokens (Shonkor) vs. ~9,800 tokens (Classic RAG) ➡️ **87.7% saved**
-* **Context Latency:** ~6 seconds (Shonkor) vs. ~50 seconds (Classic RAG) ➡️ **7.6x faster**
+* **Token reduction** — the budget-aware capsule (seed-first, hub-capped) vs a **naive full-content dump of
+  the same retrieved subgraph** (FTS → 2-hop subgraph → capsule synthesis). On Shonkor's own graph (~1.8k
+  nodes, fresh index): **~41 %** aggregate reduction over the seed queries; the figure scales with graph
+  size / hub density (a larger graph with fatter 2-hop neighbourhoods cuts more).
+* **Retrieval precision** — Precision@1/@k, Recall@k, MRR for FTS5 and (when an Ollama embedding backend is
+  reachable) vector search. Exact symbol lookup reaches **Precision@1 ≈ 0.95 / Recall@10 ≈ 0.99** (FTS5, over
+  an auto-bootstrapped self-retrieval set). On a **natural-language set generated from the codebase's own doc
+  comments** (`--gen-golden bench/golden/doc-intent.json`, symbol name stripped so keywords can't cheat), FTS
+  collapses to Recall@10 ≈ 0.37 while **vector search reaches ≈ 0.97** — the payoff of embedding code, not keywords.
+* **RAG head-to-head** (`--compare-rag`) — vs a naive **chunked-RAG-without-graph** baseline at a **matched
+  token budget** (both start from the same embedding search). At ~equal tokens Shonkor covers the target
+  symbol **≈ 98 % vs chunked-RAG's ≈ 76 %** (+22 pp), and delivers it as a structured capsule (call graph +
+  signatures) rather than raw text chunks. Chunk embeddings are cached (`bench/rag-chunk-cache.json`).
 
-Shonkor thus allows a **highly profitable operation** of LLM chatbots, since the expensive context is reduced to an absolute minimum without the LLM losing the architectural overview.
+> Honest by construction: the token comparison is the budgeted capsule vs the *same retrieved nodes* dumped
+> in full (no whole-repo strawman); the RAG head-to-head matches token budgets so it compares coverage, not
+> a rigged token count. Numbers are DB-dependent; reproduce with the commands above.
 
 ---
 
@@ -56,17 +74,21 @@ The project follows a clean **Clean Architecture** structure:
 
 ```
 src/
-  ├── Shonkor.Core/          # Domain models, interfaces, AST parser & capsule synthesizer
-  ├── Shonkor.Infrastructure/# SQLite graph storage, crawler (SHA256), assembly-plugin registry/loader, cross-tech linker
-  ├── Shonkor.Plugin.Cms/    # Example first-party plugin (Optimizely/Kentico/Sitecore parsers) — built & installed as a ZIP
-  ├── Shonkor.CLI/           # Console interface (init, index, search, capsule, mcp) + MCP server
-  └── Shonkor.Web/           # Minimal APIs, API key middleware & glassmorphic web dashboard (wwwroot)
+  ├── Shonkor.Core/            # Domain models, interfaces, AST parser, capsule synthesizer, hybrid fusion
+  ├── Shonkor.Infrastructure/  # SQLite graph storage, crawler (SHA256), assembly-plugin registry/loader,
+  │                            #   cross-tech + semantic C# linker, embedding/enrichment services
+  ├── Shonkor.Plugin.Sitecore/ # First-party CMS plugins (Sitecore / Kentico / Optimizely content-model
+  ├── Shonkor.Plugin.Kentico/  #   parsers) — each built & installed as a ZIP
+  ├── Shonkor.Plugin.Optimizely/
+  ├── Shonkor.CLI/             # Console interface (init, index, search, capsule, mcp) + MCP server
+  ├── Shonkor.Bench/           # Unified benchmark harness: token reduction + retrieval precision
+  └── Shonkor.Web/             # Minimal APIs, API key middleware & glassmorphic web dashboard (wwwroot)
 tests/
-  └── Shonkor.Tests/         # Unit tests for parser, SQLite CTE, concurrency & type reference linking
+  └── Shonkor.Tests/           # Unit tests for parser, SQLite CTE, concurrency, linking & enrichment
 docs/
-  ├── developer/arc42/        # Developer documentation according to arc42 standard (Chapters 1-8)
-  ├── user/                   # User manuals (setup, CLI, LLM integration)
-  └── architecture/           # Architecture reviews
+  ├── developer/arc42/         # Developer documentation according to arc42 standard (Chapters 1-8)
+  ├── user/                    # User manuals (setup, CLI, LLM integration)
+  └── architecture/            # Architecture reviews
 ```
 
 ---

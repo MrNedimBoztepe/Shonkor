@@ -17,7 +17,26 @@ public interface ISemanticGraphStore
     Task<IReadOnlyList<GraphNode>> GetNodesPendingSemanticAnalysisAsync(int batchSize, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the semantic summary of a node and resets its pending flag.
+    /// Updates the semantic summary of a node and resets its pending flag. <paramref name="embeddingModel"/>
+    /// (when an embedding is supplied) records which model produced the vector, so a later model change is
+    /// detectable even at an unchanged dimension.
     /// </summary>
-    Task UpdateNodeSemanticDataAsync(string nodeId, SemanticAnalysisResult result, float[]? embedding = null, CancellationToken cancellationToken = default);
+    Task UpdateNodeSemanticDataAsync(string nodeId, SemanticAnalysisResult result, float[]? embedding = null, string? embeddingModel = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Flags stored embeddings that no longer match the current model for re-embedding (clears the vector and
+    /// re-marks the node as pending), instead of letting the vector search silently skip or mis-rank them
+    /// after a model/dimension change. A vector is stale if its stored dimension differs from
+    /// <paramref name="expectedDim"/>, or — when <paramref name="expectedModel"/> is given — its stored model
+    /// differs (catches a same-dimension model swap). Returns the number flagged; embeddings whose
+    /// dimension/model metadata is unknown (null) are left untouched.
+    /// </summary>
+    Task<int> MarkStaleEmbeddingsForReembedAsync(int expectedDim, string? expectedModel = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Writes only a node's embedding vector (and its dimension + <paramref name="embeddingModel"/>), without
+    /// touching its summary, concepts or pending flag. Used by the CLI embed pass, which populates vectors for
+    /// semantic/hybrid search without running LLM summarization. A <c>null</c>/empty vector clears the embedding.
+    /// </summary>
+    Task UpdateNodeEmbeddingAsync(string nodeId, float[]? embedding, string? embeddingModel = null, CancellationToken cancellationToken = default);
 }

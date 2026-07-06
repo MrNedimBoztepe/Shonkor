@@ -15,6 +15,9 @@ public static class McpToolRegistryFactory
     {
         // Group 1 — memory & stats
         new GetStatsTool(),
+        new HotspotsTool(),
+        new ClustersTool(),
+        new AuditTool(),
         new VerifyExistsTool(),
         new GetOpenThreadsTool(),
         new RecordTool(),
@@ -23,6 +26,7 @@ public static class McpToolRegistryFactory
         new SearchGraphTool(),
         new LocateTool(),
         new SearchSemanticTool(),
+        new SearchHybridTool(),
 
         // Group 3 — read
         new SignatureTool(),
@@ -38,6 +42,7 @@ public static class McpToolRegistryFactory
         new CallHierarchyTool(),
         new ImplementationsOfTool(),
         new FindPathTool(),
+        new SurprisingConnectionsTool(),
 
         // Group 5 — edit loop
         new ReindexFileTool(),

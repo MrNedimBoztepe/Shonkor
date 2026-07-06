@@ -34,13 +34,17 @@ Scans the specified directory and builds the semantic knowledge graph.
   * `[directory]` *(Optional)*: The path to the directory to scan. Defaults to the current directory (`.`).
 * **Options:**
   * `-c, --config <file>`: Path to the configuration file (Default: `shonkor.json`).
+* **C# resolution:** exact **semantic** resolution (Roslyn `SemanticModel` — disambiguated `REFERENCES_TYPE`, method-level `CALLS`) runs **by default**. It is non-lossy (unresolved references fall back to name matching) but builds a compilation per scan (~2.9× indexing time on a mid-size C# tree). Force the faster name-based resolver with `SHONKOR_SEMANTIC_CSHARP=false`.
 * **Example:**
   ```powershell
-  # Indexes the current directory with default configuration
+  # Indexes the current directory (semantic C# resolution on by default)
   shonkor index
-  
+
   # Indexes a different directory with a specific configuration
   shonkor index C:\Projects\MyProject --config MyProjectConfig.json
+
+  # Faster, name-based C# resolution (less precise, no Roslyn compilation)
+  $env:SHONKOR_SEMANTIC_CSHARP="false"; shonkor index
   ```
 
 ---
