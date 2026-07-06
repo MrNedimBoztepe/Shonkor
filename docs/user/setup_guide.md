@@ -121,7 +121,17 @@ Trade-off: it builds a Roslyn compilation per scan. On this repo's `src` (168 fi
 It needs no project build: intra-codebase symbols resolve from the source itself; references into un-referenced third-party types are simply skipped.
 
 ### Embedding source & semantic search
-Semantic (vector) search embeds a **structured code document** per node — `type + name + signature + summary + bounded body` — not just the AI summary, which measurably improves natural-language ("intent") retrieval. Configure via `Embedding:Source` (`code` (default) | `summary`). Query and index embeddings are kind-aware; optional nomic task prefixes are available via `EmbeddingService:QueryPrefix` / `EmbeddingService:DocumentPrefix` (default off). Each stored vector records its dimension, so changing the embedding model automatically re-embeds affected nodes instead of silently dropping them from search.
+Semantic (vector) search embeds a **structured code document** per node — `type + name + signature + summary + bounded body` — not just the AI summary, which measurably improves natural-language ("intent") retrieval. Configure via `Embedding:Source` (`code` (default) | `summary`). Query and index embeddings are kind-aware; optional nomic task prefixes are available via `EmbeddingService:QueryPrefix` / `EmbeddingService:DocumentPrefix` (default off). Each stored vector records its **dimension and model**, so changing the embedding model (even to another of the same dimension) re-embeds affected nodes on the next enrichment cycle instead of silently mixing vector spaces in search.
+
+### AI & tool settings (dashboard or config)
+The AI/tool settings can be set two ways:
+
+* **In the dashboard** — Settings → **AI** tab: Ollama URL + generation model, embedding URL + model, embedding source (`code`/`summary`), semantic-C# default, answer streaming, and the enrichment batch size / parallelism. Saving writes them and they take effect on the next request/enrichment cycle (the drift-worker interval needs a restart).
+* **In config / env** — the same keys in `appsettings.json` or as environment variables (`SemanticAnalyzer:OllamaUrl`, `EmbeddingService:OllamaModel`, `Embedding:Source`, `Indexing:SemanticCSharp`, `Features:StreamingAnswers`, `SemanticEnrichment:*`, `Drift:ReconcileIntervalSeconds`).
+
+Precedence & safety:
+* Dashboard writes go to a machine-local, **gitignored `appsettings.Local.json`** overlay (loaded with `reloadOnChange`). It overrides `appsettings.json` but sits **below environment variables**, so a Docker/k8s env config still wins over a local dashboard edit.
+* Writing settings changes server behaviour, so `POST /api/settings` is **loopback-only** and disabled outside Development unless you set `Security:AllowSettingsWrite=true`. **Secrets** (API keys, webhook secret) are never exposed or written here — keep them in user-secrets / env.
 
 ---
 
