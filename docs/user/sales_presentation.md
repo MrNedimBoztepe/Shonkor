@@ -15,10 +15,10 @@ Artificial Intelligence is revolutionizing software development, but traditional
 * **Our Solution**: A Roslyn-based compiler AST parser breaks the code down into real nodes (classes, methods) and edges (inheritances, calls). The AI receives the physical, mathematically exact context.
 * **Result**: **0% hallucinations** due to structural errors. The code compiles on the first try.
 
-### 2. Up to 92% Token & Cost Savings (ROI)
+### 2. Fewer Tokens Per Query (ROI)
 * **The Problem**: To explain complex tasks to an AI, developers often have to copy entire folders or huge sections of code into the prompt. This clogs the context window and drives up API fees (e.g., GPT-4o or Claude 3.5).
 * **Our Solution**: The integrated *Context Capsule Synthesizer* performs an N-hop graph traversal and prunes irrelevant noise. The LLM receives only the mathematically relevant code parts.
-* **Result**: **Over 90% lower token costs** while simultaneously achieving higher response quality.
+* **Result**: In the reproducible benchmark, **≈ 41 % fewer tokens** per query on a mid-sized graph (up to **~88 %** on larger, hub-dense codebases) — measured against dumping the *same* retrieved subgraph in full, not against the whole repo — while raising the coverage of the symbol you actually need.
 
 ### 3. Absolute Data Security (100% Enterprise-Compliant)
 * **The Problem**: Many companies prohibit the use of AI editors because code must be uploaded to external vector servers in the cloud. This violates intellectual property (IP) and GDPR guidelines.
@@ -42,26 +42,23 @@ The following performance metrics were collected in a real production environmen
 | **Database Size (Footprint)** | **352 KB** | Local SQLite database (`shonkor.db`) – highly compressed and directly versionable in Git. |
 | **Search Latency (Seed Finding)** | **< 5 milliseconds** | BM25-weighted SQLite FTS5 (Full-Text Search) across the entire source code. |
 | **Traversal Latency** | **< 10 milliseconds** | Recursive Common Table Expressions (CTEs) resolve N-hop connections at the SQL level. |
-| **Token Savings** | **~92% reduction** | Search for `SqliteGraphStorageProvider` yields a capsule of only **1,148 tokens** instead of > 15,000 tokens of the entire codebase. |
+| **Token Savings** | **≈ 41 % reduction** (up to ~88 % on hub-dense graphs) | Budget-aware capsule vs. dumping the *same* retrieved 2-hop subgraph in full — the fair baseline. Reproducible via `Shonkor.Bench`; see the README Benchmark section. |
+| **Retrieval (exact name)** | **Precision@1 0,95 / Recall@10 1,00** | FTS5 keyword search, 200 self-retrieval cases. |
+| **Retrieval (plain-English intent)** | **Recall@10 0,37 → 0,97** | Keyword vs. code-embedding vector search, 150 doc-comment-derived cases (symbol name stripped). |
 
 ---
 
 ## 💰 ROI Calculation (Example for a Developer Team)
 
-Assuming a team of **10 developers** each makes **20 complex code requests** per day to a premium LLM (like GPT-4o at $5.00 per 1 million input tokens).
+Assuming a team of **10 developers** each makes **20 complex code requests** per day to a premium LLM (GPT-4o at $5.00 per 1M input tokens), **220 working days** per year. This is an illustrative model — the actual saving depends on how much context you would otherwise send, and is anchored to the benchmark's **measured reduction band of ≈ 41 % (mid-sized graph) to ~88 % (hub-dense graph)** against dumping the same retrieved subgraph in full.
 
-### Without Shonkor (Full Workspace Context / Naive RAG):
-* Average context per prompt (Code files + overhead): **25,000 Tokens**
-* Cost per day: `10 developers * 20 prompts * 25,000 tokens * $0.000005 = $25.00 / day`
-* Cost per year (220 working days): **$5,500.00**
-
-### With Shonkor (Pruned GraphRAG Context):
-* Average context per prompt (Precise Context Capsule): **1,200 Tokens** (95.2% savings)
-* Cost per day: `10 developers * 20 prompts * 1,200 tokens * $0.000005 = $1.20 / day`
-* Cost per year (220 working days): **$264.00**
+* **Baseline** — dumping the relevant retrieved subgraph in full: **~10,000 tokens/prompt** → `10 × 20 × 10,000 × $0.000005 × 220 = $2,200 / year`.
+* **With Shonkor** — budget-aware capsule at the measured reduction:
+  * Conservative (**41 %** cut → ~5,900 tokens): **~$1,298 / year** → **~$902 saved**.
+  * Hub-dense (**88 %** cut → ~1,200 tokens): **~$264 / year** → **~$1,936 saved**.
 
 > [!TIP]
-> **Net Savings**: **$5,236.00 per year** for a small team of 10 – with simultaneously **significantly better response quality**, as the LLM is not distracted by irrelevant code!
+> The real win is not just cost: at a matched token budget Shonkor covers the target symbol **98 % vs 77 %** for plain chunked RAG (+21 pp), so the LLM is far less likely to answer from incomplete context.
 
 ---
 
@@ -102,4 +99,4 @@ graph TD
 
 ### 3. For the CFO / Procurement
 * **Keynote**: *"Drastically reduce your monthly LLM API costs."*
-* **Main Arguments**: Over 90% token pruning. The investment in Shonkor pays for itself in the first month through reduced token costs.
+* **Main Arguments**: In the reproducible benchmark, the context capsule cuts the tokens sent per query by **≈ 41 %** on a mid-sized graph — measured against dumping the same retrieved subgraph in full — and by up to **~88 %** on larger, hub-dense codebases. Fewer tokens per query means proportionally lower LLM API costs, and running fully local removes per-token SaaS fees for indexing/embeddings entirely.
