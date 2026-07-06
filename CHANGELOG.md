@@ -5,6 +5,14 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — Whole-graph insight MCP tools
+- **`hotspots`** — ranks change-risk "god nodes" by betweenness centrality over the coupling subgraph
+  (widest blast radius). Deterministic, no model.
+- **`clusters`** — groups the graph into modularity communities (`mode=modularity`) or connected
+  components (`mode=components`, where small clusters flag isolated / likely-dead modules). Deterministic.
+- **`surprising_connections`** — node pairs whose embeddings are similar but that have no edge (candidate
+  missing links / duplication). Requires an embedding pass; inferred hints only.
+
 ### Added — Editable AI/tool settings in the dashboard
 - **`GET`/`POST /api/settings`**: read and change the Ollama endpoints/models, embedding source, answer
   streaming, semantic-C# default, and enrichment batch/parallelism from the Atlas dashboard's Settings →

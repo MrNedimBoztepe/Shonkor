@@ -116,6 +116,13 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 | `implementations_of` | Types that implement an interface / extend a base type | `IMPLEMENTS`/`EXTENDS`, with `file:line` + summaries |
 | `verify_exists` | Fact-check a symbol exists **before** asserting it | `YES`/`NO` + nearest names — anti-hallucination |
 
+**Insight — whole-graph topology** (deterministic; no model, over the coupling subgraph with structural containment excluded)
+| Tool | Purpose | Note |
+|------|---------|------|
+| `hotspots` | Change-risk "god nodes" ranked by **betweenness centrality** — the nodes most shortest-paths flow through, so a change there has the widest blast radius | `name  type  handle  betweenness=… degree=…`, highest first; `limit` (default 15) |
+| `clusters` | Group the graph into clusters. `mode=modularity` (default) = cohesive communities; `mode=components` = connected components, where **small clusters flag isolated modules / likely-dead code** | Returns cluster count, largest size, and members of the smallest clusters (`maxSmallClusters`) |
+| `surprising_connections` | Node pairs whose **embeddings are similar but that have no edge** — candidate missing links or duplication | Requires an embedding pass; `A ~ B  similarity=…` strongest first; `minSimilarity` (default 0.85). Inferred hints, never proven relationships |
+
 **Plan & apply a change**
 | Tool | Purpose | Note |
 |------|---------|------|
