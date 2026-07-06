@@ -32,8 +32,9 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
   * **Memory**: `get_open_threads`, `record` (`type` = decision / milestone / task / question).
   * See the [LLM Integration Manual](docs/user/llm_integration.md) for the full reference.
 * **Visual Web Dashboard**: A glassmorphic web interface with interactive 2D force-directed graph visualization (`force-graph`, WebGL Canvas), live physics, code preview (Prism.js), capsule creator, project and plugin management.
-  * **Dual Search Modes**: Toggle between FTS5 Keyword Search (Network icon) and Vector-based Semantic Search (Brain icon).
-  * **Ask AI (GraphRAG)**: Instantly generate AI answers based on the retrieved code context nodes using a local Ollama model directly in the dashboard UI.
+  * **Search Modes**: Keyword (FTS5) or, in "Brain" mode, **Hybrid** search — Reciprocal Rank Fusion of FTS + vector similarity (falls back to keyword when no embeddings/backend are present).
+  * **Ask AI (GraphRAG)**: Generate AI answers grounded in the retrieved code context nodes using a local Ollama model, **streamed token-by-token** with per-claim source citations.
+  * **AI Settings**: Configure the Ollama endpoints/models, embedding source, answer streaming, and the semantic-C# default from the dashboard's Settings → **AI** tab (loopback-only writes; applied without a restart).
   * **Impact & Dependencies panel**: Selecting a node shows its authoritative "Referenced by" / "Depends on" lists (with AI summaries), and a **Find Path** tool traces the shortest connection to any other symbol.
 * **Multi-Project Registry**: Manage multiple codebases in parallel (`projects.json`), each with its own database.
 * **Powerful CLI**: Automation via `init`, `index`, `search`, `capsule`, and `mcp`.

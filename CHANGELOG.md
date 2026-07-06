@@ -5,6 +5,36 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — Insights panel in the dashboard
+- New **Insights** station in the Atlas dashboard surfacing the graph-insight features that were previously
+  MCP-only: **Hotspots** (change-risk god nodes), **Clusters** (modularity communities or connected
+  components with a mode toggle; small clusters = likely-dead code), and **Surprising connections**
+  (embedding-similar pairs with no edge, each with an on-demand LLM "explain"). Every listed node is
+  clickable and focuses it in the graph.
+- Backed by new REST endpoints **`GET /api/insights/hotspots`** and **`GET /api/insights/clusters`** (the
+  REST twins of the `hotspots`/`clusters` MCP tools; surprising-connections already had its endpoint), gated
+  behind the API-key middleware like the rest of `/api/*`.
+
+### Added — Whole-graph insight MCP tools
+- **`hotspots`** — ranks change-risk "god nodes" by betweenness centrality over the coupling subgraph
+  (widest blast radius). Deterministic, no model.
+- **`clusters`** — groups the graph into modularity communities (`mode=modularity`) or connected
+  components (`mode=components`, where small clusters flag isolated / likely-dead modules). Deterministic.
+- **`surprising_connections`** — node pairs whose embeddings are similar but that have no edge (candidate
+  missing links / duplication). Requires an embedding pass; inferred hints only.
+
+### Added — Editable AI/tool settings in the dashboard
+- **`GET`/`POST /api/settings`**: read and change the Ollama endpoints/models, embedding source, answer
+  streaming, semantic-C# default, and enrichment batch/parallelism from the Atlas dashboard's Settings →
+  **AI** tab — no more editing `appsettings.json` by hand. Writes are **loopback-only** and opt-in outside
+  Development (`Security:AllowSettingsWrite`, mirroring `/api/browse`); secrets are never exposed or written.
+- Writes land in a machine-local, gitignored **`appsettings.Local.json`** overlay, loaded with
+  `reloadOnChange` and inserted **below** environment variables (so deployment env still wins). Most settings
+  apply on the next request/enrichment cycle; the drift-worker interval remains restart-only.
+- Enrichment reads `Embedding:Source` / batch / parallelism **per cycle**, so dashboard edits take effect
+  without a restart. Stored vectors record their **model** (`EmbeddingModel`) as well as dimension, so a
+  same-dimension model swap is detected and re-embedded, not silently mixed into the vector search.
+
 ### Added — Precision roadmap #2 (retrieval reaches the main paths; grounding measured)
 - **Semantic/hybrid search now works on the CLI and MCP paths, not just the web dashboard.**
   `shonkor index --embed` populates code embeddings at index time (opt-in; needs a reachable Ollama), and
