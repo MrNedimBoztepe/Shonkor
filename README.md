@@ -37,7 +37,7 @@ Shonkor also integrates natively with **Ollama (local)** to enrich nodes in the 
   * **AI Settings**: Configure the Ollama endpoints/models, embedding source, answer streaming, and the semantic-C# default from the dashboard's Settings → **AI** tab (loopback-only writes; applied without a restart).
   * **Impact & Dependencies panel**: Selecting a node shows its authoritative "Referenced by" / "Depends on" lists (with AI summaries), and a **Find Path** tool traces the shortest connection to any other symbol.
 * **Multi-Project Registry**: Manage multiple codebases in parallel (`projects.json`), each with its own database.
-* **Powerful CLI**: Automation via `init`, `index`, `search`, `capsule`, and `mcp`.
+* **Powerful CLI**: Automation via `init`, `index` (`--embed` for semantic search), `search`, `capsule`, `mcp`, `agents` (print an AGENTS.md/CLAUDE.md snippet), and `plugin`.
 
 ---
 
@@ -101,7 +101,7 @@ src/
 tests/
   └── Shonkor.Tests/           # Unit tests for parser, SQLite CTE, concurrency, linking & enrichment
 docs/
-  ├── developer/arc42/         # Developer documentation according to arc42 standard (Chapters 1-8)
+  ├── developer/arc42/         # Developer documentation following the arc42 standard (chapters 1-6, 8)
   ├── user/                    # User manuals (setup, CLI, LLM integration)
   └── architecture/            # Architecture reviews
 ```
@@ -186,7 +186,7 @@ Shonkor is primarily designed as a **local** tool. For operation behind a proxy 
 * **API keys / user tokens are stored SHA-256 hashed**, never in plaintext — `projects.json` holds only the hash, comparison is constant-time (`FixedTimeEquals`), and any legacy plaintext is auto-migrated to a hash on load. A new user's token is shown **once** at creation.
 * **API Keys & Secrets** do **not** belong in `appsettings.json` or `projects.json` (both are gitignored), but in user secrets / environment variables (`ApiKeys__<key>=<projectName>`, `GitHub__WebhookSecret=…`).
 * The **Loopback Auth Bypass** is only active in `Development`; in production, the API key check always applies.
-* **Plugins are pre-built assemblies**, installed from a ZIP and **inert until explicitly activated** — there is no runtime compilation of source (the old C#-source/Roslyn plugin path, an RCE vector, has been removed). Manage them with `shonkor plugin install <zip> | activate <id> | deactivate <id> | list | uninstall <id>` (or the loopback-only web API). `Security:EnablePlugins` is now an opt-OUT kill switch (default on); per-plugin activation is the trust gate. See the example plugin in `src/Shonkor.Plugin.Cms` (CMS content-model parsers).
+* **Plugins are pre-built assemblies**, installed from a ZIP and **inert until explicitly activated** — there is no runtime compilation of source (the old C#-source/Roslyn plugin path, an RCE vector, has been removed). Manage them with `shonkor plugin install <zip> | activate <id> | deactivate <id> | list | uninstall <id>` (or the loopback-only web API). `Security:EnablePlugins` is now an opt-OUT kill switch (default on); per-plugin activation is the trust gate. See the first-party CMS plugins in `src/Shonkor.Plugin.Sitecore`, `src/Shonkor.Plugin.Kentico`, and `src/Shonkor.Plugin.Optimizely` (CMS content-model parsers, each built & installed as a ZIP).
 * **Webhooks** verify `X-Hub-Signature-256` (HMAC) and fail without a configured secret (fail-closed).
 * `/api/browse` (file system browser) is only accessible locally/in development.
 

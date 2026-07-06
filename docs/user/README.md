@@ -6,22 +6,22 @@ Welcome to the Shonkor user documentation. These guides are written for software
 
 ## 📚 Table of Contents
 
-### 1. ⚙️ [Setup & Onboarding Guide](file:///c:/Projects/Brain/docs/user/setup_guide.md)
+### 1. ⚙️ [Setup & Onboarding Guide](setup_guide.md)
 * Step-by-step installation and startup.
 * Configuration via `shonkor.json`.
 * Exclusion patterns (glob patterns) for performance optimization.
 
-### 2. 💻 [CLI Reference Manual](file:///c:/Projects/Brain/docs/user/cli_reference.md)
+### 2. 💻 [CLI Reference Manual](cli_reference.md)
 * Description of all CLI commands: `init`, `index`, `search`, `capsule`, and `mcp` (+`mcp install`).
 * Arguments, parameters, and practical terminal examples.
 * Interpretation of database statistics.
 
-### 3. 🤖 [LLM & IDE Integration](file:///c:/Projects/Brain/docs/user/llm_integration.md)
+### 3. 🤖 [LLM & IDE Integration](llm_integration.md)
 * Live connection via the **MCP Server** (**Claude**, **Antigravity**) including tool overview.
 * Usage of generated context capsules in **Cursor** and **VS Code**.
 * Integration into web interfaces (**ChatGPT**, **Claude.ai**).
 
-### 4. 📈 [Sales Presentation / Pitch Deck](file:///c:/Projects/Brain/docs/user/sales_presentation.md)
+### 4. 📈 [Sales Presentation / Pitch Deck](sales_presentation.md)
 * Core value propositions, pitch, and target audiences.
 * Reliable metrics, performance benchmarks, and technical proof.
 * ROI calculation and token cost savings for enterprise customers.
