@@ -66,14 +66,14 @@ Assuming a team of **10 developers** each makes **20 complex code requests** per
 
 ```mermaid
 graph TD
-    subgraph Vector-RAG (Probabilistic)
+    subgraph vr["Vector-RAG (Probabilistic)"]
         A[Codebase] -->|Arbitrary Split| B[Text Slices]
         B -->|Embedding| C[Vector Search]
         C -->|Imprecise Matches| D[Possible Context]
         D -->|Missing Relationships| E[LLM Hallucination]
     end
 
-    subgraph Shonkor GraphRAG (Deterministic)
+    subgraph sg["Shonkor GraphRAG (Deterministic)"]
         F[Codebase] -->|Compiler AST Parsing| G[Semantic Graph]
         G -->|SQLite FTS5 Keyword Match| H[Precise Seed Node]
         H -->|Recursive SQL CTE Traversal| I[N-Hop Subgraph]
