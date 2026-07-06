@@ -34,6 +34,7 @@ Scans the specified directory and builds the semantic knowledge graph.
   * `[directory]` *(Optional)*: The path to the directory to scan. Defaults to the current directory (`.`).
 * **Options:**
   * `-c, --config <file>`: Path to the configuration file (Default: `shonkor.json`).
+  * `--embed`: Generate code embeddings during indexing (needs a reachable Ollama backend) so semantic/hybrid search works from the CLI and MCP paths.
 * **C# resolution:** exact **semantic** resolution (Roslyn `SemanticModel` — disambiguated `REFERENCES_TYPE`, method-level `CALLS`) runs **by default**. It is non-lossy (unresolved references fall back to name matching) but builds a compilation per scan (~2.9× indexing time on a mid-size C# tree). Force the faster name-based resolver with `SHONKOR_SEMANTIC_CSHARP=false`.
 * **Example:**
   ```powershell

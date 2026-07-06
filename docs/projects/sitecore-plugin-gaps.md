@@ -1,7 +1,7 @@
 # Sitecore-Plugin — Gap-Analyse & Roadmap
 
-Kritische Bestandsaufnahme der Sitecore-spezifischen Parser im CMS-Plugin
-(`src/Shonkor.Plugin.Cms/`), mit definierten Entwickler-Features und Folgenabschätzung.
+Kritische Bestandsaufnahme der Sitecore-spezifischen Parser
+(seit dem CMS-Plugin-Split in `src/Shonkor.Plugin.Sitecore/`; die Analyse stammt aus der Zeit des gebündelten `Shonkor.Plugin.Cms`), mit definierten Entwickler-Features und Folgenabschätzung.
 
 ## Ist-Zustand
 - **SitecoreUnicornPlugin** (`.yml`): `SitecoreItem`-Knoten + Kanten `BASED_ON_TEMPLATE`, `HAS_CHILD`, `REFERENCES`. Brauchbare Basis.
@@ -40,7 +40,7 @@ Kritische Bestandsaufnahme der Sitecore-spezifischen Parser im CMS-Plugin
 
 ## Empfohlene Reihenfolge
 1. ✅ **F1/F2 + B0/B7-Fix** — Präsentation/Vererbung + GUID-Normalisierung + Test.
-2. ✅ **F5 Helix** in `src/Shonkor.Plugin.Cms` portiert. (B1 entfiel: Root-`plugins/` ist gitignored/untracked, kein committeter Code.)
+2. ✅ **F5 Helix** in `src/Shonkor.Plugin.Sitecore` portiert. (B1 entfiel: Root-`plugins/` ist gitignored/untracked, kein committeter Code.)
 3. ✅ **F4 XM-Cloud/JSS** echtes Parsing (Component↔Route↔Datasource). ✅ **F6 Config**-/Patch-Graph.
 4. ⏳ **2-Phasen-Plugin-Vertrag** entwerfen → schaltet F3/F7/F8 + Helix-Verletzungen + `clrtype:`-Auflösung frei.
 

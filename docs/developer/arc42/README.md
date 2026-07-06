@@ -8,36 +8,36 @@ The documentation is intended for software architects, developers, and auditors 
 
 ## 📚 Chapter Directory
 
-### 📄 [Chapter 1: Introduction & Goals](file:///c:/Projects/Brain/docs/developer/arc42/01_introduction_and_goals.md)
+### 📄 [Chapter 1: Introduction & Goals](01_introduction_and_goals.md)
 * Task definition and core requirements (Precise GraphRAG, 100% offline portability).
 * Quality goals (Precision over probability, performance, token pruning).
 * Stakeholder overview.
 
-### 📄 [Chapter 2: Architecture Constraints](file:///c:/Projects/Brain/docs/developer/arc42/02_architecture_constraints.md)
+### 📄 [Chapter 2: Architecture Constraints](02_architecture_constraints.md)
 * Technical constraints (.NET 10, SQLite, 0 external dependencies).
 * Organizational constraints (GitFlow, arc42 standard).
 * Conventions (.NET Code Guidelines, Clean Code).
 
-### 📄 [Chapter 3: System Scope and Context](file:///c:/Projects/Brain/docs/developer/arc42/03_system_scope_and_context.md)
+### 📄 [Chapter 3: System Scope and Context](03_system_scope_and_context.md)
 * Business context (Data flows between developer, workspace source code, and LLMs).
 * Technical context (CLI, Web dashboard, file system crawler).
 
-### 📄 [Chapter 4: Solution Strategy](file:///c:/Projects/Brain/docs/developer/arc42/04_solution_strategy.md)
+### 📄 [Chapter 4: Solution Strategy](04_solution_strategy.md)
 * Fundamental decisions and solution approaches.
 * Why SQLite FTS5 + Recursive CTEs?
 * Multi-language AST parsing concept.
 
-### 📄 [Chapter 5: Building Block View](file:///c:/Projects/Brain/docs/developer/arc42/05_building_block_view.md)
+### 📄 [Chapter 5: Building Block View](05_building_block_view.md)
 * Static structure of the system (Level 1 and Level 2).
 * Breakdown into Core, Infrastructure, CLI, and Web.
 * Interface design.
 
-### 📄 [Chapter 6: Runtime View](file:///c:/Projects/Brain/docs/developer/arc42/06_runtime_view.md)
+### 📄 [Chapter 6: Runtime View](06_runtime_view.md)
 * Dynamic behavior of the system.
 * Sequence diagram for incremental indexing.
 * Sequence diagram for recursive subgraph extraction and capsule synthesis.
 
-### 📄 [Chapter 8: Concepts](file:///c:/Projects/Brain/docs/developer/arc42/08_concepts.md)
+### 📄 [Chapter 8: Concepts](08_concepts.md)
 * AST graph metamodel.
 * FTS5 + Recursive CTE (UNION ALL + MIN-Depth) and batch edge loading.
 * Type references (`REFERENCES_TYPE`) & cross-technology linking.

@@ -114,8 +114,9 @@ All notable changes to Shonkor are documented here. The format follows
   Web: `/api/plugins` (list), `POST /api/plugins/install` (ZIP upload), `.../activate`, `.../deactivate`,
   `DELETE /api/plugins/{id}` — loopback-only for state changes.
 - `Security:EnablePlugins` is now an opt-OUT kill switch (default on); per-plugin activation is the gate.
-- The first-party CMS parsers (Optimizely/Kentico/Sitecore) moved to a new `Shonkor.Plugin.Cms` example
-  plugin project that builds an installable ZIP, instead of being compiled at runtime from embedded source.
+- The first-party CMS parsers moved out of runtime-compiled embedded source into **three pre-built plugin
+  projects** — `Shonkor.Plugin.Sitecore`, `Shonkor.Plugin.Kentico`, and `Shonkor.Plugin.Optimizely` — each
+  building its own installable ZIP.
 
 ### Changed — MCP internals: tool registry (no behavior change)
 - The ~2500-line `McpRequestHandler` god-class is decomposed into an `IMcpTool` registry. Each tool is
