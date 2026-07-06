@@ -45,7 +45,7 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 `src/Shonkor.Bench` is a single, reproducible harness over a built graph DB. Run it with
 `dotnet run --project src/Shonkor.Bench -- shonkor.db` — it writes `bench/report.md` and `bench/metrics.json`,
 and `--baseline bench/metrics.json` gates retrieval Precision@k against a stored run (exit 2 on a regression).
-It measures two things:
+It measures:
 
 * **Token reduction** — the budget-aware capsule (seed-first, hub-capped) vs a **naive full-content dump of
   the same retrieved subgraph** (FTS → 2-hop subgraph → capsule synthesis). On Shonkor's own graph (~1.8k
@@ -53,12 +53,17 @@ It measures two things:
   size / hub density (a larger graph with fatter 2-hop neighbourhoods cuts more).
 * **Retrieval precision** — Precision@1/@k, Recall@k, MRR for FTS5 and (when an Ollama embedding backend is
   reachable) vector search. Exact symbol lookup reaches **Precision@1 ≈ 0.95 / Recall@10 ≈ 0.99** (FTS5, over
-  an auto-bootstrapped self-retrieval set). On the curated natural-language *intent* set (`--set
-  bench/golden/intent.json`), FTS alone only reaches Recall@10 ≈ 0.28, while **vector search lifts it to ≈ 0.98** —
-  the payoff of embedding code, not just keywords.
+  an auto-bootstrapped self-retrieval set). On a **natural-language set generated from the codebase's own doc
+  comments** (`--gen-golden bench/golden/doc-intent.json`, symbol name stripped so keywords can't cheat), FTS
+  collapses to Recall@10 ≈ 0.37 while **vector search reaches ≈ 0.97** — the payoff of embedding code, not keywords.
+* **RAG head-to-head** (`--compare-rag`) — vs a naive **chunked-RAG-without-graph** baseline at a **matched
+  token budget** (both start from the same embedding search). At ~equal tokens Shonkor covers the target
+  symbol **≈ 98 % vs chunked-RAG's ≈ 76 %** (+22 pp), and delivers it as a structured capsule (call graph +
+  signatures) rather than raw text chunks. Chunk embeddings are cached (`bench/rag-chunk-cache.json`).
 
 > Honest by construction: the token comparison is the budgeted capsule vs the *same retrieved nodes* dumped
-> in full — NOT a whole-repo or chunked-RAG strawman. Numbers are DB-dependent; reproduce with the command above.
+> in full (no whole-repo strawman); the RAG head-to-head matches token budgets so it compares coverage, not
+> a rigged token count. Numbers are DB-dependent; reproduce with the commands above.
 
 ---
 

@@ -59,3 +59,4 @@ publish/
 # Bench: per-run, DB-dependent output of the Shonkor.Bench harness (reproduce by running it).
 bench/report.md
 bench/metrics.json
+bench/rag-chunk-cache.json
