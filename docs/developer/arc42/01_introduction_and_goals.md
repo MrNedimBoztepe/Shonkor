@@ -25,7 +25,7 @@ Today's RAG systems (Retrieval-Augmented Generation) mostly rely on probabilisti
 | **1** | **100% Precision** | No assumptions. The LLM receives exactly the physical declarations and relationships that exist in the graph. | 0% false reports about non-existent methods/classes. |
 | **2** | **Portability & Autonomy** | The system runs 100% offline, without external API dependencies, and uses a local SQLite backend. | 0 KB network traffic; database size < 1 MB for standard repositories. |
 | **3** | **Performance** | Indexing of local repositories in seconds. Queries and CTE traversal in milliseconds. | Indexing: > 15 files/sec. <br>Search & Traversal: < 10ms. |
-| **4** | **Token Efficiency** | Pruning (truncating the graph after N hops) minimizes noise and saves expensive LLM tokens. | > 85% token savings compared to providing the entire codebase. |
+| **4** | **Token Efficiency** | Budget-aware capsules (seed-first, hub-capped) minimize noise and save expensive LLM tokens. | ≈ 41 % fewer tokens (up to ~88 % on hub-dense graphs) vs. dumping the *same* retrieved subgraph in full — measured, reproducible via `Shonkor.Bench`. |
 
 ---
 
@@ -49,6 +49,6 @@ The following measurement data was collected directly in the production environm
   * **N-Hop Graph Traversal**: Extracting a 2-hop subgraph including the physical code contents takes **under 10 milliseconds**.
 * **Token Savings (Pruning & Capsule Synthesis)**:
   * For a query regarding the core class `SqliteGraphStorageProvider`, Shonkor generates a complete, prompt-ready context capsule (including Mermaid diagram and code of the relevant methods) with a size of **only 4,592 characters (~1,148 tokens)**.
-  * Compared to transferring the entire codebase, this corresponds to a **token reduction of approx. 92%**. API costs for LLMs thus drop by the same factor, while response quality is significantly higher.
+  * Measured honestly against **dumping the same retrieved 2-hop subgraph in full** (the fair baseline — not the whole codebase, which nobody would send), the budget-aware capsule cuts context tokens by **≈ 41 %** on Shonkor's own graph, rising to **~88 %** on larger, hub-dense graphs. Reproduce with `dotnet run --project src/Shonkor.Bench -- shonkor.db`; see the README **Benchmark** section for the full, current numbers.
 * **Resource Efficiency**:
   * The entire indexed SQLite database (`shonkor.db`) is only **352 KB** in size and can easily be placed under version control in the Git repository.

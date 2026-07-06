@@ -4,7 +4,7 @@ Shonkor is a highly precise, locally executed indexing and query system for code
 
 Unlike probabilistic vector databases, Shonkor guarantees **100% precise and structural context**. It extracts compiler-accurate syntax trees (AST) using **Roslyn (C#)** as well as dependencies for **JavaScript/TypeScript**, **PHP**, **Sitecore configurations (YAML)**, **GraphQL**, and **Markdown hierarchies**.
 
-New: Shonkor natively integrates with **Ollama (local)** to transform the raw source code in the background through small, efficient models (e.g., `qwen2.5-coder`) into highly condensed AI summaries. This reduces the token requirement for downstream RAG queries by up to **87%**!
+Shonkor also integrates natively with **Ollama (local)** to enrich nodes in the background through small, efficient models — code embeddings (`nomic-embed-text`) for meaning-based search and short AI summaries (e.g., `qwen2.5-coder`). In the reproducible benchmark below, the budget-aware context capsule cuts the tokens sent to an LLM by **≈ 41 %** on Shonkor's own graph — measured honestly against dumping the *same* retrieved subgraph in full (not against the whole repo). The saving grows with graph size and hub density.
 
 ---
 
@@ -43,28 +43,43 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 
 ## ⚡️ Benchmark
 
-`src/Shonkor.Bench` is a single, reproducible harness over a built graph DB. Run it with
-`dotnet run --project src/Shonkor.Bench -- shonkor.db` — it writes `bench/report.md` and `bench/metrics.json`,
-and `--baseline bench/metrics.json` gates retrieval Precision@k against a stored run (exit 2 on a regression).
-It measures:
+All numbers below come from one reproducible harness, `src/Shonkor.Bench`, over a built graph DB. Reproduce them yourself:
 
-* **Token reduction** — the budget-aware capsule (seed-first, hub-capped) vs a **naive full-content dump of
-  the same retrieved subgraph** (FTS → 2-hop subgraph → capsule synthesis). On Shonkor's own graph (~1.8k
-  nodes, fresh index): **~41 %** aggregate reduction over the seed queries; the figure scales with graph
-  size / hub density (a larger graph with fatter 2-hop neighbourhoods cuts more).
-* **Retrieval precision** — Precision@1/@k, Recall@k, MRR for FTS5 and (when an Ollama embedding backend is
-  reachable) vector search. Exact symbol lookup reaches **Precision@1 ≈ 0.95 / Recall@10 ≈ 0.99** (FTS5, over
-  an auto-bootstrapped self-retrieval set). On a **natural-language set generated from the codebase's own doc
-  comments** (`--gen-golden bench/golden/doc-intent.json`, symbol name stripped so keywords can't cheat), FTS
-  collapses to Recall@10 ≈ 0.37 while **vector search reaches ≈ 0.97** — the payoff of embedding code, not keywords.
-* **RAG head-to-head** (`--compare-rag`) — vs a naive **chunked-RAG-without-graph** baseline at a **matched
-  token budget** (both start from the same embedding search). At ~equal tokens Shonkor covers the target
-  symbol **≈ 98 % vs chunked-RAG's ≈ 76 %** (+22 pp), and delivers it as a structured capsule (call graph +
-  signatures) rather than raw text chunks. Chunk embeddings are cached (`bench/rag-chunk-cache.json`).
+```powershell
+dotnet run --project src/Shonkor.Bench -- shonkor.db                              # exact-symbol set + token reduction
+dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/doc-intent.json --compare-rag
+```
 
-> Honest by construction: the token comparison is the budgeted capsule vs the *same retrieved nodes* dumped
-> in full (no whole-repo strawman); the RAG head-to-head matches token budgets so it compares coverage, not
-> a rigged token count. Numbers are DB-dependent; reproduce with the commands above.
+It writes `bench/report.md` (human) and `bench/metrics.json` (machine); `--baseline bench/metrics.json` gates retrieval Precision@k against a stored run (exit 2 on a regression). Vector/RAG rows need a reachable Ollama embedding backend; without one the FTS rows still run.
+
+**Measured run** — Shonkor's own graph (`shonkor.db`, 1.763 nodes / 4.036 edges), 2026-07-06, local Ollama `nomic-embed-text`:
+
+**1. Can it find the right symbol? (retrieval precision)**
+
+| Search task | Retriever | Precision@1 | Recall@10 |
+|---|---|---:|---:|
+| **Exact name** ("`SqliteGraphStorageProvider`") — 200 self-retrieval cases | FTS5 keyword | **0,95** | **1,00** |
+| **Plain-English intent** ("marks a plugin so the loader picks it up") — 150 cases from the code's own doc comments, symbol name stripped so keywords can't cheat | FTS5 keyword | 0,13 | 0,37 |
+| same intent set | **vector (code embeddings)** | **0,88** | **0,97** |
+
+*In plain terms:* keyword search is already excellent when you know the name (top hit 95 % of the time). But ask in your own words and keyword search finds the right code only ~37 % of the time — while meaning-based vector search finds it ~97 %. That gap is the whole point of embedding the code.
+
+**2. How much context does it save? (token reduction)**
+
+The budget-aware capsule (seed-first, hub-capped) vs a **full dump of the *same* retrieved subgraph** — a fair baseline, not a whole-repo strawman: **41,1 % fewer tokens** (7 queries, 189.750 → 111.773). This scales with graph size and hub density — on a larger, denser graph (3.784 nodes) the same comparison reached **~88 %**, because fat 2-hop neighbourhoods around hub nodes are exactly what the budget caps.
+
+**3. Is it better than plain RAG? (head-to-head, `--compare-rag`)**
+
+Against a **chunked-RAG-without-graph** baseline at a **matched token budget** (both start from the same embedding search, the baseline then takes as many top text chunks as fit into Shonkor's per-query token count) — so this compares *coverage at equal cost*:
+
+| Retriever | Avg tokens | Covers the target symbol |
+|---|---:|---:|
+| chunked-RAG (no graph) | 5.216 | 76,7 % |
+| **Shonkor capsule** | 5.445 | **98,0 %** |
+
+At roughly equal tokens, Shonkor lands the symbol you actually need **+21 pp more often** — and hands it over as a structured capsule (call graph + signatures) rather than loose text chunks.
+
+> **Honest by construction.** The token comparison is the budgeted capsule vs the *same retrieved nodes* dumped in full (no whole-repo strawman). The RAG head-to-head matches token budgets, so it compares coverage, not a rigged token count. The intent set is generated from the code's own doc comments with the symbol name removed, so keywords can't cheat. All numbers are DB-dependent — they will differ on your codebase; reproduce with the commands above.
 
 ---
 

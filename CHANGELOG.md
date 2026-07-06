@@ -5,6 +5,17 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — Honest, reproducible benchmark numbers in the docs
+- Replaced the inflated "up to 87 % / 90 % / 92 % token reduction vs. the entire codebase" claims (a
+  whole-repo strawman nobody would actually send) across the **README**, **sales presentation**, and
+  **arc42 introduction** with the **measured, reproducible** figures from `Shonkor.Bench` on Shonkor's own
+  graph (2026-07-06): token reduction **≈ 41 %** (up to ~88 % on hub-dense graphs) measured against dumping
+  the *same* retrieved subgraph in full; retrieval **Precision@1 0,95 / Recall@10 1,00** (exact name, FTS5)
+  and **Recall@10 0,37 → 0,97** (plain-English intent, keyword → code-embedding vector); RAG head-to-head
+  **98 % vs 77 % coverage at a matched token budget** (+21 pp). The README Benchmark section was rewritten in
+  plain language with a "what this means" note per metric. The ROI example is now anchored to the measured
+  reduction band instead of a fabricated 95 % saving.
+
 ### Added — Insights panel in the dashboard
 - New **Insights** station in the Atlas dashboard surfacing the graph-insight features that were previously
   MCP-only: **Hotspots** (change-risk god nodes), **Clusters** (modularity communities or connected
