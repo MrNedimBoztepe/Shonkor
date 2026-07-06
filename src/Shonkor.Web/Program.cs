@@ -153,6 +153,7 @@ app.MapAdminEndpoints();
 app.MapStatsEndpoints();
 app.MapSearchEndpoints();
 app.MapSurprisingConnectionsEndpoints();
+app.MapInsightsEndpoints();
 app.MapIndexEndpoints();
 app.MapProjectEndpoints();
 app.MapBrowseEndpoints();

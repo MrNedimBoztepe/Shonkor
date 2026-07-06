@@ -156,6 +156,10 @@
   .hitrow .hn{font-size:14px; font-weight:500; word-break:break-word}
   .hitrow .ht{font-family:var(--mono); font-size:10px; color:var(--ink-2)}
   .hitrow .hl{font-family:var(--mono); font-size:10px; color:var(--ink-3); margin-left:auto; white-space:nowrap}
+  /* clickable node pill (Insights: cluster members & surprising-pair endpoints) */
+  .inode{display:inline-block; font-family:var(--mono); font-size:11px; border:1px solid var(--line-2); border-radius:3px; padding:1px 7px; margin:2px 4px 2px 0; cursor:pointer; color:var(--ink-2); background:var(--paper-2)}
+  .inode:hover{border-color:var(--teal); color:var(--ink)}
+  a.inx{color:var(--teal); text-decoration:none} a.inx:hover{text-decoration:underline}
   .pcard{border:1px solid var(--line-2); border-left-width:3px; padding:13px 15px; margin-bottom:10px; background:var(--paper)}
   .pcard .ph{display:flex; align-items:center; gap:10px}
   .pcard .pname{font-family:var(--serif); font-size:17px; font-weight:500}
@@ -278,6 +282,7 @@
       <div class="st" data-view="hunt" title="Hunt"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M15.5 15.5 20 20"/></svg>Hunt</div>
       <div class="st" data-view="capsule" title="Capsule"><svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="16" rx="1.5"/><path d="M8 9h8 M8 13h6"/></svg>Capsule</div>
       <div class="st" data-view="diag" title="Diagnostics"><svg viewBox="0 0 24 24"><path d="M12 4 21 19 3 19 Z"/><path d="M12 10v4 M12 16.5v.2"/></svg>Diag</div>
+      <div class="st" data-view="insights" title="Insights — hotspots, clusters, surprising connections"><svg viewBox="0 0 24 24"><circle cx="6" cy="7" r="2.2"/><circle cx="17" cy="6" r="2.2"/><circle cx="14" cy="17" r="2.2"/><path d="M8 8l6 8 M8.2 7.4 15 6.4"/></svg>Insights</div>
       <div class="st" data-view="journal" title="Journal — decisions, milestones, tasks, questions"><svg viewBox="0 0 24 24"><path d="M6 4h10l3 3v13H6z"/><path d="M9 9h7 M9 12.5h7 M9 16h4"/></svg>Journal</div>
       <div class="st" data-view="ask" title="Ask — chat with the graph (Ollama)"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-4 4v-4H4z"/><path d="M8.5 10.5h.2 M12 10.5h.2 M15.5 10.5h.2"/></svg>Ask</div>
       <div class="rail-sp"></div>
@@ -786,6 +791,7 @@ function openStation(v){
   if(v==='hunt'){ $('#st-title').textContent='Hunt'; $('#st-sub').textContent='full-text search across the graph'; renderHunt(body); }
   else if(v==='capsule'){ $('#st-title').textContent='Capsule'; $('#st-sub').textContent='synthesize token-optimised context'; renderCapsuleStation(body); }
   else if(v==='diag'){ $('#st-title').textContent='Diagnostics'; $('#st-sub').textContent='graph integrity findings'; renderDiagStation(body); }
+  else if(v==='insights'){ $('#st-title').textContent='Insights'; $('#st-sub').textContent='hotspots · clusters · surprising links'; renderInsights(body); }
   else if(v==='journal'){ $('#st-title').textContent='Journal'; $('#st-sub').textContent='decisions · milestones · tasks · questions'; renderJournal(body); }
   else if(v==='ask'){ $('#st-title').textContent='Ask'; $('#st-sub').textContent='chat with the graph · grounded by Ollama'; renderAsk(body); }
   else if(v==='settings'){ $('#st-title').textContent='Settings'; $('#st-sub').textContent='projects · indexing · plugins'; renderSettings(body); }
@@ -823,6 +829,64 @@ async function runHunt(){
   }catch(e){ res.innerHTML='<div class="sempty">Search failed.</div>'; }
 }
 function huntPick(i){ const n=_huntT[i]; if(!n) return; const id=n.id||n.Id; closeStation(); focusNode(id, {name:n.name||n.Name, type:n.type||n.Type, filePath:n.filePath||n.FilePath, startLine:n.startLine||n.StartLine, summary:n.summary||n.Summary}); }
+
+/* --- Insights (whole-graph topology: hotspots · clusters · surprising connections) --- */
+let _insTab='hotspots', _insMode='modularity', _insNodes=[], _insPairs=[];
+function insNodeIx(n){ _insNodes.push(n); return _insNodes.length-1; }
+function insWireNodes(scope){ scope.querySelectorAll('[data-nix]').forEach(el=>el.onclick=()=>{ const n=_insNodes[+el.getAttribute('data-nix')]; if(n&&n.id){ closeStation(); focusNode(n.id, n); } }); }
+function renderInsights(body){
+  body.innerHTML = `<div class="chips" id="ins-tabs">
+    ${[['hotspots','Hotspots'],['clusters','Clusters'],['surprising','Surprising']].map(([t,l])=>`<span class="chip ${_insTab===t?'on':''}" data-t="${t}">${l}</span>`).join('')}
+  </div><div id="ins-body"><div class="sempty">Loading…</div></div>`;
+  body.querySelectorAll('#ins-tabs .chip').forEach(c=>c.onclick=()=>{ _insTab=c.getAttribute('data-t'); renderInsights(body); });
+  const b=body.querySelector('#ins-body');
+  ({hotspots:insHotspots, clusters:insClusters, surprising:insSurprising}[_insTab]||insHotspots)(b);
+}
+async function insHotspots(b){
+  _insNodes=[]; b.innerHTML='<div class="sempty">Ranking change-risk hotspots by betweenness centrality…</div>';
+  try{
+    const r=await (await fetch('/api/insights/hotspots?limit=20',{headers:H()})).json();
+    const hs=r.hotspots||[];
+    if(!hs.length){ b.innerHTML='<div class="sempty">No coupling edges to rank — index a project with references/calls first.</div>'; return; }
+    b.innerHTML=`<div class="grp">Top ${hs.length} by betweenness centrality — the nodes with the widest change blast radius.</div>`+
+      hs.map(h=>{ const base=(h.filePath||'').split(/[\\/]/).pop(); const ix=insNodeIx({id:h.id,name:h.name,type:h.type,filePath:h.filePath,startLine:h.startLine});
+        return `<div class="hitrow" data-nix="${ix}"><div><div class="hn">${escapeHtml(h.name)}</div><div class="ht">${escapeHtml(h.type)}</div></div>
+          <div class="hl">btw ${h.betweenness} · deg ${h.degree}${base?'<br>'+escapeHtml(base):''}</div></div>`; }).join('');
+    insWireNodes(b);
+  }catch(e){ b.innerHTML='<div class="sempty">Hotspot analysis failed.</div>'; }
+}
+async function insClusters(b){
+  _insNodes=[]; b.innerHTML=`<div class="chips" style="margin-bottom:8px">${['modularity','components'].map(m=>`<span class="chip ${_insMode===m?'on':''}" data-m="${m}">${m}</span>`).join('')}</div><div id="ins-cl"><div class="sempty">Clustering…</div></div>`;
+  b.querySelectorAll('[data-m]').forEach(c=>c.onclick=()=>{ _insMode=c.getAttribute('data-m'); insClusters(b); });
+  const cl=b.querySelector('#ins-cl');
+  try{
+    const r=await (await fetch(`/api/insights/clusters?mode=${_insMode}&maxSmall=15`,{headers:H()})).json();
+    if(!r.count){ cl.innerHTML='<div class="sempty">Empty graph — nothing to cluster.</div>'; return; }
+    const note=_insMode==='components'?' — small clusters are isolated / likely-dead modules':'';
+    cl.innerHTML=`<div class="grp">${r.count} ${_insMode} cluster(s); largest = ${r.largest} nodes. Smallest first${note}.</div>`+
+      (r.clusters||[]).map(c=>{ const tags=(c.members||[]).map(m=>{ const ix=insNodeIx({id:m.id,name:m.name,type:m.type,filePath:m.filePath}); return `<span class="inode" data-nix="${ix}">${escapeHtml(m.name)}</span>`; }).join('');
+        return `<div class="hitrow" style="display:block"><div class="hn">[${c.size} node${c.size===1?'':'s'}]${c.more?` <span style="opacity:.6">+${c.more} more</span>`:''}</div><div style="margin-top:5px">${tags}</div></div>`; }).join('');
+    insWireNodes(cl);
+  }catch(e){ cl.innerHTML='<div class="sempty">Cluster analysis failed.</div>'; }
+}
+async function insSurprising(b){
+  _insNodes=[]; _insPairs=[]; b.innerHTML='<div class="sempty">Finding embedding-similar pairs with no direct edge…</div>';
+  try{
+    const r=await (await fetch('/api/surprising-connections',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify({MinSimilarity:0.85,Limit:25})})).json();
+    const pairs=r.pairs||[];
+    if(!pairs.length){ b.innerHTML=`<div class="sempty">${escapeHtml(r.note||'No surprising connections found.')}</div>`; return; }
+    b.innerHTML=`<div class="grp">${pairs.length} embedding-similar pair(s) with no direct edge — candidate missing links or duplication (inferred, not proven).</div>`+
+      pairs.map((p,i)=>{ _insPairs.push(p); const aix=insNodeIx({id:p.sourceId,name:p.sourceName}); const bix=insNodeIx({id:p.targetId,name:p.targetName});
+        return `<div class="hitrow" style="display:block"><div class="hn"><span class="inode" data-nix="${aix}">${escapeHtml(p.sourceName)}</span> ~ <span class="inode" data-nix="${bix}">${escapeHtml(p.targetName)}</span></div>
+          <div class="ht">similarity ${Number(p.similarity).toFixed(3)} · <a href="#" class="inx" data-ex="${i}">explain</a></div>
+          <div class="smd" id="ins-ex-${i}" style="display:none"></div></div>`; }).join('');
+    insWireNodes(b);
+    b.querySelectorAll('[data-ex]').forEach(el=>el.onclick=async(ev)=>{ ev.preventDefault(); const i=+el.getAttribute('data-ex'); const p=_insPairs[i]; const box=b.querySelector('#ins-ex-'+i);
+      box.style.display='block'; box.textContent='Explaining (local LLM)…';
+      try{ const x=await (await fetch('/api/surprising-connections/explain',{method:'POST',headers:{...H(),'Content-Type':'application/json'},body:JSON.stringify({SourceId:p.sourceId,TargetId:p.targetId})})).json(); box.innerHTML=mdLite((x.explanation||'No explanation.')+'\n\n_(inferred hypothesis)_'); }
+      catch(e){ box.textContent='Explanation failed (is Ollama running?).'; } });
+  }catch(e){ b.innerHTML='<div class="sempty">Surprising-connection detection failed.</div>'; }
+}
 
 /* --- Capsule station --- */
 function renderCapsuleStation(body){
