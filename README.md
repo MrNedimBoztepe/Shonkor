@@ -24,8 +24,8 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
   * **Start here**: `orient` (one-call session bootstrap — graph size, tool palette, the edit loop). Run `shonkor agents` to print an AGENTS.md/CLAUDE.md snippet so assistants reach for the graph reflexively.
   * **Find**: `search_graph` (FTS5), `locate`, `search_semantic` (vector/meaning — only listed when an embedding backend is wired).
   * **Read**: `signature` (signature only), `get_source` (exact symbol body + `file:start-end`), `outline` (file structure), `get_subgraph`, `generate_capsule`, `architecture` (arc42 building-block view + Mermaid module-dependency diagram, for docs/onboarding).
-  * **Analyze**: `references` (`direction=used_by` = who references it / `uses` = what it uses; `depth=1` flat, `depth>1` transitive — ranked blast radius with affected tests flagged, or a dependency tree), `call_hierarchy` (method-level callers/callees over `CALLS`; semantic mode), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).
-  * **Insight (topological, deterministic)**: `hotspots` (change-risk "god nodes" ranked by betweenness centrality — widest blast radius), `clusters` (modularity communities, or connected components where small clusters flag isolated / likely-dead modules), `surprising_connections` (embedding-similar node pairs with **no** edge — candidate missing links or duplication; requires an embedding pass, hints only).
+  * **Analyze**: `references` (`direction=used_by` = who references it / `uses` = what it uses; `depth=1` flat, `depth>1` transitive — ranked blast radius with affected tests flagged, or a dependency tree; `provenance=extracted|inferred|all` trust filter), `call_hierarchy` (method-level callers/callees over `CALLS`; semantic mode), `find_usages` (call sites with code snippets), `find_path` (shortest connection between two symbols), `implementations_of` (interface/base subtypes), `verify_exists` (anti-hallucination fact-check).
+  * **Topology & onboarding** (embedding-free, deterministic): `audit` (one-call briefing: size, EXTRACTED/INFERRED trust mix, god nodes, modules, dead clusters, suggested next calls), `hotspots` (change-risk nodes by betweenness centrality), `clusters` (`mode=modularity` cohesive communities / `mode=components` isolated dead code), `surprising_connections` (embedding-similar-but-unlinked pairs — INFERRED hints).
   * **Plan & apply**: `edit_plan` (a concrete edit checklist), `rename_plan` (overload-precise rename sites from the graph's exact edges, not name-grep), `related_tests` (transitive test impact — exactly what to run after a change), `reindex_file` (refresh one file after editing — relinks its `REFERENCES_TYPE` edges), `check_edit` (compile-check a C# file after editing — Roslyn syntax + semantic errors, self-contained, no `dotnet build`).
   * **Review**: `review` (a code-review briefing for a set of changed files — per-file compile check + aggregated transitive impact + the tests to run + top risks).
   * **Freshness (anti-drift)**: `freshness` (with a `path` = one file's sync state; without = project-wide drift report: changed / new / deleted). The analysis/read tools also **auto-flag** a result whose underlying file changed since indexing (`⚠ … EDITED since indexing — run reindex_file`), so an agent never silently trusts stale data.
@@ -41,21 +41,30 @@ New: Shonkor natively integrates with **Ollama (local)** to transform the raw so
 
 ---
 
-## ⚡️ Benchmark: AI Graphs vs. Classic RAG
+## ⚡️ Benchmark
 
-`src/Shonkor.Benchmarks` measures the **real shipped retrieval path** on Shonkor's own graph: for each
-query it runs FTS search → 2-hop subgraph → capsule synthesis, and compares the **budget-aware capsule**
-(seed-first, hub-capped) against a **naive full-content dump of the same retrieved subgraph** — i.e. what
-an unbudgeted "send everything" RAG would emit:
+`src/Shonkor.Bench` is a single, reproducible harness over a built graph DB. Run it with
+`dotnet run --project src/Shonkor.Bench -- shonkor.db` — it writes `bench/report.md` and `bench/metrics.json`,
+and `--baseline bench/metrics.json` gates retrieval Precision@k against a stored run (exit 2 on a regression).
+It measures:
 
-* **Token reduction:** ~**87.8 %** aggregate (range 17–97 % per query), bounding a 2-hop hub neighbourhood
-  from >200k tokens down to <40k. Reproduce with `dotnet run --project src/Shonkor.Benchmarks -- shonkor.db`.
+* **Token reduction** — the budget-aware capsule (seed-first, hub-capped) vs a **naive full-content dump of
+  the same retrieved subgraph** (FTS → 2-hop subgraph → capsule synthesis). On Shonkor's own graph (~1.8k
+  nodes, fresh index): **~41 %** aggregate reduction over the seed queries; the figure scales with graph
+  size / hub density (a larger graph with fatter 2-hop neighbourhoods cuts more).
+* **Retrieval precision** — Precision@1/@k, Recall@k, MRR for FTS5 and (when an Ollama embedding backend is
+  reachable) vector search. Exact symbol lookup reaches **Precision@1 ≈ 0.95 / Recall@10 ≈ 0.99** (FTS5, over
+  an auto-bootstrapped self-retrieval set). On a **natural-language set generated from the codebase's own doc
+  comments** (`--gen-golden bench/golden/doc-intent.json`, symbol name stripped so keywords can't cheat), FTS
+  collapses to Recall@10 ≈ 0.37 while **vector search reaches ≈ 0.97** — the payoff of embedding code, not keywords.
+* **RAG head-to-head** (`--compare-rag`) — vs a naive **chunked-RAG-without-graph** baseline at a **matched
+  token budget** (both start from the same embedding search). At ~equal tokens Shonkor covers the target
+  symbol **≈ 98 % vs chunked-RAG's ≈ 76 %** (+22 pp), and delivers it as a structured capsule (call graph +
+  signatures) rather than raw text chunks. Chunk embeddings are cached (`bench/rag-chunk-cache.json`).
 
-Retrieval precision over the same graph (`src/Shonkor.Eval`): exact symbol lookup reaches **Precision@1 ≈ 0.98 / Recall@10 ≈ 0.99** (FTS5); for natural-language *intent* queries, embedding **code** (not the 1-sentence summary) lifts **Recall@10 from ~0.27 (FTS) to ~0.93–1.0**. See [`review/results.md`](review/results.md) for full methodology and numbers.
-
-> Note: this compares Shonkor's budgeted capsule to dumping the *same retrieved nodes* in full — it does
-> **not** claim a whole-repo or chunked-RAG comparison. (The previous "87.7 % / 7.6×" figure was a
-> whole-file-vs-summary strawman and has been replaced with this measured, reproducible benchmark.)
+> Honest by construction: the token comparison is the budgeted capsule vs the *same retrieved nodes* dumped
+> in full (no whole-repo strawman); the RAG head-to-head matches token budgets so it compares coverage, not
+> a rigged token count. Numbers are DB-dependent; reproduce with the commands above.
 
 ---
 
@@ -72,8 +81,7 @@ src/
   ├── Shonkor.Plugin.Kentico/  #   parsers) — each built & installed as a ZIP
   ├── Shonkor.Plugin.Optimizely/
   ├── Shonkor.CLI/             # Console interface (init, index, search, capsule, mcp) + MCP server
-  ├── Shonkor.Eval/            # Precision harness: Precision@k / Recall@k / MRR (FTS/semantic/hybrid)
-  ├── Shonkor.Benchmarks/      # Token benchmark of the real capsule path
+  ├── Shonkor.Bench/           # Unified benchmark harness: token reduction + retrieval precision
   └── Shonkor.Web/             # Minimal APIs, API key middleware & glassmorphic web dashboard (wwwroot)
 tests/
   └── Shonkor.Tests/           # Unit tests for parser, SQLite CTE, concurrency, linking & enrichment
@@ -81,8 +89,6 @@ docs/
   ├── developer/arc42/         # Developer documentation according to arc42 standard (Chapters 1-8)
   ├── user/                    # User manuals (setup, CLI, LLM integration)
   └── architecture/            # Architecture reviews
-eval/                          # Golden set + measured baseline for the precision harness
-review/                        # Precision review, improvements, eval plan, roadmap & measured results
 ```
 
 ---

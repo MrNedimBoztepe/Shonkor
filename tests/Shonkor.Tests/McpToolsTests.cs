@@ -179,6 +179,22 @@ public class McpToolsTests
     }
 
     [Fact]
+    public async Task Audit_ProducesBriefingWithTrustMixAndHotspots()
+    {
+        var (pm, synth, _) = await SetupAsync();
+        var handler = new McpRequestHandler(pm, synth, "P", lockToContextProject: true);
+
+        var text = TextOf(await handler.ProcessJsonRpcMessageAsync(ToolCall("audit", new { })));
+
+        Assert.Contains("# Graph Audit", text);
+        Assert.Contains("Trust mix", text);
+        Assert.Contains("EXTRACTED", text);
+        Assert.Contains("god nodes", text);
+        Assert.Contains("Suggested starting points", text);
+        Assert.Contains("Widget", text); // the central node shows up as a hotspot / suggested reference
+    }
+
+    [Fact]
     public async Task References_ProvenanceFilter_ExcludesInferredWhenExtractedOnly()
     {
         // 0.1d: a caller can demand hard-extracted-only impact, and every edge shows its tier.
