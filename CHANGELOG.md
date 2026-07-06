@@ -5,6 +5,16 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — Insights panel in the dashboard
+- New **Insights** station in the Atlas dashboard surfacing the graph-insight features that were previously
+  MCP-only: **Hotspots** (change-risk god nodes), **Clusters** (modularity communities or connected
+  components with a mode toggle; small clusters = likely-dead code), and **Surprising connections**
+  (embedding-similar pairs with no edge, each with an on-demand LLM "explain"). Every listed node is
+  clickable and focuses it in the graph.
+- Backed by new REST endpoints **`GET /api/insights/hotspots`** and **`GET /api/insights/clusters`** (the
+  REST twins of the `hotspots`/`clusters` MCP tools; surprising-connections already had its endpoint), gated
+  behind the API-key middleware like the rest of `/api/*`.
+
 ### Added — Whole-graph insight MCP tools
 - **`hotspots`** — ranks change-risk "god nodes" by betweenness centrality over the coupling subgraph
   (widest blast radius). Deterministic, no model.

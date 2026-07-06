@@ -109,6 +109,17 @@ public class WebPipelineTests : IClassFixture<WebPipelineTests.AppFactory>
         Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
     }
 
+    [Theory]
+    [InlineData("/api/insights/hotspots")]
+    [InlineData("/api/insights/clusters")]
+    public async Task InsightsEndpoints_WithoutKey_Returns401(string path)
+    {
+        // Insights expose whole-graph structure (centrality, clustering), so they must sit behind the
+        // API-key gate like the rest of /api/*, not be publicly readable.
+        var res = await _client.GetAsync(path);
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+    }
+
     public sealed class AppFactory : WebApplicationFactory<Program>
     {
         private readonly string _workspace = Path.Combine(Path.GetTempPath(), $"shonkor_itest_{Guid.NewGuid():N}");
