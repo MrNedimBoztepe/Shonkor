@@ -37,7 +37,7 @@ public class SemanticCsharpSpikeTests
         var symbol = model.GetSymbolInfo(fieldType).Symbol;
 
         // Semantic resolution picks A.Thing (AThing.cs) — a name matcher couldn't disambiguate the two.
-        Assert.Equal("/repo/AThing.cs::Thing", RoslynSemantics.ToNodeId(symbol));
+        Assert.Equal("/repo/AThing.cs::A.Thing", RoslynSemantics.ToNodeId(symbol));
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class SemanticCsharpSpikeTests
         var baseType = tree.GetRoot().DescendantNodes().OfType<BaseTypeSyntax>().First().Type;
         var symbol = model.GetSymbolInfo(baseType).Symbol;
 
-        Assert.Equal("/repo/IBar.cs::IBar", RoslynSemantics.ToNodeId(symbol));
+        Assert.Equal("/repo/IBar.cs::N.IBar", RoslynSemantics.ToNodeId(symbol));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class SemanticCsharpSpikeTests
         var symbol = model.GetSymbolInfo(invocation).Symbol;
 
         // The CALLS edge would point caller -> this node id (arity-discriminated: Helper has 0 params).
-        Assert.Equal("/repo/S.cs::S::Helper#0", RoslynSemantics.ToNodeId(symbol));
+        Assert.Equal("/repo/S.cs::N.S::Helper#0", RoslynSemantics.ToNodeId(symbol));
     }
 
     [Fact]
@@ -90,8 +90,8 @@ public class SemanticCsharpSpikeTests
         var id1 = RoslynSemantics.ToNodeId(s1);
         var id2 = RoslynSemantics.ToNodeId(s2);
         Assert.NotEqual(id1, id2);                       // distinct now
-        Assert.Contains("::C::Add#1@", id1);
-        Assert.Contains("::C::Add#1@", id2);
+        Assert.Contains("::N.C::Add#1@", id1);
+        Assert.Contains("::N.C::Add#1@", id2);
     }
 
     [Fact]

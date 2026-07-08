@@ -40,13 +40,13 @@ public class SemanticCsharpLinkerTests
             ("/repo/BThing.cs", "namespace B { public class Thing { } }"),
             ("/repo/User.cs",   "using A; namespace U { public class User { public Thing Field; } }"));
 
-        var userId = "/repo/User.cs::User";
+        var userId = "/repo/User.cs::U.User";
 
         // User -> A.Thing (the imported one), NOT B.Thing — name matching couldn't disambiguate.
-        var (aEdges, _) = await storage.GetIncidentEdgesAsync("/repo/AThing.cs::Thing");
+        var (aEdges, _) = await storage.GetIncidentEdgesAsync("/repo/AThing.cs::A.Thing");
         Assert.Contains(aEdges, e => e.SourceId == userId && e.Relationship == "REFERENCES_TYPE");
 
-        var (bEdges, _) = await storage.GetIncidentEdgesAsync("/repo/BThing.cs::Thing");
+        var (bEdges, _) = await storage.GetIncidentEdgesAsync("/repo/BThing.cs::B.Thing");
         Assert.DoesNotContain(bEdges, e => e.SourceId == userId);
     }
 
@@ -79,8 +79,8 @@ public class SemanticCsharpLinkerTests
         });
         await SemanticCsharpLinker.LinkAsync(storage, compilation);
 
-        var (edges2, _) = await storage.GetIncidentEdgesAsync("/repo/Widget.cs::Widget");
-        Assert.Contains(edges2, e => e.SourceId == "/repo/Consumer.cs::Consumer" && e.Relationship == "REFERENCES_TYPE");
+        var (edges2, _) = await storage.GetIncidentEdgesAsync("/repo/Widget.cs::A.Widget");
+        Assert.Contains(edges2, e => e.SourceId == "/repo/Consumer.cs::U.Consumer" && e.Relationship == "REFERENCES_TYPE");
 
         storage.Dispose();
     }
@@ -93,10 +93,10 @@ public class SemanticCsharpLinkerTests
             ("/repo/Base.cs",  "namespace N { public class Base { } }"),
             ("/repo/C.cs",     "using N; namespace N2 { public class C : Base, IBar { } }"));
 
-        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/C.cs::C");
+        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/C.cs::N2.C");
 
-        Assert.Contains(edges, e => e.SourceId == "/repo/C.cs::C" && e.TargetId == "/repo/IBar.cs::IBar" && e.Relationship == "IMPLEMENTS");
-        Assert.Contains(edges, e => e.SourceId == "/repo/C.cs::C" && e.TargetId == "/repo/Base.cs::Base" && e.Relationship == "EXTENDS");
+        Assert.Contains(edges, e => e.SourceId == "/repo/C.cs::N2.C" && e.TargetId == "/repo/IBar.cs::N.IBar" && e.Relationship == "IMPLEMENTS");
+        Assert.Contains(edges, e => e.SourceId == "/repo/C.cs::N2.C" && e.TargetId == "/repo/Base.cs::N.Base" && e.Relationship == "EXTENDS");
     }
 
     [Fact]
@@ -105,9 +105,9 @@ public class SemanticCsharpLinkerTests
         using var storage = await LinkAsync(
             ("/repo/S.cs", "namespace N { public class S { public void Run() { Helper(); } public void Helper() { } } }"));
 
-        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/S.cs::S::Helper#0");
+        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/S.cs::N.S::Helper#0");
 
-        Assert.Contains(edges, e => e.SourceId == "/repo/S.cs::S::Run#0" && e.TargetId == "/repo/S.cs::S::Helper#0" && e.Relationship == "CALLS");
+        Assert.Contains(edges, e => e.SourceId == "/repo/S.cs::N.S::Run#0" && e.TargetId == "/repo/S.cs::N.S::Helper#0" && e.Relationship == "CALLS");
     }
 
     [Fact]
@@ -119,8 +119,8 @@ public class SemanticCsharpLinkerTests
             ("/repo/Ext.cs", "namespace N { public static class Ext { public static void Use(this string s) { } } }"),
             ("/repo/C.cs",   "namespace N { public class C { public void Run() { \"x\".Use(); } } }"));
 
-        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/Ext.cs::Ext::Use#1");
-        Assert.Contains(edges, e => e.SourceId == "/repo/C.cs::C::Run#0" && e.Relationship == "CALLS");
+        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/Ext.cs::N.Ext::Use#1");
+        Assert.Contains(edges, e => e.SourceId == "/repo/C.cs::N.C::Run#0" && e.Relationship == "CALLS");
     }
 
     [Fact]
@@ -136,15 +136,15 @@ public class SemanticCsharpLinkerTests
              "public void Run() { Foo(1); } } }"));
 
         // Both overloads survived as distinct nodes (no INSERT-OR-REPLACE collision).
-        Assert.NotNull(await storage.GetNodeByIdAsync("/repo/O.cs::O::Foo#0"));
-        Assert.NotNull(await storage.GetNodeByIdAsync("/repo/O.cs::O::Foo#1"));
+        Assert.NotNull(await storage.GetNodeByIdAsync("/repo/O.cs::N.O::Foo#0"));
+        Assert.NotNull(await storage.GetNodeByIdAsync("/repo/O.cs::N.O::Foo#1"));
 
         // The call resolves to the one-arg overload, not the zero-arg one.
-        var (oneArg, _) = await storage.GetIncidentEdgesAsync("/repo/O.cs::O::Foo#1");
-        Assert.Contains(oneArg, e => e.SourceId == "/repo/O.cs::O::Run#0" && e.Relationship == "CALLS");
+        var (oneArg, _) = await storage.GetIncidentEdgesAsync("/repo/O.cs::N.O::Foo#1");
+        Assert.Contains(oneArg, e => e.SourceId == "/repo/O.cs::N.O::Run#0" && e.Relationship == "CALLS");
 
-        var (zeroArg, _) = await storage.GetIncidentEdgesAsync("/repo/O.cs::O::Foo#0");
-        Assert.DoesNotContain(zeroArg, e => e.SourceId == "/repo/O.cs::O::Run#0" && e.Relationship == "CALLS");
+        var (zeroArg, _) = await storage.GetIncidentEdgesAsync("/repo/O.cs::N.O::Foo#0");
+        Assert.DoesNotContain(zeroArg, e => e.SourceId == "/repo/O.cs::N.O::Run#0" && e.Relationship == "CALLS");
     }
 
     [Fact]
@@ -160,12 +160,12 @@ public class SemanticCsharpLinkerTests
              "public void Run() { Bar(1); } } }"));
 
         // Two distinct method nodes named "Bar" survived (no same-arity collapse).
-        var (typeSubgraph, _) = await storage.GetSubgraphAsync(new[] { "/repo/C.cs::C" }, 1);
+        var (typeSubgraph, _) = await storage.GetSubgraphAsync(new[] { "/repo/C.cs::N.C" }, 1);
         var barNodes = typeSubgraph.Where(n => n.Type == "Method" && n.Name == "Bar").ToList();
         Assert.Equal(2, barNodes.Count);
 
         // Exactly one CALLS edge from Run, and it targets the int overload.
-        var (cNodes, cEdges) = await storage.GetSubgraphAsync(new[] { "/repo/C.cs::C" }, 2);
+        var (cNodes, cEdges) = await storage.GetSubgraphAsync(new[] { "/repo/C.cs::N.C" }, 2);
         var calls = cEdges.Where(e => e.Relationship == "CALLS" && e.SourceId.Contains("::Run#")).ToList();
         Assert.Single(calls);
         var calleeId = calls[0].TargetId;
@@ -182,11 +182,11 @@ public class SemanticCsharpLinkerTests
             ("/repo/Base.cs", "namespace N { public class Base { public virtual void Do() { } } }"),
             ("/repo/Derived.cs", "namespace N { public class Derived : Base { public override void Do() { } } }"));
 
-        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/Base.cs::Base::Do#0");
+        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/Base.cs::N.Base::Do#0");
         var overrideEdge = edges.SingleOrDefault(e => e.Relationship == "OVERRIDES");
         Assert.NotNull(overrideEdge);
-        Assert.Equal("/repo/Derived.cs::Derived::Do#0", overrideEdge!.SourceId);
-        Assert.Equal("/repo/Base.cs::Base::Do#0", overrideEdge.TargetId);
+        Assert.Equal("/repo/Derived.cs::N.Derived::Do#0", overrideEdge!.SourceId);
+        Assert.Equal("/repo/Base.cs::N.Base::Do#0", overrideEdge.TargetId);
         // Semantic-resolved → EXTRACTED provenance.
         Assert.Equal(Provenance.Extracted, overrideEdge.Provenance);
     }
@@ -200,11 +200,11 @@ public class SemanticCsharpLinkerTests
             ("/repo/Foo.cs", "namespace N { public class Foo { } }"),
             ("/repo/Maker.cs", "namespace N { public class Maker { public Foo Make() { return new Foo(); } } }"));
 
-        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/Foo.cs::Foo");
+        var (edges, _) = await storage.GetIncidentEdgesAsync("/repo/Foo.cs::N.Foo");
         var inst = edges.SingleOrDefault(e => e.Relationship == "INSTANTIATES");
         Assert.NotNull(inst);
-        Assert.Equal("/repo/Maker.cs::Maker::Make#0", inst!.SourceId);
-        Assert.Equal("/repo/Foo.cs::Foo", inst.TargetId);
+        Assert.Equal("/repo/Maker.cs::N.Maker::Make#0", inst!.SourceId);
+        Assert.Equal("/repo/Foo.cs::N.Foo", inst.TargetId);
         Assert.Equal(Provenance.Extracted, inst.Provenance); // semantic-resolved
     }
 
@@ -216,12 +216,12 @@ public class SemanticCsharpLinkerTests
             ("/repo/C.cs", "namespace N { public class C : IFoo { public void Bar() { } } }"));
 
         // Type-level IMPLEMENTS still holds …
-        var (typeEdges, _) = await storage.GetIncidentEdgesAsync("/repo/IFoo.cs::IFoo");
-        Assert.Contains(typeEdges, e => e.SourceId == "/repo/C.cs::C" && e.Relationship == "IMPLEMENTS");
+        var (typeEdges, _) = await storage.GetIncidentEdgesAsync("/repo/IFoo.cs::N.IFoo");
+        Assert.Contains(typeEdges, e => e.SourceId == "/repo/C.cs::N.C" && e.Relationship == "IMPLEMENTS");
 
         // … plus the new member-level edge: C.Bar implements IFoo.Bar.
-        var (memberEdges, _) = await storage.GetIncidentEdgesAsync("/repo/IFoo.cs::IFoo::Bar#0");
-        Assert.Contains(memberEdges, e => e.SourceId == "/repo/C.cs::C::Bar#0"
-            && e.TargetId == "/repo/IFoo.cs::IFoo::Bar#0" && e.Relationship == "IMPLEMENTS_MEMBER");
+        var (memberEdges, _) = await storage.GetIncidentEdgesAsync("/repo/IFoo.cs::N.IFoo::Bar#0");
+        Assert.Contains(memberEdges, e => e.SourceId == "/repo/C.cs::N.C::Bar#0"
+            && e.TargetId == "/repo/IFoo.cs::N.IFoo::Bar#0" && e.Relationship == "IMPLEMENTS_MEMBER");
     }
 }
