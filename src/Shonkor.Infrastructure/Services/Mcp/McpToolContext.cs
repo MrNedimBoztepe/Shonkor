@@ -115,7 +115,8 @@ public sealed class McpToolContext
 
     /// <summary>
     /// Fallback for <c>get_source</c> on nodes that store no body: reads the exact line range from the file
-    /// when this server has filesystem access. Returns <c>null</c> if unavailable. Lines are 0-based.
+    /// when this server has filesystem access. Returns <c>null</c> if unavailable.
+    /// <see cref="GraphNode.StartLine"/>/<see cref="GraphNode.EndLine"/> are 1-based (scheme v4).
     /// </summary>
     public string? TryReadSourceSlice(GraphNode node)
     {
@@ -125,9 +126,9 @@ public sealed class McpToolContext
         {
             var lines = System.IO.File.ReadAllLines(node.FilePath);
             if (lines.Length == 0) return null;
-            var start = Math.Clamp(node.StartLine.Value, 0, lines.Length - 1);
+            var start = Math.Clamp(node.StartLine.Value - 1, 0, lines.Length - 1);
             var end = node.EndLine.HasValue
-                ? Math.Clamp(node.EndLine.Value, start, lines.Length - 1)
+                ? Math.Clamp(node.EndLine.Value - 1, start, lines.Length - 1)
                 : Math.Min(start + 40, lines.Length - 1);
             return string.Join("\n", lines[start..(end + 1)]);
         }

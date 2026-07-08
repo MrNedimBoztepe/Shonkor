@@ -24,13 +24,22 @@ public static class CsharpNodeId
     /// scheme change (e.g. adding <c>#{arity}</c>) does NOT change file content, the incremental hash check
     /// would otherwise skip every file and leave old-scheme ids in place. <b>Bump this whenever the id
     /// format changes.</b> History: v1 = name-only members (overloads collided); v2 = arity-discriminated
-    /// methods/constructors; v3 = same-arity overloads further disambiguated by declaration span.
+    /// methods/constructors; v3 = same-arity overloads further disambiguated by declaration span;
+    /// v4 = types identified by their full chain (namespace + nesting + generic arity) instead of the bare
+    /// simple name, so same-named types in one file no longer merge into one node.
     /// Unstamped legacy graphs read as 0 (&lt; current → stale).
     /// </summary>
-    public const int SchemeVersion = 3;
+    public const int SchemeVersion = 4;
 
-    /// <summary>Node id for a type declaration in <paramref name="filePath"/>.</summary>
-    public static string ForType(string filePath, string typeName) => $"{filePath}::{typeName}";
+    /// <summary>
+    /// Node id for a type declaration in <paramref name="filePath"/>. <paramref name="typeChain"/> is the
+    /// type's full chain within the file — <c>{Namespace}.{Outer}+{Nested}</c> with a CLR-style backtick
+    /// arity suffix on generic types (e.g. <c>My.App.Outer+Builder`1</c>) — so distinct same-named types
+    /// (different namespace, different arity, or nested under different parents) get distinct ids.
+    /// Both the syntactic parser and the semantic linker derive the chain from the same declaration
+    /// structure, so the ids match.
+    /// </summary>
+    public static string ForType(string filePath, string typeChain) => $"{filePath}::{typeChain}";
 
     /// <summary>Node id for a (non-overloadable) member — e.g. a property — of a type.</summary>
     public static string ForMember(string filePath, string typeName, string memberName) =>

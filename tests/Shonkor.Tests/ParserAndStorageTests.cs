@@ -361,11 +361,11 @@ public class ParserAndStorageTests
         await CrossTechLinker.EstablishCrossTechnologyConnectionsAsync(storage, "C:\\mock");
 
         // Assert: traversing out from the definition reaches its user via REFERENCES_TYPE.
-        var (_, edges) = await storage.GetSubgraphAsync(new[] { "GraphNode.cs::GraphNode" }, 1);
+        var (_, edges) = await storage.GetSubgraphAsync(new[] { "GraphNode.cs::Demo.GraphNode" }, 1);
         var refEdge = edges.FirstOrDefault(e =>
             e.Relationship == "REFERENCES_TYPE" &&
-            e.SourceId == "Repository.cs::Repository" &&
-            e.TargetId == "GraphNode.cs::GraphNode");
+            e.SourceId == "Repository.cs::Demo.Repository" &&
+            e.TargetId == "GraphNode.cs::Demo.GraphNode");
         Assert.NotNull(refEdge);
         // Name-based cross-tech resolution to a single definition is Inferred, never Extracted.
         Assert.Equal(Provenance.Inferred, refEdge.Provenance);
@@ -494,13 +494,13 @@ public class ParserAndStorageTests
             var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() }, logger: null, semanticCsharp: true);
             await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
 
-            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::User";
+            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::U.User";
 
             // User references A.Thing exactly (the imported one) — name matching would have linked BOTH.
-            var (aEdges, _) = await storage.GetIncidentEdgesAsync(Path.GetFullPath(Path.Combine(dir, "AThing.cs")) + "::Thing");
+            var (aEdges, _) = await storage.GetIncidentEdgesAsync(Path.GetFullPath(Path.Combine(dir, "AThing.cs")) + "::A.Thing");
             Assert.Contains(aEdges, e => e.SourceId == userId && e.Relationship == "REFERENCES_TYPE");
 
-            var (bEdges, _) = await storage.GetIncidentEdgesAsync(Path.GetFullPath(Path.Combine(dir, "BThing.cs")) + "::Thing");
+            var (bEdges, _) = await storage.GetIncidentEdgesAsync(Path.GetFullPath(Path.Combine(dir, "BThing.cs")) + "::B.Thing");
             Assert.DoesNotContain(bEdges, e => e.SourceId == userId); // the ambiguous name-based edge must NOT exist
         }
         finally
@@ -528,9 +528,9 @@ public class ParserAndStorageTests
             var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
             await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
 
-            var userId = Path.GetFullPath(userFile) + "::User";
-            var widgetId = Path.GetFullPath(Path.Combine(dir, "Widget.cs")) + "::Widget";
-            var gadgetId = Path.GetFullPath(Path.Combine(dir, "Gadget.cs")) + "::Gadget";
+            var userId = Path.GetFullPath(userFile) + "::N.User";
+            var widgetId = Path.GetFullPath(Path.Combine(dir, "Widget.cs")) + "::N.Widget";
+            var gadgetId = Path.GetFullPath(Path.Combine(dir, "Gadget.cs")) + "::N.Gadget";
 
             // Baseline: the full scan linked User -> Widget.
             var (e0, _) = await storage.GetIncidentEdgesAsync(widgetId);
@@ -570,8 +570,8 @@ public class ParserAndStorageTests
             var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() }, logger: null, semanticCsharp: true);
             await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
 
-            var helperId = Path.GetFullPath(aFile) + "::Svc::Helper#0";
-            var runId = Path.GetFullPath(aFile) + "::Svc::Run#0";
+            var helperId = Path.GetFullPath(aFile) + "::N.Svc::Helper#0";
+            var runId = Path.GetFullPath(aFile) + "::N.Svc::Run#0";
 
             // Baseline: Run does not call Helper yet.
             var (e0, _) = await storage.GetIncidentEdgesAsync(helperId);
@@ -608,7 +608,7 @@ public class ParserAndStorageTests
             var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() }, logger: null, semanticCsharp: true);
             await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
 
-            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::User";
+            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::N.User";
 
             // Baseline: User references/calls into Widget.
             var (e0, _) = await storage.GetIncidentEdgesAsync(userId);
@@ -655,10 +655,10 @@ public class ParserAndStorageTests
 
             await scanner.ReconcilePathsAsync(dir, new[] { "A.cs", "C.cs", "B.cs" });
 
-            Assert.NotNull(await storage.GetNodeByIdAsync(Path.GetFullPath(aFile) + "::AlphaRenamed"));
-            Assert.Null(await storage.GetNodeByIdAsync(Path.GetFullPath(aFile) + "::Alpha"));
-            Assert.NotNull(await storage.GetNodeByIdAsync(Path.GetFullPath(cFile) + "::Gamma"));
-            Assert.Null(await storage.GetNodeByIdAsync(Path.GetFullPath(bFile) + "::Beta"));
+            Assert.NotNull(await storage.GetNodeByIdAsync(Path.GetFullPath(aFile) + "::N.AlphaRenamed"));
+            Assert.Null(await storage.GetNodeByIdAsync(Path.GetFullPath(aFile) + "::N.Alpha"));
+            Assert.NotNull(await storage.GetNodeByIdAsync(Path.GetFullPath(cFile) + "::N.Gamma"));
+            Assert.Null(await storage.GetNodeByIdAsync(Path.GetFullPath(bFile) + "::N.Beta"));
             Assert.Null(await storage.GetNodeByIdAsync(Path.GetFullPath(bFile)));
         }
         finally
@@ -694,7 +694,7 @@ public class ParserAndStorageTests
             Assert.True(result.FilesScanned > 0);
 
             // The new method is now in the graph and no drift remains.
-            Assert.NotNull(await storage.GetNodeByIdAsync(Path.GetFullPath(aFile) + "::Alpha::Added#0"));
+            Assert.NotNull(await storage.GetNodeByIdAsync(Path.GetFullPath(aFile) + "::N.Alpha::Added#0"));
             Assert.True((await scanner.DetectDriftAsync(dir, Array.Empty<string>())).IsClean);
         }
         finally
@@ -721,8 +721,8 @@ public class ParserAndStorageTests
             var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
             await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
 
-            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::User";
-            var widgetId = Path.GetFullPath(defFile) + "::Widget";
+            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::N.User";
+            var widgetId = Path.GetFullPath(defFile) + "::N.Widget";
 
             // Baseline: User -> Widget exists.
             var (e0, _) = await storage.GetIncidentEdgesAsync(widgetId);
@@ -760,8 +760,8 @@ public class ParserAndStorageTests
             var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() });
             await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
 
-            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::User";
-            var widgetId = Path.GetFullPath(defFile) + "::Widget";
+            var userId = Path.GetFullPath(Path.Combine(dir, "User.cs")) + "::N.User";
+            var widgetId = Path.GetFullPath(defFile) + "::N.Widget";
 
             // Baseline: Widget undefined -> no edge.
             var (e0, _) = await storage.GetIncidentEdgesAsync(userId);
@@ -931,7 +931,7 @@ public class ParserAndStorageTests
         Directory.CreateDirectory(dir);
         var file = Path.Combine(dir, "Target.cs");
         var fullPath = Path.GetFullPath(file);
-        var targetId = fullPath + "::Target";
+        var targetId = fullPath + "::D.Target";
 
         try
         {

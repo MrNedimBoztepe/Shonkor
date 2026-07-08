@@ -63,8 +63,8 @@ public class SemanticCompilationCacheTests
             var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser() }, logger: null, semanticCsharp: true, compilationCache: cache);
             await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
 
-            var helperId = Path.GetFullPath(aFile) + "::Svc::Helper#0";
-            var runId = Path.GetFullPath(aFile) + "::Svc::Run#0";
+            var helperId = Path.GetFullPath(aFile) + "::N.Svc::Helper#0";
+            var runId = Path.GetFullPath(aFile) + "::N.Svc::Run#0";
 
             await File.WriteAllTextAsync(aFile, "namespace N { public class Svc { public void Run() { Helper(); } public void Helper() { } } }");
             await scanner.ReconcilePathsAsync(dir, new[] { "Svc.cs" });
