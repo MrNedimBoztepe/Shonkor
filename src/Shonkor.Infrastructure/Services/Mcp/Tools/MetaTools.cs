@@ -107,12 +107,23 @@ public sealed class SetProjectTool : IMcpTool
         if (string.IsNullOrWhiteSpace(name))
         {
             var list = string.Join("\n", projects.Select(p => $"  {(p.Name.Equals(active, StringComparison.OrdinalIgnoreCase) ? "* " : "  ")}{p.Name}\t{p.Path}"));
-            return SendToolResponse(id, $"Active project (this session): {active}\nProjects:\n{list}\n(call set_project with name=<project> to switch — session-local, does not affect other chats.)");
+            var hint = ctx.PersistentSession
+                ? "(call set_project with name=<project> to switch — session-local, does not affect other chats.)"
+                : "(this connection has no persistent session — pass projectName=<project> on each tool call instead.)";
+            return SendToolResponse(id, $"Active project (this session): {active}\nProjects:\n{list}\n{hint}");
         }
         var match = projects.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         if (match == null)
         {
             return SendToolResponse(id, $"No project named '{name}'. Available: {string.Join(", ", projects.Select(p => p.Name))}.");
+        }
+        if (!ctx.PersistentSession)
+        {
+            // The HTTP relay builds a fresh handler per request — an override set here would be discarded
+            // with this request while the client believes the switch happened, so every following call
+            // would silently hit the wrong project's graph. Refuse instead of lying.
+            return SendToolResponse(id,
+                $"set_project is not supported over the per-request HTTP relay — the session state would not outlive this call. Pass projectName=\"{match.Name}\" on each tool call instead (or send the X-Project-Name header).");
         }
         // Session-local switch only — never writes the shared, persisted ActiveProjectName.
         ctx.SessionProjectOverride = match.Name;

@@ -55,6 +55,12 @@ public static class GraphRagEndpoints
                     ProjectContext = projectName
                 });
             }
+            catch (KeyNotFoundException ex)
+            {
+                // Unknown X-Project-Name — a client error, not a server failure (and no silent
+                // fallback to the active project's graph).
+                return Results.NotFound(ex.Message);
+            }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[API] GraphRAG query failed. :: {ex}");
