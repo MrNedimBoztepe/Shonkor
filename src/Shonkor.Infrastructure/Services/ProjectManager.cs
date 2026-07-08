@@ -198,7 +198,7 @@ public partial class ProjectManager
                 Name = name,
                 Path = path,
                 DatabasePath = resolvedDbPath,
-                ApiKey = TokenHasher.EnsureHashed(rawKey)
+                ApiKey = TokenHasher.HashForStorage(rawKey)
             });
 
             if (string.IsNullOrEmpty(_activeProjectName))
@@ -538,7 +538,7 @@ public partial class ProjectManager
                             orgs.Add(defaultOrg);
                         }
 
-                        var projKeyHash = TokenHasher.EnsureHashed(proj.ApiKey);
+                        var projKeyHash = TokenHasher.MigrateStored(proj.ApiKey);
                         var defaultUser = users.FirstOrDefault(u => u.ApiToken == projKeyHash);
                         if (defaultUser == null)
                         {
@@ -556,16 +556,17 @@ public partial class ProjectManager
                         needsSave = true;
                     }
 
-                    // Self-heal: hash any tokens still stored in plaintext (older projects.json).
-                    foreach (var u in users.Where(u => !string.IsNullOrEmpty(u.ApiToken) && !TokenHasher.LooksHashed(u.ApiToken)))
+                    // Self-heal: migrate stored tokens to the self-describing sha256: format (hashes any
+                    // legacy plaintext, prefixes legacy bare-hex digests written by the earlier scheme).
+                    foreach (var u in users.Where(u => !string.IsNullOrEmpty(u.ApiToken)))
                     {
-                        u.ApiToken = TokenHasher.Hash(u.ApiToken);
-                        needsSave = true;
+                        var migrated = TokenHasher.MigrateStored(u.ApiToken);
+                        if (migrated != u.ApiToken) { u.ApiToken = migrated; needsSave = true; }
                     }
-                    foreach (var p in projects.Where(p => !string.IsNullOrEmpty(p.ApiKey) && !TokenHasher.LooksHashed(p.ApiKey)))
+                    foreach (var p in projects.Where(p => !string.IsNullOrEmpty(p.ApiKey)))
                     {
-                        p.ApiKey = TokenHasher.Hash(p.ApiKey);
-                        needsSave = true;
+                        var migrated = TokenHasher.MigrateStored(p.ApiKey);
+                        if (migrated != p.ApiKey) { p.ApiKey = migrated; needsSave = true; }
                     }
                 }
             }

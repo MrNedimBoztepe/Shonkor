@@ -74,18 +74,41 @@ public static class McpProxyClient
             }
         }
 
-        using var httpClient = new HttpClient();
-        
+        // Long-running tools (audit, generate_capsule on a large graph) easily exceed HttpClient's
+        // 100-second default; a proxy-side timeout mid-tool otherwise kills the request.
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+
         Console.InputEncoding = Encoding.UTF8;
         Console.OutputEncoding = Encoding.UTF8;
 
         using var reader = new StreamReader(Console.OpenStandardInput(), Encoding.UTF8);
 
-        while (true)
+        // Every request (a line WITH an id) must receive exactly one response — a host waiting on a
+        // request id that never gets answered hangs the whole conversation. Notifications get none.
+        static void WriteErrorResponse(string? requestLine, string message)
         {
+            if (string.IsNullOrWhiteSpace(requestLine)) return;
             try
             {
-                var line = await reader.ReadLineAsync().ConfigureAwait(false);
+                var reqNode = JsonNode.Parse(requestLine) as JsonObject;
+                var idNode = reqNode?["id"];
+                if (idNode == null) return; // notification — no response expected
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    jsonrpc = "2.0",
+                    id = idNode.GetValue<JsonElement>(),
+                    error = new { code = -32603, message }
+                }));
+            }
+            catch { /* unparseable line — nothing to answer */ }
+        }
+
+        while (true)
+        {
+            string? line = null;
+            try
+            {
+                line = await reader.ReadLineAsync().ConfigureAwait(false);
                 if (line == null)
                 {
                     break; // EOF
@@ -135,33 +158,15 @@ public static class McpProxyClient
                 {
                     var errorResponse = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     Console.Error.WriteLine($"[MCP Proxy Error] HTTP {response.StatusCode}: {errorResponse}");
-                    
-                    // We need to return a JSON-RPC error back to the client if possible
-                    try
-                    {
-                        var reqNode = JsonNode.Parse(line) as JsonObject;
-                        var idNode = reqNode?["id"];
-                        if (idNode != null)
-                        {
-                            var errorJson = JsonSerializer.Serialize(new
-                            {
-                                jsonrpc = "2.0",
-                                id = idNode.GetValue<JsonElement>(),
-                                error = new
-                                {
-                                    code = -32603,
-                                    message = $"HTTP Proxy Error: {response.StatusCode}"
-                                }
-                            });
-                            Console.WriteLine(errorJson);
-                        }
-                    }
-                    catch { }
+                    WriteErrorResponse(line, $"HTTP Proxy Error: {response.StatusCode}");
                 }
             }
             catch (Exception ex)
             {
+                // Transport failure (backend down, DNS, timeout): logging alone would leave the host
+                // waiting forever on this request id — synthesize the error response too.
                 Console.Error.WriteLine($"[MCP Proxy Exception] {ex.Message}");
+                WriteErrorResponse(line, $"MCP proxy transport error: {ex.Message}");
             }
         }
 
