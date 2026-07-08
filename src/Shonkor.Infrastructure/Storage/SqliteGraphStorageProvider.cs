@@ -99,10 +99,41 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
         await using var command = connection.CreateCommand();
+        // True upsert instead of INSERT OR REPLACE, for two load-bearing reasons:
+        // 1. REPLACE deletes the conflicting row WITHOUT firing the AFTER DELETE trigger (that needs
+        //    PRAGMA recursive_triggers) and re-inserts under a NEW rowid — every re-upsert leaves a ghost
+        //    entry in the external-content NodesFts index. DO UPDATE keeps the rowid and fires nodes_au.
+        // 2. REPLACE rewrites the whole row, wiping enrichment (Summary/Embedding/EmbeddingDim/
+        //    EmbeddingModel) and re-queueing analysis even for unchanged content. DO UPDATE preserves
+        //    enrichment while hash AND content are unchanged (non-File nodes carry no ContentHash, so
+        //    the hash check alone would treat NULL = NULL as "unchanged") and invalidates it otherwise.
         command.CommandText =
             """
-            INSERT OR REPLACE INTO Nodes (Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash, Summary, NeedsSemanticAnalysis, Embedding)
-            VALUES (@Id, @Type, @Name, @Content, @Metadata, @FilePath, @StartLine, @EndLine, @ContentHash, @Summary, @NeedsSemanticAnalysis, @Embedding);
+            INSERT INTO Nodes (Id, Type, Name, Content, Metadata, FilePath, StartLine, EndLine, ContentHash, Summary, NeedsSemanticAnalysis, Embedding, EmbeddingDim)
+            VALUES (@Id, @Type, @Name, @Content, @Metadata, @FilePath, @StartLine, @EndLine, @ContentHash, @Summary, 1, @Embedding, length(@Embedding) / 4)
+            ON CONFLICT(Id) DO UPDATE SET
+                Type = excluded.Type,
+                Name = excluded.Name,
+                Content = excluded.Content,
+                Metadata = excluded.Metadata,
+                FilePath = excluded.FilePath,
+                StartLine = excluded.StartLine,
+                EndLine = excluded.EndLine,
+                Summary = CASE WHEN excluded.Summary IS NOT NULL THEN excluded.Summary
+                               WHEN Nodes.ContentHash IS excluded.ContentHash AND Nodes.Content IS excluded.Content THEN Nodes.Summary
+                               ELSE NULL END,
+                Embedding = CASE WHEN excluded.Embedding IS NOT NULL THEN excluded.Embedding
+                                 WHEN Nodes.ContentHash IS excluded.ContentHash AND Nodes.Content IS excluded.Content THEN Nodes.Embedding
+                                 ELSE NULL END,
+                EmbeddingDim = CASE WHEN excluded.Embedding IS NOT NULL THEN excluded.EmbeddingDim
+                                    WHEN Nodes.ContentHash IS excluded.ContentHash AND Nodes.Content IS excluded.Content THEN Nodes.EmbeddingDim
+                                    ELSE NULL END,
+                EmbeddingModel = CASE WHEN excluded.Embedding IS NOT NULL THEN NULL
+                                      WHEN Nodes.ContentHash IS excluded.ContentHash AND Nodes.Content IS excluded.Content THEN Nodes.EmbeddingModel
+                                      ELSE NULL END,
+                NeedsSemanticAnalysis = CASE WHEN Nodes.ContentHash IS excluded.ContentHash AND Nodes.Content IS excluded.Content
+                                             THEN Nodes.NeedsSemanticAnalysis ELSE 1 END,
+                ContentHash = excluded.ContentHash;
             """;
 
         var pId = command.Parameters.Add("@Id", SqliteType.Text);
@@ -115,7 +146,6 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var pEndLine = command.Parameters.Add("@EndLine", SqliteType.Integer);
         var pContentHash = command.Parameters.Add("@ContentHash", SqliteType.Text);
         var pSummary = command.Parameters.Add("@Summary", SqliteType.Text);
-        var pNeedsAnalysis = command.Parameters.Add("@NeedsSemanticAnalysis", SqliteType.Integer);
         var pEmbedding = command.Parameters.Add("@Embedding", SqliteType.Blob);
 
         await command.PrepareAsync(cancellationToken).ConfigureAwait(false);
@@ -145,7 +175,6 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             pEndLine.Value = node.EndLine.HasValue ? node.EndLine.Value : DBNull.Value;
             pContentHash.Value = (object?)node.ContentHash ?? DBNull.Value;
             pSummary.Value = (object?)node.Summary ?? DBNull.Value;
-            pNeedsAnalysis.Value = 1;
             pEmbedding.Value = (object?)SqliteRowMapper.EmbeddingToBytes(node.Embedding) ?? DBNull.Value;
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -388,6 +417,11 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             Buffer.BlockCopy(blob, 0, nodeEmbedding, 0, blob.Length);
 
             var score = (double)System.Numerics.Tensors.TensorPrimitives.CosineSimilarity(queryEmbedding, nodeEmbedding);
+
+            // A zero-magnitude vector (corrupted blob, degenerate embedding) yields NaN (0/0). NaN sorts
+            // below every real score, so once in the heap it can never be evicted and rejects all further
+            // candidates; a second NaN loops forever in the BitIncrement tie-breaker below.
+            if (double.IsNaN(score)) continue;
 
             // Only keep if it beats the current worst in the heap, or heap is not yet full.
             if (heap.Count < capacity || score > heap.Keys[0])
