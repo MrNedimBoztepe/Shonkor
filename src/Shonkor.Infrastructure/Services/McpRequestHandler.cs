@@ -47,13 +47,14 @@ public sealed class McpRequestHandler
         bool lockToContextProject = false,
         IEmbeddingService? embeddingService = null,
         IEnumerable<IFileParser>? fileParsers = null,
-        SemanticCompilationCache? compilationCache = null)
+        SemanticCompilationCache? compilationCache = null,
+        bool persistentSession = true)
     {
         ArgumentNullException.ThrowIfNull(projectManager);
         ArgumentNullException.ThrowIfNull(synthesizer);
 
         _ctx = new McpToolContext(projectManager, synthesizer, contextProjectName, lockToContextProject,
-            embeddingService, fileParsers, compilationCache);
+            embeddingService, fileParsers, compilationCache, persistentSession);
         _registry = new McpToolRegistry(McpToolRegistryFactory.CreateTools());
     }
 
@@ -187,6 +188,12 @@ public sealed class McpRequestHandler
                 return SendError(id, -32601, $"Tool not found: '{toolName}'");
             }
             return await tool.ExecuteAsync(id, args, _ctx).ConfigureAwait(false);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            // E.g. an explicitly requested projectName that isn't registered — an invalid argument,
+            // not an internal failure. The message tells the caller exactly what didn't resolve.
+            return SendError(id, -32602, ex.Message);
         }
         catch (Exception ex)
         {

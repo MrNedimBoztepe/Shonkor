@@ -41,6 +41,13 @@ public sealed class McpToolContext
     /// </summary>
     public string? SessionProjectOverride { get; set; }
 
+    /// <summary>
+    /// Whether this context outlives the current message. True for the stdio server (one context per
+    /// process); false for the per-request HTTP relay, where session state like
+    /// <see cref="SessionProjectOverride"/> would be discarded with the request.
+    /// </summary>
+    public bool PersistentSession { get; }
+
     public bool HasEmbeddingService => EmbeddingService != null;
     public bool HasFileParsers => FileParsers != null;
 
@@ -51,7 +58,8 @@ public sealed class McpToolContext
         bool lockToContextProject,
         IEmbeddingService? embeddingService,
         IEnumerable<IFileParser>? fileParsers,
-        SemanticCompilationCache? compilationCache)
+        SemanticCompilationCache? compilationCache,
+        bool persistentSession = true)
     {
         ProjectManager = projectManager ?? throw new ArgumentNullException(nameof(projectManager));
         Synthesizer = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
@@ -60,6 +68,7 @@ public sealed class McpToolContext
         EmbeddingService = embeddingService;
         FileParsers = fileParsers;
         CompilationCache = compilationCache;
+        PersistentSession = persistentSession;
     }
 
     /// <summary>

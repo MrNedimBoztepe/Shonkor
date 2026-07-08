@@ -305,21 +305,25 @@ public partial class ProjectManager
         return GetStorageProviderAsync(null, cancellationToken);
     }
 
-    /// <summary>Resolves the project for a given name, or falls back to the active project.</summary>
+    /// <summary>
+    /// Resolves the project for a given name; without a name, resolves the active project. An explicitly
+    /// requested name that doesn't resolve throws instead of falling back to the active project — the
+    /// fallback would silently answer from (and record into) another project's graph, and in a
+    /// tenant-locked session it could cross tenants when the tenant's project was deleted or renamed.
+    /// </summary>
     private Project ResolveProject(string? projectName)
     {
-        Project? project = null;
         if (!string.IsNullOrWhiteSpace(projectName))
         {
+            Project? project;
             lock (_lock)
             {
                 project = _projects.FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
             }
+            return project ?? throw new KeyNotFoundException($"No project named '{projectName}' is registered.");
         }
 
-        project ??= GetActiveProject();
-
-        return project ?? throw new InvalidOperationException("No active project configured.");
+        return GetActiveProject() ?? throw new InvalidOperationException("No active project configured.");
     }
 
     /// <summary>
