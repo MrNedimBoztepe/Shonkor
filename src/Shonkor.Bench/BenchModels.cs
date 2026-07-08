@@ -34,3 +34,40 @@ internal sealed record TokenResult(int Queries, long NaiveTokens, long CapsuleTo
 {
     public double ReductionPct => NaiveTokens > 0 ? (1.0 - (double)CapsuleTokens / NaiveTokens) * 100 : 0;
 }
+
+/// <summary>
+/// One answer-groundedness case (TICKET-201): a question plus the FIXED context to answer it from
+/// (isolating answer faithfulness from retrieval quality). <see cref="Kind"/> "abstain" = the context
+/// deliberately does NOT cover the question; a grounded model must say so instead of inventing.
+/// </summary>
+internal sealed class AnswerCase
+{
+    public string Id { get; set; } = "";
+    public string Question { get; set; } = "";
+    /// <summary>Node ids OR symbol names (names are resolved via the definition index) forming the context.</summary>
+    public List<string> ContextNodeIds { get; set; } = new();
+    /// <summary>"answerable" (default) or "abstain".</summary>
+    public string? Kind { get; set; }
+    /// <summary>Symbols an answerable answer must cite (substring match against the citation names).</summary>
+    public List<string> MustCite { get; set; } = new();
+    /// <summary>Optional: strings the answer must contain (case-insensitive).</summary>
+    public List<string> MustContain { get; set; } = new();
+    /// <summary>Optional: strings the answer must NOT contain (case-insensitive).</summary>
+    public List<string> MustNotContain { get; set; } = new();
+
+    public bool IsAbstain => string.Equals(Kind, "abstain", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>Aggregate answer-groundedness metrics over a golden set (see <c>AnswersBenchmark</c>).</summary>
+internal sealed record AnswersResult(
+    int Cases,
+    int Answerable,
+    int Abstain,
+    int Skipped,
+    double CitationValidity,
+    double MustCiteRecall,
+    double AbstentionRecall,
+    double AbstentionPrecision,
+    double UncitedParagraphRate,
+    double ContentCheckPassRate,
+    IReadOnlyList<string> Failures);
