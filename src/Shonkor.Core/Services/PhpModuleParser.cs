@@ -14,26 +14,33 @@ namespace Shonkor.Core.Services;
 public sealed partial class PhpModuleParser : IFileParser
 {
     /// <summary>
-    /// Matches PHP class declarations with optional <c>extends</c> clause.
+    /// Matches PHP class declarations with an <c>extends</c> clause — including <c>abstract</c>/<c>final</c>
+    /// modifiers (exactly the base-class layer of OXID module chains) and namespaced base classes.
     /// Captures the class name and the base class name.
     /// </summary>
-    /// <example><c>class MyModule extends OxidBaseClass</c></example>
-    [GeneratedRegex(@"^\s*class\s+(\w+)\s+extends\s+(\w+)", RegexOptions.Multiline)]
+    /// <example><c>abstract class MyModule extends \OxidEsales\Eshop\Application\Model\Article</c></example>
+    [GeneratedRegex(@"^\s*(?:final\s+|abstract\s+)*class\s+(\w+)\s+extends\s+([\w\\]+)", RegexOptions.Multiline)]
     private static partial Regex PhpClassExtendsPattern();
 
     /// <summary>
-    /// Matches entries in the OXID metadata <c>'extend'</c> array.
-    /// Captures the core class (key) and the module class (value).
+    /// Matches entries of the OXID metadata <c>'extend'</c> array — applied ONLY to the extracted body of
+    /// that array (see <see cref="ExtractExtendArrayBody"/>), never to the whole file: every metadata.php
+    /// is full of other <c>'key' =&gt; 'value'</c> pairs (id, title, templates, settings, …) that would
+    /// each become a phantom EXTENDS edge. Captures the core class (key) and the module class (value).
     /// </summary>
     /// <example><c>'OxidCoreClass' => 'Module\MyExtension'</c></example>
-    [GeneratedRegex(@"['""](\w+)['""]\s*=>\s*['""]([^'""]+)['""]")]
+    [GeneratedRegex(@"['""]([\w\\]+)['""]\s*=>\s*['""]([^'""]+)['""]")]
     private static partial Regex MetadataExtendPattern();
 
+    /// <summary>Locates the opening of the metadata <c>'extend'</c> array: <c>'extend' => [</c> or <c>'extend' => array(</c>.</summary>
+    [GeneratedRegex(@"['""]extend['""]\s*=>\s*(\[|array\s*\()", RegexOptions.IgnoreCase)]
+    private static partial Regex MetadataExtendArrayOpenPattern();
+
     /// <summary>
-    /// Matches Smarty template block declarations.
-    /// Captures the block name from <c>[{block name="..."}]</c> syntax.
+    /// Matches Smarty template block declarations, tolerating single or double quotes and extra
+    /// attributes (<c>[{block name='foo' append}]</c>). Captures the block name.
     /// </summary>
-    [GeneratedRegex(@"\[\{block\s+name\s*=\s*""([^""]+)""\s*\}\]")]
+    [GeneratedRegex(@"\[\{block\s+name\s*=\s*['""]([^'""]+)['""][^}]*\}\]")]
     private static partial Regex SmartyBlockPattern();
 
     private const string MetadataFileName = "metadata.php";
@@ -145,7 +152,13 @@ public sealed partial class PhpModuleParser : IFileParser
         string content,
         List<GraphEdge> edges)
     {
-        foreach (Match match in MetadataExtendPattern().Matches(content))
+        var extendBody = ExtractExtendArrayBody(content);
+        if (extendBody is null)
+        {
+            return; // no 'extend' array in this metadata.php
+        }
+
+        foreach (Match match in MetadataExtendPattern().Matches(extendBody))
         {
             var coreClass = match.Groups[1].Value;
             var moduleClass = match.Groups[2].Value;
@@ -162,6 +175,34 @@ public sealed partial class PhpModuleParser : IFileParser
                 }
             });
         }
+    }
+
+    /// <summary>
+    /// Extracts the body of the metadata <c>'extend' => [ … ]</c> / <c>'extend' => array( … )</c> array
+    /// by balancing the opening bracket, so the key/value pair pattern only ever sees extension entries.
+    /// Returns <c>null</c> when the file declares no <c>extend</c> array.
+    /// </summary>
+    private static string? ExtractExtendArrayBody(string content)
+    {
+        var open = MetadataExtendArrayOpenPattern().Match(content);
+        if (!open.Success)
+        {
+            return null;
+        }
+
+        var isParen = open.Groups[1].Value.EndsWith('(');
+        var (openChar, closeChar) = isParen ? ('(', ')') : ('[', ']');
+        var start = open.Index + open.Length; // first char after the opening bracket
+        var depth = 1;
+        for (var i = start; i < content.Length; i++)
+        {
+            if (content[i] == openChar) depth++;
+            else if (content[i] == closeChar && --depth == 0)
+            {
+                return content[start..i];
+            }
+        }
+        return content[start..]; // unbalanced (truncated file) — best effort to the end
     }
 
     /// <summary>

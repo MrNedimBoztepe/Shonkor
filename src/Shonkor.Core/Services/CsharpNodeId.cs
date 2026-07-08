@@ -26,10 +26,13 @@ public static class CsharpNodeId
     /// format changes.</b> History: v1 = name-only members (overloads collided); v2 = arity-discriminated
     /// methods/constructors; v3 = same-arity overloads further disambiguated by declaration span;
     /// v4 = types identified by their full chain (namespace + nesting + generic arity) instead of the bare
-    /// simple name, so same-named types in one file no longer merge into one node.
+    /// simple name, so same-named types in one file no longer merge into one node;
+    /// v5 = JS/GraphQL node ids no longer lowercased (they matched nothing on Windows paths and collided
+    /// with the File node on all-lowercase paths) — JSComponent moves to <c>{file}::{name}</c>, GraphQL
+    /// operations keep their original-case names.
     /// Unstamped legacy graphs read as 0 (&lt; current → stale).
     /// </summary>
-    public const int SchemeVersion = 4;
+    public const int SchemeVersion = 5;
 
     /// <summary>
     /// Node id for a type declaration in <paramref name="filePath"/>. <paramref name="typeChain"/> is the

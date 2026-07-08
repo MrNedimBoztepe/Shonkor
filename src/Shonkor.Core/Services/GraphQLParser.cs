@@ -31,7 +31,9 @@ public sealed partial class GraphQLParser : IFileParser
     [GeneratedRegex(@"fragment\s+([A-Za-z0-9_]+)\s+on\s+([A-Za-z0-9_]+)", RegexOptions.IgnoreCase)]
     private static partial Regex FragmentRegex();
 
-    [GeneratedRegex(@"\.\.\.\s+on\s+([A-Za-z0-9_]+)", RegexOptions.IgnoreCase)]
+    // \s* (not \s+) after the ellipsis: "...on Promo" without a space is extremely common formatting
+    // and previously produced silently empty referencedTemplates.
+    [GeneratedRegex(@"\.\.\.\s*on\s+([A-Za-z0-9_]+)", RegexOptions.IgnoreCase)]
     private static partial Regex InlineFragmentRegex();
 
     /// <inheritdoc />
@@ -45,14 +47,16 @@ public sealed partial class GraphQLParser : IFileParser
         var nodes = new List<GraphNode>();
         var edges = new List<GraphEdge>();
 
-        var fileNodeId = filePath.ToLowerInvariant();
+        // Node ids are case-sensitive in storage; the scanner's File node uses the original-case path.
+        // The old lowercased id made every DEFINED_IN edge dangle on Windows paths.
+        var fileNodeId = filePath;
 
         // 1. Find all query names
         var queries = QueryRegex().Matches(content);
         foreach (Match match in queries)
         {
             var queryName = match.Groups[1].Value;
-            var nodeId = $"{fileNodeId}::query::{queryName.ToLowerInvariant()}";
+            var nodeId = $"{fileNodeId}::query::{queryName}";
 
             nodes.Add(new GraphNode
             {
@@ -80,7 +84,7 @@ public sealed partial class GraphQLParser : IFileParser
         foreach (Match match in mutations)
         {
             var mutationName = match.Groups[1].Value;
-            var nodeId = $"{fileNodeId}::mutation::{mutationName.ToLowerInvariant()}";
+            var nodeId = $"{fileNodeId}::mutation::{mutationName}";
 
             nodes.Add(new GraphNode
             {
@@ -108,7 +112,7 @@ public sealed partial class GraphQLParser : IFileParser
         {
             var fragmentName = match.Groups[1].Value;
             var targetTemplate = match.Groups[2].Value;
-            var nodeId = $"{fileNodeId}::fragment::{fragmentName.ToLowerInvariant()}";
+            var nodeId = $"{fileNodeId}::fragment::{fragmentName}";
 
             nodes.Add(new GraphNode
             {

@@ -729,7 +729,11 @@ public sealed class GraphIndexScanner
     /// provenance signal honest even if a parser forgets to tag an individual edge.
     /// </summary>
     private static GraphEdge StampProvenance(GraphEdge edge, Provenance parserDefault) =>
-        (int)parserDefault > (int)edge.Provenance ? edge with { Provenance = parserDefault } : edge;
+        // Structural containment (file → symbol) is a deterministic fact even when the parser's OTHER
+        // relationships are heuristic — a heuristic parser default must not downgrade CONTAINS.
+        edge.Relationship != "CONTAINS" && (int)parserDefault > (int)edge.Provenance
+            ? edge with { Provenance = parserDefault }
+            : edge;
 
     private static string ComputeSha256Hash(string input)
     {
