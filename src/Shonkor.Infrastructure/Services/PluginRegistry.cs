@@ -266,16 +266,31 @@ public sealed class PluginRegistry
             var json = File.ReadAllText(_registryPath);
             return JsonSerializer.Deserialize<RegistryFile>(json, JsonOptions)?.Plugins ?? new List<InstalledPlugin>();
         }
-        catch
+        catch (Exception ex)
         {
-            return new List<InstalledPlugin>();
+            // A registry that EXISTS but can't be read (locked by AV/backup/another instance, or corrupt)
+            // must fail the current operation. Swallowing this and returning an empty list meant the next
+            // load-modify-Save cycle persisted the empty state — erasing every installed plugin.
+            throw new InvalidOperationException(
+                $"The plugin registry '{_registryPath}' exists but could not be read; refusing to continue (a write now would wipe it).", ex);
         }
     }
 
     private void Save(List<InstalledPlugin> plugins)
     {
         Directory.CreateDirectory(_pluginsDir);
-        File.WriteAllText(_registryPath, JsonSerializer.Serialize(new RegistryFile { Plugins = plugins }, JsonOptions));
+        // Atomic write: a crash mid-write must never leave a torn registry.json behind (which the next
+        // Load would reject, blocking every plugin operation until manually repaired).
+        var tempPath = _registryPath + ".tmp";
+        File.WriteAllText(tempPath, JsonSerializer.Serialize(new RegistryFile { Plugins = plugins }, JsonOptions));
+        if (File.Exists(_registryPath))
+        {
+            File.Replace(tempPath, _registryPath, destinationBackupFileName: null);
+        }
+        else
+        {
+            File.Move(tempPath, _registryPath);
+        }
     }
 
     private sealed class RegistryFile
