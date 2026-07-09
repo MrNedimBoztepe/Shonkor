@@ -1,0 +1,78 @@
+name: Bench
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'bench/**'
+      - '.github/workflows/bench.yml'
+  schedule:
+    # Nightly vector/hybrid + answer-groundedness gate (needs a runner with Ollama).
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # PR gate: deterministic, Ollama-free. Builds the fixture DB (the repo indexes itself) and gates the
+  # FTS retrieval rows against the checked-in baseline. A >5% relative drop in P@1/MRR/Recall@k fails.
+  retrieval-fts:
+    name: Retrieval (FTS gate)
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build (Release)
+        run: dotnet build Shonkor.slnx --configuration Release
+
+      - name: Build fixture DB (repo indexes itself)
+        run: dotnet run --project src/Shonkor.CLI --configuration Release --no-build -- index .
+
+      - name: Validate golden sets are not circular
+        run: dotnet run --project src/Shonkor.Bench --configuration Release --no-build -- shonkor.db --check-circularity bench/golden/agent-queries.json
+
+      - name: Gate FTS retrieval against baseline
+        run: dotnet run --project src/Shonkor.Bench --configuration Release --no-build -- shonkor.db --set bench/golden/agent-queries.json --baseline bench/retrieval-baseline.json
+
+  # Nightly gate: vector + hybrid + answer groundedness. Requires Ollama on the runner; a missing backend
+  # is a HARD FAIL (the point of the nightly is to catch vector/answer regressions, not skip them).
+  # NOTE: needs a self-hosted runner (or a service) providing Ollama with the configured models — the
+  # default GitHub-hosted runners do not ship one. Left on a schedule so it is opt-in per fork setup.
+  retrieval-vector-nightly:
+    name: Retrieval + answers (vector/hybrid gate)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build (Release)
+        run: dotnet build Shonkor.slnx --configuration Release
+
+      - name: Ensure Ollama is reachable (hard fail, no silent skip)
+        run: |
+          set -e
+          curl -sf --max-time 10 "${OLLAMA_URL:-http://localhost:11434}/api/tags" > /dev/null \
+            || { echo "::error::Ollama unreachable — the nightly vector/hybrid gate must not silently skip."; exit 1; }
+
+      - name: Build fixture DB (with embeddings)
+        run: dotnet run --project src/Shonkor.CLI --configuration Release --no-build -- index . --embed
+
+      - name: Gate vector + hybrid retrieval against baseline
+        run: dotnet run --project src/Shonkor.Bench --configuration Release --no-build -- shonkor.db --set bench/golden/agent-queries.json --baseline bench/retrieval-baseline.json
+
+      - name: Gate answer groundedness against baseline
+        run: dotnet run --project src/Shonkor.Bench --configuration Release --no-build -- shonkor.db --answers bench/golden/answers.json --baseline bench/answers-baseline.json
