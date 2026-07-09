@@ -1,5 +1,7 @@
 # TICKET-206 – Grounding enforcement: citation validation, relevance threshold, history fence, answer language
 
+**Status:** ✅ Implemented — `CitationValidator`, relevance floor (`MatchStrength`) + history fence in `RagPromptBuilder` (PR #89, commit `8557609`); answer-language default handled in the English-language migration. Tests: `GroundingTests`.
+
 **Severity ref:** H2, H3, H14, M13 (+M1 grounding review) · **Effort:** M · **Risk:** medium × low (too aggressive a threshold rejects legitimate questions → make it configurable, calibrate via eval)
 
 ## Context
