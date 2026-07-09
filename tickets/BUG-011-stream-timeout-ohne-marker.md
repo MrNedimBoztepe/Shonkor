@@ -1,25 +1,25 @@
-# BUG-011 — Streaming-Antworten werden nach 2 Minuten hart abgebrochen, ohne Unvollständigkeits-Marker
+# BUG-011 — Streaming responses are hard-aborted after 2 minutes, without an incompleteness marker
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** LLM-Integration / RAG
+**Severity:** High · **Status:** Confirmed · **Area:** LLM integration / RAG
 
-## Kontext
+## Context
 
-`_httpClient.Timeout = TimeSpan.FromMinutes(2)` ([OllamaSemanticAnalyzer.cs:34](../src/Shonkor.Infrastructure/Services/OllamaSemanticAnalyzer.cs)) gilt auch für das Lesen des Response-Bodys — auch mit `ResponseHeadersRead`. Eine RAG-Generierung > 120 s (großes Kapsel-Kontextfenster + 7B-Modell auf CPU) wird mitten im Stream abgebrochen. Der Abbruch kommt als `TaskCanceledException` aus `ReadLineAsync` (Zeile 282); der Graceful-Truncation-Marker `[Antwort unvollständig]` (Zeilen 317-322) feuert nur bei `line == null`. In `SearchEndpoints.cs:186-189` sind Teil-Tokens bereits an den Client geflusht → die Antwort endet mitten im Satz, ohne Marker, mit abgebrochener Response.
+`_httpClient.Timeout = TimeSpan.FromMinutes(2)` ([OllamaSemanticAnalyzer.cs:34](../src/Shonkor.Infrastructure/Services/OllamaSemanticAnalyzer.cs)) also applies to reading the response body — even with `ResponseHeadersRead`. A RAG generation > 120 s (large capsule context window + 7B model on CPU) is aborted mid-stream. The abort surfaces as a `TaskCanceledException` from `ReadLineAsync` (line 282); the graceful-truncation marker `[Antwort unvollständig]` (lines 317-322) only fires on `line == null`. In `SearchEndpoints.cs:186-189` partial tokens have already been flushed to the client → the response ends mid-sentence, without a marker, with an aborted response.
 
-## Reproduktion
+## Reproduction
 
-Query mit großer Kapsel gegen ein langsames lokales Modell (>120 s Generierung) → Antwort bricht mid-sentence ab.
+Query with a large capsule against a slow local model (>120 s generation) → response aborts mid-sentence.
 
 ## Fix
 
-`Timeout = Timeout.InfiniteTimeSpan` auf dem Typed Client; Connect-/First-Byte-Timeout stattdessen über `SocketsHttpHandler.ConnectTimeout` bzw. eine CTS bis zum ersten Token. Read-Loop so strukturieren, dass auch der Exception-Pfad den Truncation-Marker yielden kann (try um den Read, yield nach dem catch).
+`Timeout = Timeout.InfiniteTimeSpan` on the typed client; instead set the connect/first-byte timeout via `SocketsHttpHandler.ConnectTimeout` or a CTS up to the first token. Structure the read loop so that the exception path can also yield the truncation marker (try around the read, yield after the catch).
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] Generierungen > 2 min laufen durch (kein künstlicher Abbruch durch den Client-Timeout).
-- [ ] Wird der Stream dennoch unterbrochen (Server weg, echtes Timeout), endet die Ausgabe mit dem `[Antwort unvollständig]`-Marker.
-- [ ] Verbindungsaufbau zu nicht erreichbarem Ollama schlägt weiterhin schnell fehl (Connect-Timeout).
+- [ ] Generations > 2 min run to completion (no artificial abort from the client timeout).
+- [ ] If the stream is interrupted anyway (server gone, real timeout), the output ends with the `[Antwort unvollständig]` marker.
+- [ ] Establishing a connection to an unreachable Ollama still fails fast (connect timeout).
 
 ## DoD
 
-- Fix + Test (simulierter Stream-Abbruch) gemerged.
+- Fix + test (simulated stream abort) merged.

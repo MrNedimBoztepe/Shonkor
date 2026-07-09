@@ -10,17 +10,17 @@
   "uncitedParagraphRate": 0.5595238095238095,
   "contentCheckPassRate": 0.6666666666666666,
   "failures": [
-    "ans-tokenhasher: answer misses required content \u0027sha256\u0027",
+    "ans-tokenhasher: answer misses required content 'sha256'",
     "ans-nodeid: abstained although the context covers the question",
     "ans-nodeid: cites source(s) not in the context: Name",
     "ans-nodeid: none of the expected symbol(s) cited (CsharpNodeId)",
     "ans-phpparser: none of the expected symbol(s) cited (PhpModuleParser)",
     "ans-proxy: abstained although the context covers the question",
     "ans-proxy: none of the expected symbol(s) cited (McpProxyClient)",
-    "abst-kafka: expected abstention, got an answer (Die Services kommunizieren \u00FCber folgende Kafka-Topics:  1. \u0060order-events\u0060 - F\u00FCr Bestellereignisse [McpRequestHandler @ M\u2026)",
-    "abst-payment: expected abstention, got an answer (Das System Stripe wird f\u00FCr Zahlungsabwicklung \u00FCber eine API integriert. Diese API erm\u00F6glicht es dem System, Zahlungen zu\u2026)",
-    "abst-jwt: expected abstention, got an answer (Die JWT-Rotation mit Refresh-Tokens ist ein Sicherheitsmechanismus, der verwendet wird, um das Ablaufdatum von Access-To\u2026)",
-    "abst-ssr: expected abstention, got an answer (Das Server-Side-Rendering (SSR) von React-Komponenten wird durch die Hydration gel\u00F6st. Die Hydration ist der Prozess, be\u2026)",
-    "abst-websocket: expected abstention, got an answer (Die WebSocket-Reconnect-Logik mit Backoff wird wie folgt implementiert:  1. **Initialisierung**:    - Ein \u0060ReconnectDela\u2026)"
+    "abst-kafka: expected abstention, got an answer (The services communicate over the following Kafka topics:  1. `order-events` - For order events [McpRequestHandler @ M…)",
+    "abst-payment: expected abstention, got an answer (The system integrates Stripe for payment processing via an API. This API enables the system to process payments…)",
+    "abst-jwt: expected abstention, got an answer (JWT rotation with refresh tokens is a security mechanism used to manage the expiry date of access tokens…)",
+    "abst-ssr: expected abstention, got an answer (Server-side rendering (SSR) of React components is solved through hydration. Hydration is the process by…)",
+    "abst-websocket: expected abstention, got an answer (The WebSocket reconnect logic with backoff is implemented as follows:  1. **Initialization**:    - A `ReconnectDela…)"
   ]
 }

@@ -553,7 +553,7 @@
   },
   {
     "Id": "doc-GetHelixModule",
-    "Query": "Parsen des Helix Layer und Moduls aus Datei- oder Sitecore-Pfade",
+    "Query": "Parses the Helix layer and module from file or Sitecore paths",
     "Mode": null,
     "Expected": [
       "C:\\Projects\\Brain\\src\\Shonkor.Infrastructure\\Services\\CrossTechLinker.cs::CrossTechLinker::GetHelixModule#2"

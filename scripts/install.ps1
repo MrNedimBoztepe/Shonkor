@@ -1,8 +1,8 @@
 # Install the latest `shonkor` release binary (Windows) — no .NET SDK required.
-# Usage:  irm https://raw.githubusercontent.com/nottherealluckybuddha/Shonkor/main/scripts/install.ps1 | iex
+# Usage:  irm https://raw.githubusercontent.com/MrNedimBoztepe/Shonkor/main/scripts/install.ps1 | iex
 $ErrorActionPreference = 'Stop'
 
-$repo = 'nottherealluckybuddha/Shonkor'
+$repo = 'MrNedimBoztepe/Shonkor'
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
 $asset = "shonkor-win-$arch.exe"
 $url = "https://github.com/$repo/releases/latest/download/$asset"

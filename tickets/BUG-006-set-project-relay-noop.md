@@ -1,25 +1,25 @@
-# BUG-006 — `set_project` ist über das HTTP-Relay ein stiller No-op, meldet aber Erfolg
+# BUG-006 — `set_project` is a silent no-op over the HTTP relay but reports success
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** MCP-Relay
+**Severity:** High · **Status:** Confirmed · **Area:** MCP relay
 
-## Kontext
+## Context
 
-Das Relay baut **pro POST** einen neuen `McpRequestHandler`/`McpToolContext` ([McpEndpoints.cs:68-70](../src/Shonkor.Web/Endpoints/McpEndpoints.cs)). `SetProjectTool` setzt `ctx.SessionProjectOverride` ([MetaTools.cs:117-121](../src/Shonkor.Infrastructure/Services/Mcp/Tools/MetaTools.cs)) auf diesem request-lokalen Objekt und antwortet „Active project for this session is now 'X'" — der Zustand ist mit dem Request weg. Der Client glaubt an den Wechsel und liest/schreibt (`record`) anschließend in den falschen Graph. Kombiniert mit BUG-003 besonders tückisch.
+The relay builds a new `McpRequestHandler`/`McpToolContext` **per POST** ([McpEndpoints.cs:68-70](../src/Shonkor.Web/Endpoints/McpEndpoints.cs)). `SetProjectTool` sets `ctx.SessionProjectOverride` ([MetaTools.cs:117-121](../src/Shonkor.Infrastructure/Services/Mcp/Tools/MetaTools.cs)) on this request-local object and replies "Active project for this session is now 'X'" — the state is gone with the request. The client believes the switch happened and subsequently reads/writes (`record`) into the wrong graph. Combined with BUG-003, this is especially treacherous.
 
-## Reproduktion
+## Reproduction
 
-Über `shonkor mcp-proxy`: `set_project name=Foo`, danach `get_stats` → Statistiken des alten/aktiven Projekts.
+Via `shonkor mcp-proxy`: `set_project name=Foo`, then `get_stats` → statistics of the old/active project.
 
 ## Fix
 
-Entweder (a) `set_project` über das Relay ehrlich machen: wenn keine persistente Session existiert, klare Fehlermeldung „über HTTP-Relay nicht unterstützt — `projectName` pro Aufruf übergeben"; oder (b) Sessions über einen `Mcp-Session-Id`-Header persistieren (Kontext-Cache keyed by Session-ID, mit TTL). Variante (a) ist der sichere Sofort-Fix.
+Either (a) make `set_project` honest over the relay: when no persistent session exists, return a clear error "not supported over the HTTP relay — pass `projectName` per call"; or (b) persist sessions via an `Mcp-Session-Id` header (context cache keyed by session ID, with TTL). Variant (a) is the safe immediate fix.
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] `set_project` über das Relay behauptet keinen Erfolg mehr, den es nicht leisten kann.
-- [ ] Über stdio (persistente Session) funktioniert `set_project` unverändert.
-- [ ] Test: Relay-Aufruf `set_project` + Folge-Tool → entweder Fehlermeldung (a) oder korrektes Projekt (b).
+- [ ] `set_project` over the relay no longer claims a success it cannot deliver.
+- [ ] Over stdio (persistent session), `set_project` works unchanged.
+- [ ] Test: relay call `set_project` + follow-up tool → either an error message (a) or the correct project (b).
 
-## DoD
+## Definition of Done
 
-- Fix + Test gemerged; Tool-Beschreibung von `set_project` entsprechend angepasst.
+- Fix + test merged; `set_project` tool description adjusted accordingly.

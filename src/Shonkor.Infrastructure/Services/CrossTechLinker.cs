@@ -284,7 +284,7 @@ public static class CrossTechLinker
     private record struct HelixModuleInfo(string Layer, string Module);
 
     /// <summary>
-    /// Parsen des Helix Layer und Moduls aus Datei- oder Sitecore-Pfade.
+    /// Parses the Helix layer and module from file or Sitecore paths.
     /// </summary>
     private static HelixModuleInfo? GetHelixModule(string? filePath, string? sitecorePath)
     {

@@ -53,7 +53,7 @@ public static class EmbeddingTextBuilder
         return sb.ToString();
     }
 
-    private const string MiddleGap = "\n… [Mitte gekürzt] …\n";
+    private const string MiddleGap = "\n… [middle truncated] …\n";
 
     /// <summary>
     /// Bounds <paramref name="body"/> to <paramref name="max"/> chars while keeping BOTH ends of a large

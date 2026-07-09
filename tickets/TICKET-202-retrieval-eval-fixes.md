@@ -1,29 +1,29 @@
-# TICKET-202 – Retrieval-Eval reparieren: Zirkularität, hybrid, Coverage-Symmetrie, CI-Gate
+# TICKET-202 – Fix retrieval eval: circularity, hybrid, coverage symmetry, CI gate
 
-**Schweregrad-Bezug:** K1, M1 · **Aufwand:** M · **Risiko:** niedrig × mittel (Zahlen werden ehrlicher = schlechter; README muss nachziehen)
+**Severity ref:** K1, M1 · **Effort:** M · **Risk:** low × medium (numbers become more honest = worse; README must follow)
 
-## Kontext
-1. `bench/golden/doc-intent.json` ist für den Vektor-Retriever zirkulär: Query = `<summary>`-Text des Ziels (`GoldenSetGenerator.cs:38,50-53`), der via `EmbeddingTextBuilder` (`:40,52`) im Embedding-Dokument steht. P@1 0,88 ist eine Obergrenze für Doc-Comment-Self-Matching.
-2. `search_hybrid` (Default-Modus) wird nie gebencht.
-3. `RagBaselineBenchmark.cs:79-83` misst Shonkors Coverage am Prä-Budget-Subgraph, die Baseline an gelieferten Chunks — der +21-pp-Claim ist asymmetrisch.
-4. Gate-Metrik P@k ist bei 1 Relevanten/k=10 (Max 0,1) mit 0,03-Toleranz wirkungslos (`Program.cs:157-172`); kein CI-Wiring; ohne Ollama werden Vektor-Zeilen still geskippt (`RetrievalBenchmark.cs:44-49`).
-5. Der Prefix-A/B, der „within noise" ergab, embeddete Queries mit dem Document-Prefix (`RetrievalBenchmark.cs:68` → kind-loser Overload).
+## Context
+1. `bench/golden/doc-intent.json` is circular for the vector retriever: query = `<summary>` text of the target (`GoldenSetGenerator.cs:38,50-53`), which sits in the embedding document via `EmbeddingTextBuilder` (`:40,52`). P@1 0.88 is an upper bound for doc-comment self-matching.
+2. `search_hybrid` (the default mode) is never benchmarked.
+3. `RagBaselineBenchmark.cs:79-83` measures Shonkor's coverage on the pre-budget subgraph, the baseline on delivered chunks — the +21-pp claim is asymmetric.
+4. Gate metric P@k is ineffective at 1 relevant/k=10 (max 0.1) with a 0.03 tolerance (`Program.cs:157-172`); no CI wiring; without Ollama, vector rows are silently skipped (`RetrievalBenchmark.cs:44-49`).
+5. The prefix A/B that yielded "within noise" embedded queries with the document prefix (`RetrievalBenchmark.cs:68` → kind-less overload).
 
-## Akzeptanzkriterien
-- [ ] Neues Set `intent-paraphrased.json` (~150 Fälle): LLM-paraphrasierte Queries + automatischer Zirkularitäts-Check (kein Query teilt >4 Inhaltswörter mit dem Embedding-Dokument des Ziels); Stichproben-Review dokumentiert.
-- [ ] Sets `agent-queries.json` (≥ 30 echte MCP-Queries, handgelabelt) und `negatives.json` (≥ 20 Fälle ohne Treffer im Graph) angelegt.
-- [ ] `search_hybrid` als dritte Retriever-Zeile in `RetrievalBenchmark`.
-- [ ] Coverage-Messung prüft den gelieferten Capsule-Text (Node-Header/Signatur-String-Check); neue Metrik Seed-Survival-Rate.
-- [ ] Query-Embedding im Benchmark nutzt `EmbeddingKind.Query`; Prefix-A/B auf dem paraphrasierten Set neu gemessen und Ergebnis dokumentiert (TICKET-215/V15-Folgeentscheidung).
-- [ ] Gate auf P@1/MRR/Recall@10 relativ (>5 %), P@k aus dem Gate entfernt.
-- [ ] CI: PR-Job baut Fixture-DB (Repo indiziert sich selbst) und gated FTS-Zeilen; Nightly-Job (Ollama) gated Vektor/hybrid; fehlendes Ollama im Nightly = harter Fail, kein Silent-Skip.
-- [ ] README-Benchmark-Tabellen auf die neuen Zahlen umgestellt, jeweils mit Commit/Datum des Runs; unbelegter „~88 %"-Claim entfernt oder durch gespeicherten Run belegt.
+## Acceptance Criteria
+- [ ] New set `intent-paraphrased.json` (~150 cases): LLM-paraphrased queries + automatic circularity check (no query shares > 4 content words with the target's embedding document); sample review documented.
+- [ ] Sets `agent-queries.json` (≥ 30 real MCP queries, hand-labeled) and `negatives.json` (≥ 20 cases with no hit in the graph) created.
+- [ ] `search_hybrid` as a third retriever row in `RetrievalBenchmark`.
+- [ ] Coverage measurement checks the delivered capsule text (node-header/signature string check); new metric seed-survival rate.
+- [ ] Query embedding in the benchmark uses `EmbeddingKind.Query`; prefix A/B re-measured on the paraphrased set and result documented (TICKET-215/V15 follow-up decision).
+- [ ] Gate on P@1/MRR/Recall@10 relative (> 5 %), P@k removed from the gate.
+- [ ] CI: PR job builds the fixture DB (the repo indexes itself) and gates FTS rows; nightly job (Ollama) gates vector/hybrid; missing Ollama in the nightly = hard fail, no silent skip.
+- [ ] README benchmark tables switched to the new numbers, each with commit/date of the run; unsubstantiated "~88 %" claim removed or backed by a stored run.
 
-## Betroffene Bereiche
+## Affected Areas
 `src/Shonkor.Bench/**`, `bench/golden/`, `.github/workflows/`, README.
 
-## Abhängigkeiten
-Keine. Parallel zu TICKET-201.
+## Dependencies
+None. In parallel with TICKET-201.
 
 ## Definition of Done
-Zwei identische Nightly-Läufe, Baselines eingecheckt, CI grün, README aktualisiert.
+Two identical nightly runs, baselines checked in, CI green, README updated.

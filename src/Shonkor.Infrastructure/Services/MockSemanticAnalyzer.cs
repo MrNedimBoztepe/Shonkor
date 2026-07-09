@@ -19,8 +19,8 @@ public class MockSemanticAnalyzer : ISemanticAnalyzer
         await Task.Delay(200, cancellationToken).ConfigureAwait(false);
 
         // Generate a fake summary based on the node name and type
-        string fakeSummary = $"Dies ist eine automatisch generierte (Mock) Zusammenfassung für {node.Type} '{node.Name}'. Der Zweck dieses Moduls ist vermutlich die Verarbeitung von Geschäftslogik oder Daten.";
-        
+        string fakeSummary = $"This is an automatically generated (mock) summary for {node.Type} '{node.Name}'. The purpose of this module is presumably the processing of business logic or data.";
+
         var fakeConcepts = new List<string>
         {
             "Data Processing",
@@ -30,12 +30,12 @@ public class MockSemanticAnalyzer : ISemanticAnalyzer
         if (node.Name.Contains("Controller", StringComparison.OrdinalIgnoreCase))
         {
             fakeConcepts.Add("Web API");
-            fakeSummary = $"Dieser {node.Type} nimmt HTTP-Anfragen entgegen und orchestriert die entsprechenden Backend-Services.";
+            fakeSummary = $"This {node.Type} receives HTTP requests and orchestrates the corresponding backend services.";
         }
         else if (node.Name.Contains("Provider", StringComparison.OrdinalIgnoreCase) || node.Name.Contains("Storage", StringComparison.OrdinalIgnoreCase))
         {
             fakeConcepts.Add("Data Access");
-            fakeSummary = $"Diese Klasse ist für das Lesen und Schreiben von Daten auf dem Speichermedium zuständig.";
+            fakeSummary = $"This class is responsible for reading and writing data on the storage medium.";
         }
 
         return new SemanticAnalysisResult

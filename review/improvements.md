@@ -1,137 +1,137 @@
-# Shonkor – Verbesserungsvorschläge
+# Shonkor – Improvement Proposals
 
-Format je Vorschlag: **Problem → Lösung → ggf. Alternative → Nutzen → Risiko (Wahrscheinlichkeit × Auswirkung) → Aufwand (S/M/L)**. Nummerierung V1…V15, sortiert nach Hebel auf Antwort-Präzision. Referenzen: Findings in [shonkor-review.md](shonkor-review.md), Tickets in `tickets/`.
-
----
-
-## V1 — Antwort-Groundedness-Eval wiederherstellen (K1) → TICKET-201
-
-**Problem:** Nichts misst, ob Antworten dem Kontext treu sind; die frühere Eval (Zitat-Validität, Abstention) wurde in `009b8d7` gestrichen.
-**Lösung:** `--answers`-Modus in `Shonkor.Bench` reaktivieren: Golden-Set aus (Frage, Kontext-Node-Ids, erwartetes Verhalten: answerable/abstain, must-cite-Ids); Metriken: Citation-Validity-Rate (Labels ⊆ geliefertes Set), Must-Cite-Recall, Abstention-Precision/-Recall. Details: [eval-plan.md](eval-plan.md).
-**Alternative:** Externes Framework (RAGAS/DeepEval via Python-Sidecar) — mehr Metriken (Faithfulness per LLM-Judge) out of the box, aber Fremd-Stack, Ollama-Anbindung fummelig, bricht die „ein Harness, ein Report"-Linie von `Shonkor.Bench`. **Empfehlung:** eigenes schlankes `--answers` zuerst (die Infrastruktur existierte schon); LLM-as-Judge-Faithfulness später optional obendrauf.
-**Nutzen:** Macht „präzise" von Behauptung zu Messgröße; Voraussetzung für alle Grounding-Änderungen (V4–V6) — ohne Eval sind deren Effekte unbelegbar.
-**Risiko:** niedrig × niedrig (reine Messinfrastruktur; einziges Risiko: schlecht kuratierte Fälle messen das Falsche — durch Review der Fälle abfangbar).
-**Aufwand:** M
-
-## V2 — Retrieval-Benchmark entzirkularisieren + `search_hybrid` benchen + Coverage symmetrisch messen (K1) → TICKET-202
-
-**Problem:** doc-intent-Queries sind Fast-Substrings der Embedding-Dokumente; hybrid (der Default!) ungemessen; +21 pp aus asymmetrischer Coverage; Gate auf sinnlosem P@k.
-**Lösung:** (a) Queries per LLM paraphrasieren (lexikalische Überlappung brechen), zusätzlich ~30 handgesammelte echte Agent-Queries aus MCP-Logs, inkl. Negativ-Fällen („gibt es hier Payment-Code?" → erwartete Antwort: nein); (b) `search_hybrid` als dritte Retriever-Zeile; (c) `RagBaselineBenchmark`: Coverage gegen den **Capsule-Text** prüfen (Node-Header sind zitierbar — String-Check), nicht gegen den Prä-Budget-Subgraph; (d) Gate auf P@1/MRR/Recall@10 relativ statt P@k absolut.
-**Nutzen:** Erst danach sind die README-Zahlen belastbar; hybrid-Regressionen (z. B. durch H1-Fix) werden sichtbar.
-**Risiko:** niedrig × mittel (paraphrasierte Zahlen werden sichtbar schlechter ausfallen als 0,88 — das ist Ehrlichkeit, kein Schaden; README muss nachziehen).
-**Aufwand:** M
-
-## V3 — Upsert auf `ON CONFLICT DO UPDATE` umstellen + FTS-Query-Sanitizing (K3, H1) → TICKET-203
-
-**Problem:** REPLACE korrumpiert den FTS-Index still; normale Code-Queries werfen FTS-Syntaxfehler und degradieren zu unsortiertem LIKE.
-**Lösung:** (a) `INSERT … ON CONFLICT(Id) DO UPDATE` (feuert UPDATE-Trigger, erhält rowid; zusätzlich `NeedsSemanticAnalysis`/`Embedding` nur bei Content-Änderung zurücksetzen); (b) Query-Sanitizer: Whitespace-Tokens in doppelte Quotes (mit `""`-Escaping), optional Prefix-`*`; LIKE nur noch als echter letzter Fallback mit `ESCAPE` und definierter Ordnung; (c) Fallback-Fall an `search_hybrid` signalisieren, damit RRF die Scheinränge abwertet.
-**Alternative zu (a):** nur `PRAGMA recursive_triggers=ON` — eine Zeile, behebt die Korruption, lässt aber rowid-Churn und das Embedding-Wipe-Verhalten bestehen. **Empfehlung:** ON CONFLICT (strikt besser); das Pragma zusätzlich als Gürtel-und-Hosenträger schadet nicht.
-**Nutzen:** Beseitigt die größte stille Korrektheits-Zeitbombe; BM25-Ranking gilt wieder für die häufigsten Query-Formen.
-**Risiko:** niedrig × mittel (Upsert-Semantik-Änderung ist zentral — durch vorhandene Storage-Tests + einen neuen FTS-Konsistenztest abdecken).
-**Aufwand:** S
-
-## V4 — Prompt-Token-Budget + `num_ctx` + Instruktionsposition (K4) → TICKET-205
-
-**Problem:** Stille Ollama-Truncation wirft zuerst die Grounding-Regeln weg.
-**Lösung:** `options.num_ctx` pro Modell konfigurieren; Prompt-Tokens schätzen (chars/3,5 reicht) und Knotenzahl/Per-Node-Budget passend schrumpfen; nach dem Call `prompt_eval_count` gegen Schätzung prüfen und Truncation als Warnung an UI/Log melden; Instruktionsblock ans Prompt-**Ende** verschieben (Tail-Retention).
-**Nutzen:** Grounding-Regeln überleben garantiert; stille Degradation wird sichtbar.
-**Risiko:** niedrig × niedrig.
-**Aufwand:** S
-
-## V5 — Zitat-Validierung + Relevanz-Schwelle + History-Fence (H2, H3, H14, M13) → TICKET-206
-
-**Problem:** Zitate sind unvalidierter Modelltext; schwaches Retrieval führt trotzdem zur Antwort; Chat-History umgeht den Injection-Fence; Antwortsprache hardcoded.
-**Lösung:** (a) Antwort puffern bzw. am Streamende nachverarbeiten: `[… @ …]`-Label per Regex extrahieren, gegen das exakte Label-Set aus `BuildRagPrompt` prüfen, unbekannte sichtbar flaggen, valide als Node-Links rendern, zitatlose Absätze markieren; (b) Score-Schwelle vor Kontextauswahl (relativ oder absolut, konfigurierbar), darunter deterministisches „dafür gibt es im Graphen keine Belege" **ohne** LLM-Call; Retrieval-Stärke pro Node in den Prompt; (c) Transkript in eigene, als Daten deklarierte Prompt-Sektion, `NUTZERFRAGE` = nur letzte Nachricht; (d) Antwortsprache aus UI-Locale bzw. Frage.
-**Alternative zu (a):** Claim-Level-Entailment (NLI/LLM-Judge pro Satz) — deutlich stärkere Garantie, aber teuer, langsam, auf lokalen Modellen unzuverlässig. **Empfehlung:** Label-Set-Validierung jetzt (fängt die schlimmste Klasse: zitat-gewaschene Halluzination); Entailment später als Eval-Metrik (V1), nicht als Laufzeit-Gate.
-**Nutzen:** Die drei größten Enforcement-Lücken des Antwortpfads geschlossen; H14 schließt einen realen Injection-Kanal.
-**Risiko:** mittel × niedrig (Schwelle zu aggressiv → berechtigte Fragen abgelehnt; konfigurierbar machen + per V1-Eval kalibrieren).
-**Aufwand:** M
-
-## V6 — Provenance-Integrität durchsetzen (K5, M5) → TICKET-207
-
-**Problem:** Linker-Fallback und LLM-Kanten claimen Extracted; Regex-Parser ohne Override; `INSERT OR IGNORE` friert Provenance ein; `Properties` werden nie persistiert.
-**Lösung:** Provenance ins Edge-Tupel des Linkers (Fallback: `Inferred` bei eindeutig, `Ambiguous` bei mehreren — wie `CrossTechLinker` es vormacht); `RELATES_TO`-Insert explizit `Inferred`; `DefaultProvenance`-Override in `GraphQLParser`/`SitecoreXmCloudPlugin`; Edge-Upsert `ON CONFLICT … DO UPDATE SET Provenance = MIN(excluded.Provenance, Provenance)` (exakte Auflösung darf Trust upgraden); Storage-Guard-Test: kein Schreibpfad persistiert Extracted außer deterministischen Parsern/Linkern. `GraphEdge.Properties` entweder als JSON-Spalte persistieren oder aus dem Modell entfernen (die Lüge beenden) — Empfehlung: persistieren, die Plugin-Metadaten (confidence, placeholder) sind für Ranking nützlich.
-**Nutzen:** Das Vertrauensmodell — Shonkors erklärtes Alleinstellungsmerkmal — stimmt wieder mit der Realität überein; `provenance=extracted`-Filter liefern echte Compiler-Fakten.
-**Risiko:** niedrig × niedrig (bestehende Graphen behalten falsche Stempel bis zum Re-Scan — einmaliger `--reindex` nach Upgrade dokumentieren).
-**Aufwand:** S
-
-## V7 — Volle Methoden-Bodies + `signature`-Property (K2, M9) → TICKET-204
-
-**Problem:** 500-Zeichen-Kappung amputiert das Kernkorpus; `signature` wird gelesen, aber nie geschrieben; Klassen ohne Content.
-**Lösung:** Volle Bodies auf Method/Constructor speichern (Bounding gehört in `EmbeddingTextBuilder`, nicht in den Parser); `EndLine` setzen; `get_source` auf Datei-Slice fallen lassen, wenn Content mit Marker endet; Parser emittieren `signature` (Modifier + Name + Parameterliste); Klassen-Knoten bekommen Member-Signatur-Skelett als Content.
-**Alternative:** Cap nur anheben (z. B. 10k) — kleinerer DB-Footprint, aber dasselbe Problem eine Größenordnung später und `get_source` bleibt lückenhaft. **Empfehlung:** voll speichern; SQLite kommt mit Quellcode-Volumina problemlos klar (das File-Node speichert heute schon bis 100k).
-**Nutzen:** FTS/Embeddings/get_source sehen erstmals ganze Methoden; das Head+Tail-Design von TICKET-105 wird für C# überhaupt erst wirksam.
-**Risiko:** niedrig × niedrig (DB wächst; Re-Index nötig).
-**Aufwand:** S
-
-## V8 — Zeilennummern normalisieren (H7) → TICKET-208
-
-**Problem:** C# 0-basiert, Plugins 1-basiert, Doku sagt 1-basiert — Zitate off-by-one, Slices falsch.
-**Lösung:** Parser-seitig `+1` (Roslyn), `TryReadSourceSlice` und `CSharpDiagnostics` konsistent umstellen, Konventionstest über alle Parser (jeder Parser-Testfall prüft: Zeile 1 = erste Zeile).
-**Nutzen:** Jede Zitatangabe des Systems stimmt — Grundvoraussetzung für „grounded mit Quellenverweis".
-**Risiko:** mittel × niedrig (Off-by-one-Fixes erzeugen gern neue Off-by-ones — der Konventionstest ist Pflichtteil).
-**Aufwand:** S
-
-## V9 — Markdown-Sektions-Chunking + Summary in FTS (H6, M8) → TICKET-211
-
-**Problem:** Doku ist nur file-granular retrievbar; Sektionen ohne Content/Zeilen; `Summary` nicht in FTS; Concepts nie embedded.
-**Lösung:** Content zwischen Header-Matches in die Sektion (mit Start/EndLine aus Match-Offsets), Code-Fences/Tabellen intakt lassen, Übergroße an Absatzgrenzen splitten; `Summary` als FTS-Spalte (Rebuild + Trigger); Concept-Namen embedden.
-**Nutzen:** Doku-Fragen („wie konfiguriere ich X?") treffen die richtige Sektion mit zitierbarem Zeilenbereich statt Datei-Head.
-**Risiko:** niedrig × niedrig (FTS-Rebuild einmalig).
-**Aufwand:** M
-
-## V10 — Embedding-Lifecycle im Edit-Loop reparieren (H11, M1–M3) → TICKET-212
-
-**Problem:** Datei-Edit wirft alle Node-Embeddings der Datei weg; stdio-MCP re-embedded nie; CLI re-embedded alles; Enrichment-Race und -Verklemmung; fehlende Transaktions-Atomarität; Plugin-File-Node-Konflikte.
-**Lösung:** per-Node-Content-Hash: Summary/Embedding unveränderte Geschwister überleben den Re-Parse; CLI-Embed-Pass filtert `Embedding IS NULL` (bzw. Hash-Änderung); nach `reindex_file` synchron die frischen Knoten embedden (der MCP-Host hat den Embedding-Service bereits); `UpdateNodeSemanticDataAsync` mit Content-Fingerprint-Guard; `AnalysisAttempts`-Spalte + Parken nach N Fehlversuchen; `ReplaceFileGraphAsync(nodes, edges)` in **einer** Transaktion (Hash zuletzt); Parser dürfen keine `Type="File"`-Knoten emittieren (Scanner filtert, Docker/Python-Plugins fixen).
-**Nutzen:** Der agentische Edit-Loop — Shonkors Hauptszenario — hält den semantischen Index aktuell statt ihn zu zerlegen; CLI-Embed-Kosten sinken um Größenordnungen.
-**Risiko:** mittel × mittel (Carry-over-Logik ist die invasivste Änderung dieser Liste; braucht gezielte Tests: Edit einer Methode → nur deren Embedding invalidiert).
-**Aufwand:** L
-
-## V11 — Kanten-Kanonisierung: implementations_of, Phantom-Hubs, JS-Imports, Id-Schema (H4, H5, M4, M15) → TICKET-213
-
-**Problem:** Zwei IMPLEMENTS-Repräsentationen, Relink zerstört die vom Tool genutzte; Phantom-Name-Hubs verschmutzen Traversal; JS-Import-Kanten verbinden nie; Id-Kollisionen/-Churn.
-**Lösung:** Id-Target als kanonische Form, `implementations_of` löst erst den Interface-Knoten auf; Parser-Basistyp-Kanten auf Simple-Name reduzieren und `Inferred` taggen (in Semantic-Mode ganz unterdrücken); CTE expandiert nicht über nicht-existente Endpunkte (JOIN im rekursiven Schritt) und bekommt optionalen Relationship-/Provenance-Filter + Fan-out-Cap; JS-Import-Resolution mit Extension-/Index-Probing, Package-Imports namespacen (`npm:react`); Typ-Ids mit Generics-Arity, Overload-Ordinal statt Span, Partial-Kanonisierung; XmCloud-Komponenten file-keyed.
-**Alternative (Teilaspekt Hubs):** nur Blocklist bekannter Hub-Relationen im Traversal — billiger, aber kuriert Symptome; Phantom-Endpunkte blieben. **Empfehlung:** Kanonisierung; die Blocklist (M6) zusätzlich als konfigurierbarer Filter.
-**Nutzen:** Multi-Hop-Präzision — das Argument für Graph statt Vektor — wird real: `find_path`/`get_subgraph` liefern strukturelle statt zufälliger Nachbarschaften; JS/TS-Seite des Cross-Tech-Versprechens funktioniert erstmals.
-**Risiko:** mittel × mittel (Id-Schema-Änderung = `SchemeVersion`-Bump + Voll-Reparse; genau dafür existiert der Mechanismus).
-**Aufwand:** L
-
-## V12 — MCP-Härtung: Session, Containment, Protokoll, Clamps (H8, H9, H13, M7, M11, M12) → TICKET-209/210
-
-**Problem:** `set_project` false-success über HTTP; Path Traversal; Tool-Fehler als Protokollfehler; ping fehlt; unbounded Outputs; AllowLocalBypass; record-Injection-Kanal.
-**Lösung:** (a) Session-Store per `Mcp-Session-Id` **oder** ehrlicher Fehler „über Relay nicht unterstützt — nutze X-Project-Name"; (b) gemeinsames `ResolveContainedPath(raw, basePath)` mit `GetFullPath`+StartsWith-Check in allen fünf Datei-Tools; (c) `isError:true`-Results, `ping`, `-32700`, Protokollversion validieren; (d) Clamps: limit≤100, hops≤5, maxHops≤10, Default-Output-Cap 20–40 KB für get_source/get_subgraph-verbose/generate_capsule; (e) Bypass nur mit Flag **und** `IsDevelopment()`; (f) record: Längen-Cap, `connectedNodeIds` gegen Existenz prüfen, Content als Daten fencen.
-**Alternative zu (a):** Umstieg auf das offizielle MCP-C#-SDK mit Streamable-HTTP — löst Session + Protokoll-Conformance strukturell, aber Migrationsaufwand L und der handgerollte Server ist ansonsten solide. **Empfehlung:** jetzt (a)–(f) punktuell; SDK-Umstieg als bewusste spätere Entscheidung, falls Remote-MCP strategisch wird.
-**Nutzen:** Beseitigt Confident-Lie-Semantik, den größten lokalen Sicherheitsvektor und die Client-Kompatibilitätsprobleme in einem Zug.
-**Risiko:** niedrig × mittel (Containment kann legitime Out-of-Root-Workflows brechen — Fehlermeldung nennt den Root; Opt-out-Config falls nötig).
-**Aufwand:** M
-
-## V13 — Resilienz-/Performance-Feinschliff (M10, M14, Niedrig-Sammel) → im Zuge von TICKET-210/215
-
-**Problem:** Retry auf Cancellation/4xx, 3×-Full-Generation-Retry, Webhook-CT-Capture, GetAllNodes auf Request-Pfaden, architecture-N+1.
-**Lösung:** `when (ex is not OperationCanceledException …)`-Filter; nur transiente Fehler retryen (oder `Microsoft.Extensions.Http.Resilience` auf die typed Clients); Blocking-RAG max. 1 Retry nur bei Connect-Fehlern + kleiner Answer-Cache `hash(model+prompt)`; Webhook-Task mit `ApplicationStopping`-Token bzw. Queue-BackgroundService; Insights/Stats auf Projektionsqueries; `architecture` mit Batch-Edge-Query.
-**Nutzen:** Latenz/Kosten runter, Push-Indexierung zuverlässig, Dashboard skaliert.
-**Risiko:** niedrig × niedrig. **Aufwand:** M (verteilt, unabhängig parallelisierbar)
-
-## V14 — Vektor-Skalierung (H12, M6-SQL) → TICKET-215
-
-**Problem:** Brute-Force-Blob-Scan pro Query; CTE-OR-Join ohne Indexnutzung.
-**Lösung (inkrementell):** (1) L2-Normalisierung beim Schreiben + Dot-Product; `MemoryMarshal.Cast` statt per-Row-Alloc; Overscan-Faktor streichen (Heap ist exakt); (2) In-Memory-Matrix-Cache mit Generation-Counter (~300 MB bei 100k×768 float32, fp16 halbiert); (3) CTE als zwei UNION-Branches (nutzt `idx_edges_source`/`_target`).
-**Alternative:** `sqlite-vec` (bleibt in der SQLite-Linie, ANN optional) oder externer Vektorstore (Qdrant) — letzterer bricht „100% offline & self-contained" und lohnt erst weit jenseits 1M Knoten. **Empfehlung:** Stufe 1+3 sofort (klein), Stufe 2 bei >20k Knoten, `sqlite-vec` als Beobachtungsposten — der Status quo (exakte Suche, SQLite-only) ist bei der aktuellen Zielgröße richtig.
-**Nutzen:** Query-Latenz bleibt bei wachsenden Graphen zweistellig ms; Speicher-Churn weg.
-**Risiko:** niedrig × niedrig (Stufe 1/3), mittel × niedrig (Cache-Invalidierung, Stufe 2). **Aufwand:** S (1+3) / M (2)
-
-## V15 — nomic-Prefixe korrekt A/B-testen (M1) → Teil von TICKET-202
-
-**Problem:** Prefixe default aus, begründet mit einer Messung, die Queries mit dem Document-Prefix embeddete; Prefix-Änderung triggert kein Re-Embed.
-**Lösung:** Benchmark auf `EmbeddingKind.Query` fixen, auf dem paraphrasierten NL-Set (V2) neu messen; effektives Prefix-Paar in den `EmbeddingModel`-Stempel aufnehmen (`nomic-embed-text|dp=…|qp=…`), damit die vorhandene Reconcile-Logik Prefix-Wechsel erkennt.
-**Nutzen:** nomic ist explizit mit Task-Prefixen trainiert — plausibel mehrere Punkte NL-Retrieval-Präzision, quasi gratis.
-**Risiko:** niedrig × niedrig (falls Messung „aus" bestätigt: Status quo behalten, aber diesmal belegt). **Aufwand:** S
+Format per proposal: **Problem → Solution → optional Alternative → Benefit → Risk (Probability × Impact) → Effort (S/M/L)**. Numbering V1…V15, sorted by leverage on answer precision. References: findings in [shonkor-review.md](shonkor-review.md), tickets in `tickets/`.
 
 ---
 
-### Bewusst NICHT empfohlen
+## V1 — Restore the answer-groundedness eval (K1) → TICKET-201
 
-- **Wechsel auf reine Hybrid-Vektor+BM25-Suche ohne Graph:** Die Bench-Daten (trotz K1-Schwächen) und die Architektur sprechen dafür, dass der Graph *nicht* dekorativ ist — Capsule-Struktur, Blast-Radius, `implementations_of`, Freshness sind ohne Graph nicht reproduzierbar. Der richtige Schritt ist V11 (Graph-Präzision reparieren), nicht der Rückbau.
-- **Cross-Encoder-Reranking jetzt:** Bei Top-K≤10 aus FTS+Vektor+RRF auf Code-Symbolen ist der erwartete Gewinn klein gegenüber V2/V5/V7, und ein lokales Reranker-Modell addiert Latenz + Betriebskomplexität. Erst nach sauberer Eval (V1/V2) entscheiden — dann misst man den Effekt statt ihn zu vermuten.
-- **Externer Graph-Store (Neo4j etc.):** SQLite + rekursive CTE ist korrekt implementiert, deterministisch, offline und für die Zielgröße performant (nach V14). Migration = hohes Risiko, kein gemessener Nutzen.
+**Problem:** Nothing measures whether answers are faithful to the context; the earlier eval (citation validity, abstention) was removed in `009b8d7`.
+**Solution:** Reactivate the `--answers` mode in `Shonkor.Bench`: golden set of (question, context node ids, expected behavior: answerable/abstain, must-cite ids); metrics: citation-validity rate (labels ⊆ delivered set), must-cite recall, abstention precision/recall. Details: [eval-plan.md](eval-plan.md).
+**Alternative:** External framework (RAGAS/DeepEval via Python sidecar) — more metrics (faithfulness via LLM judge) out of the box, but a foreign stack, fiddly Ollama binding, breaks the "one harness, one report" line of `Shonkor.Bench`. **Recommendation:** own lean `--answers` first (the infrastructure already existed); LLM-as-judge faithfulness optional on top later.
+**Benefit:** Turns "precise" from an assertion into a measurable quantity; a prerequisite for all grounding changes (V4–V6) — without the eval their effects are unprovable.
+**Risk:** low × low (pure measurement infrastructure; the only risk: poorly curated cases measure the wrong thing — catchable by reviewing the cases).
+**Effort:** M
+
+## V2 — De-circularize the retrieval benchmark + benchmark `search_hybrid` + measure coverage symmetrically (K1) → TICKET-202
+
+**Problem:** doc-intent queries are near-substrings of the embedding documents; hybrid (the default!) unmeasured; +21 pp from asymmetric coverage; gate on a meaningless P@k.
+**Solution:** (a) paraphrase queries via LLM (break lexical overlap), plus ~30 hand-collected real agent queries from MCP logs, including negative cases ("is there payment code here?" → expected answer: no); (b) `search_hybrid` as a third retriever row; (c) `RagBaselineBenchmark`: check coverage against the **capsule text** (node headers are citable — string check), not against the pre-budget subgraph; (d) gate on P@1/MRR/Recall@10 relative instead of P@k absolute.
+**Benefit:** Only afterwards are the README numbers dependable; hybrid regressions (e.g. from the H1 fix) become visible.
+**Risk:** low × medium (paraphrased numbers will come out visibly worse than 0.88 — that is honesty, not damage; the README must follow suit).
+**Effort:** M
+
+## V3 — Switch the upsert to `ON CONFLICT DO UPDATE` + FTS query sanitizing (K3, H1) → TICKET-203
+
+**Problem:** REPLACE corrupts the FTS index silently; normal code queries throw FTS syntax errors and degrade to unordered LIKE.
+**Solution:** (a) `INSERT … ON CONFLICT(Id) DO UPDATE` (fires the UPDATE trigger, preserves rowid; additionally reset `NeedsSemanticAnalysis`/`Embedding` only on content change); (b) query sanitizer: whitespace tokens into double quotes (with `""` escaping), optional prefix `*`; LIKE only as a genuine last fallback with `ESCAPE` and a defined ordering; (c) signal the fallback case to `search_hybrid` so RRF downweights the pseudo-ranks.
+**Alternative to (a):** only `PRAGMA recursive_triggers=ON` — one line, fixes the corruption, but leaves rowid churn and the embedding-wipe behavior in place. **Recommendation:** ON CONFLICT (strictly better); the pragma additionally as belt-and-suspenders does no harm.
+**Benefit:** Eliminates the largest silent correctness time bomb; BM25 ranking applies again for the most common query forms.
+**Risk:** low × medium (the upsert semantics change is central — cover with existing storage tests + one new FTS consistency test).
+**Effort:** S
+
+## V4 — Prompt token budget + `num_ctx` + instruction position (K4) → TICKET-205
+
+**Problem:** Silent Ollama truncation discards the grounding rules first.
+**Solution:** Configure `options.num_ctx` per model; estimate prompt tokens (chars/3.5 is enough) and shrink node count/per-node budget accordingly; after the call check `prompt_eval_count` against the estimate and report truncation as a warning to UI/log; move the instruction block to the **end** of the prompt (tail retention).
+**Benefit:** Grounding rules are guaranteed to survive; silent degradation becomes visible.
+**Risk:** low × low.
+**Effort:** S
+
+## V5 — Citation validation + relevance threshold + history fence (H2, H3, H14, M13) → TICKET-206
+
+**Problem:** Citations are unvalidated model text; weak retrieval still leads to an answer; chat history bypasses the injection fence; answer language hardcoded.
+**Solution:** (a) buffer the answer or post-process at stream end: extract `[… @ …]` labels via regex, check against the exact label set from `BuildRagPrompt`, flag unknown ones visibly, render valid ones as node links, mark citation-less paragraphs; (b) score threshold before context selection (relative or absolute, configurable), below it a deterministic "there is no evidence for this in the graph" **without** an LLM call; retrieval strength per node into the prompt; (c) transcript into its own prompt section declared as data, `NUTZERFRAGE` = only the last message; (d) answer language from UI locale or the question.
+**Alternative to (a):** claim-level entailment (NLI/LLM judge per sentence) — a substantially stronger guarantee, but expensive, slow, unreliable on local models. **Recommendation:** label-set validation now (catches the worst class: citation-laundered hallucination); entailment later as an eval metric (V1), not as a runtime gate.
+**Benefit:** The three biggest enforcement gaps of the answer path closed; H14 closes a real injection channel.
+**Risk:** medium × low (threshold too aggressive → legitimate questions rejected; make it configurable + calibrate via the V1 eval).
+**Effort:** M
+
+## V6 — Enforce provenance integrity (K5, M5) → TICKET-207
+
+**Problem:** Linker fallback and LLM edges claim Extracted; regex parsers without an override; `INSERT OR IGNORE` freezes provenance; `Properties` is never persisted.
+**Solution:** Provenance into the linker's edge tuple (fallback: `Inferred` when unambiguous, `Ambiguous` when multiple — as `CrossTechLinker` demonstrates); `RELATES_TO` insert explicitly `Inferred`; `DefaultProvenance` override in `GraphQLParser`/`SitecoreXmCloudPlugin`; edge upsert `ON CONFLICT … DO UPDATE SET Provenance = MIN(excluded.Provenance, Provenance)` (exact resolution may upgrade trust); storage guard test: no write path persists Extracted except deterministic parsers/linkers. Either persist `GraphEdge.Properties` as a JSON column or remove it from the model (end the lie) — recommendation: persist, the plugin metadata (confidence, placeholder) is useful for ranking.
+**Benefit:** The trust model — Shonkor's stated unique selling point — matches reality again; `provenance=extracted` filters deliver real compiler facts.
+**Risk:** low × low (existing graphs keep incorrect stamps until re-scan — document a one-time `--reindex` after the upgrade).
+**Effort:** S
+
+## V7 — Full method bodies + `signature` property (K2, M9) → TICKET-204
+
+**Problem:** The 500-character truncation amputates the core corpus; `signature` is read but never written; classes without content.
+**Solution:** Store full bodies on Method/Constructor (bounding belongs in `EmbeddingTextBuilder`, not in the parser); set `EndLine`; fall `get_source` back to the file slice when content ends with a marker; parsers emit `signature` (modifiers + name + parameter list); class nodes get a member-signature skeleton as content.
+**Alternative:** only raise the cap (e.g. to 10k) — a smaller DB footprint, but the same problem one order of magnitude later and `get_source` stays incomplete. **Recommendation:** store in full; SQLite handles source-code volumes with ease (the file node already stores up to 100k today).
+**Benefit:** FTS/embeddings/get_source see whole methods for the first time; the head+tail design of TICKET-105 becomes effective for C# in the first place.
+**Risk:** low × low (DB grows; re-index required).
+**Effort:** S
+
+## V8 — Normalize line numbers (H7) → TICKET-208
+
+**Problem:** C# 0-based, plugins 1-based, docs say 1-based — citations off-by-one, slices wrong.
+**Solution:** Parser-side `+1` (Roslyn), switch `TryReadSourceSlice` and `CSharpDiagnostics` consistently, a convention test across all parsers (each parser test case checks: line 1 = first line).
+**Benefit:** Every citation the system produces is correct — a fundamental prerequisite for "grounded with source reference".
+**Risk:** medium × low (off-by-one fixes readily create new off-by-ones — the convention test is a mandatory part).
+**Effort:** S
+
+## V9 — Markdown section chunking + Summary in FTS (H6, M8) → TICKET-211
+
+**Problem:** Docs are only file-granular retrievable; sections without content/lines; `Summary` not in FTS; concepts never embedded.
+**Solution:** Content between header matches into the section (with Start/EndLine from match offsets), leave code fences/tables intact, split oversized ones at paragraph boundaries; `Summary` as an FTS column (rebuild + trigger); embed concept names.
+**Benefit:** Documentation questions ("how do I configure X?") hit the right section with a citable line range instead of the file head.
+**Risk:** low × low (FTS rebuild one-time).
+**Effort:** M
+
+## V10 — Fix the embedding lifecycle in the edit loop (H11, M1–M3) → TICKET-212
+
+**Problem:** A file edit discards all node embeddings of the file; stdio MCP never re-embeds; CLI re-embeds everything; enrichment race and jam; missing transaction atomicity; plugin file-node conflicts.
+**Solution:** per-node content hash: summary/embedding of unchanged siblings survive the re-parse; the CLI embed pass filters `Embedding IS NULL` (or hash change); after `reindex_file` embed the fresh nodes synchronously (the MCP host already has the embedding service); `UpdateNodeSemanticDataAsync` with a content-fingerprint guard; an `AnalysisAttempts` column + parking after N failed attempts; `ReplaceFileGraphAsync(nodes, edges)` in **one** transaction (hash last); parsers must not emit `Type="File"` nodes (scanner filters, Docker/Python plugins fix).
+**Benefit:** The agentic edit loop — Shonkor's main scenario — keeps the semantic index up to date instead of dismantling it; CLI embed costs drop by orders of magnitude.
+**Risk:** medium × medium (the carry-over logic is the most invasive change on this list; needs targeted tests: edit a method → only its embedding invalidated).
+**Effort:** L
+
+## V11 — Edge canonicalization: implementations_of, phantom hubs, JS imports, id scheme (H4, H5, M4, M15) → TICKET-213
+
+**Problem:** Two IMPLEMENTS representations, relink destroys the one used by the tool; phantom name hubs pollute traversal; JS import edges never connect; id collisions/churn.
+**Solution:** Id-target as the canonical form, `implementations_of` first resolves the interface node; reduce parser base-type edges to the simple name and tag them `Inferred` (suppress entirely in semantic mode); the CTE does not expand over non-existent endpoints (JOIN in the recursive step) and gets an optional relationship/provenance filter + fan-out cap; JS import resolution with extension/index probing, namespace package imports (`npm:react`); type ids with generics arity, overload ordinal instead of span, partial canonicalization; XmCloud components file-keyed.
+**Alternative (partial aspect hubs):** only a blocklist of known hub relations in traversal — cheaper, but cures symptoms; phantom endpoints would remain. **Recommendation:** canonicalization; the blocklist (M6) additionally as a configurable filter.
+**Benefit:** Multi-hop precision — the argument for graph over vector — becomes real: `find_path`/`get_subgraph` deliver structural instead of random neighborhoods; the JS/TS side of the cross-tech promise works for the first time.
+**Risk:** medium × medium (id-scheme change = `SchemeVersion` bump + full reparse; the mechanism exists for exactly this).
+**Effort:** L
+
+## V12 — MCP hardening: session, containment, protocol, clamps (H8, H9, H13, M7, M11, M12) → TICKET-209/210
+
+**Problem:** `set_project` false-success over HTTP; path traversal; tool errors as protocol errors; ping missing; unbounded outputs; AllowLocalBypass; record injection channel.
+**Solution:** (a) session store per `Mcp-Session-Id` **or** an honest error "not supported over the relay — use X-Project-Name"; (b) a shared `ResolveContainedPath(raw, basePath)` with `GetFullPath`+StartsWith check in all five file tools; (c) `isError:true` results, `ping`, `-32700`, validate the protocol version; (d) clamps: limit≤100, hops≤5, maxHops≤10, default output cap 20–40 KB for get_source/get_subgraph-verbose/generate_capsule; (e) bypass only with a flag **and** `IsDevelopment()`; (f) record: length cap, check `connectedNodeIds` against existence, fence content as data.
+**Alternative to (a):** switch to the official MCP C# SDK with streamable HTTP — solves session + protocol conformance structurally, but migration effort L and the hand-rolled server is otherwise solid. **Recommendation:** (a)–(f) pointwise now; the SDK switch as a deliberate later decision if remote MCP becomes strategic.
+**Benefit:** Eliminates confident-lie semantics, the biggest local security vector, and the client compatibility problems in one go.
+**Risk:** low × medium (containment can break legitimate out-of-root workflows — the error message names the root; opt-out config if needed).
+**Effort:** M
+
+## V13 — Resilience/performance polish (M10, M14, low-severity collection) → in the course of TICKET-210/215
+
+**Problem:** Retry on cancellation/4xx, 3× full-generation retry, webhook CT capture, GetAllNodes on request paths, architecture N+1.
+**Solution:** `when (ex is not OperationCanceledException …)` filter; retry only transient errors (or `Microsoft.Extensions.Http.Resilience` on the typed clients); blocking RAG max. 1 retry only on connect errors + a small answer cache `hash(model+prompt)`; webhook task with an `ApplicationStopping` token or a queue BackgroundService; Insights/Stats on projection queries; `architecture` with a batch edge query.
+**Benefit:** Latency/cost down, push indexing reliable, dashboard scales.
+**Risk:** low × low. **Effort:** M (distributed, independently parallelizable)
+
+## V14 — Vector scaling (H12, M6-SQL) → TICKET-215
+
+**Problem:** Brute-force blob scan per query; CTE OR-join without index usage.
+**Solution (incremental):** (1) L2 normalization on write + dot product; `MemoryMarshal.Cast` instead of per-row alloc; drop the overscan factor (the heap is exact); (2) in-memory matrix cache with a generation counter (~300 MB at 100k×768 float32, fp16 halves it); (3) CTE as two UNION branches (uses `idx_edges_source`/`_target`).
+**Alternative:** `sqlite-vec` (stays in the SQLite line, ANN optional) or an external vector store (Qdrant) — the latter breaks "100% offline & self-contained" and only pays off well beyond 1M nodes. **Recommendation:** stages 1+3 immediately (small), stage 2 above 20k nodes, `sqlite-vec` as an observation post — the status quo (exact search, SQLite-only) is right at the current target size.
+**Benefit:** Query latency stays in two-digit ms as graphs grow; memory churn gone.
+**Risk:** low × low (stage 1/3), medium × low (cache invalidation, stage 2). **Effort:** S (1+3) / M (2)
+
+## V15 — A/B-test the nomic prefixes correctly (M1) → part of TICKET-202
+
+**Problem:** Prefixes default off, justified by a measurement that embedded queries with the document prefix; a prefix change triggers no re-embed.
+**Solution:** Fix the benchmark on `EmbeddingKind.Query`, re-measure on the paraphrased NL set (V2); include the effective prefix pair in the `EmbeddingModel` stamp (`nomic-embed-text|dp=…|qp=…`) so the existing reconcile logic detects a prefix change.
+**Benefit:** nomic is explicitly trained with task prefixes — plausibly several points of NL retrieval precision, practically for free.
+**Risk:** low × low (if the measurement confirms "off": keep the status quo, but this time backed by evidence). **Effort:** S
+
+---
+
+### Deliberately NOT recommended
+
+- **Switch to pure hybrid vector+BM25 search without a graph:** The bench data (despite the K1 weaknesses) and the architecture suggest the graph is *not* decorative — capsule structure, blast radius, `implementations_of`, freshness are not reproducible without the graph. The right step is V11 (fix graph precision), not a rollback.
+- **Cross-encoder reranking now:** At top-K≤10 from FTS+vector+RRF over code symbols the expected gain is small relative to V2/V5/V7, and a local reranker model adds latency + operational complexity. Decide only after a clean eval (V1/V2) — then you measure the effect instead of guessing it.
+- **External graph store (Neo4j etc.):** SQLite + recursive CTE is correctly implemented, deterministic, offline, and performant for the target size (after V14). Migration = high risk, no measured benefit.

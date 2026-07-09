@@ -1,27 +1,27 @@
-# BUG-010 — 64-Hex-Token wird als „bereits gehasht" fehlklassifiziert: Klartext-Speicherung + permanenter Auth-Lockout
+# BUG-010 — 64-hex token misclassified as "already hashed": plaintext storage + permanent auth lockout
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** Auth · **Security**
+**Severity:** High · **Status:** Confirmed · **Area:** Auth · **Security**
 
-## Kontext
+## Context
 
-`TokenHasher.LooksHashed` klassifiziert jeden 64-Zeichen-Hex-String als Digest; `EnsureHashed` reicht ihn dann unverändert durch ([TokenHasher.cs:20-25](../src/Shonkor.Infrastructure/Services/TokenHasher.cs)). `ProjectManager.AddProject` akzeptiert einen **caller-gelieferten** API-Key ([ProjectManager.cs:195-201](../src/Shonkor.Infrastructure/Services/ProjectManager.cs)): Ein Token, das zufällig genau 64 Hex-Zeichen lang ist (die häufigste Form eines 32-Byte-Tokens), wird im **Klartext** in `projects.json` gespeichert — und weil `Verify` das präsentierte Token hasht (`SHA256(token) != token`), schlägt die Authentifizierung für diesen Key **immer** fehl, ohne erklärenden Fehler.
+`TokenHasher.LooksHashed` classifies every 64-character hex string as a digest; `EnsureHashed` then passes it through unchanged ([TokenHasher.cs:20-25](../src/Shonkor.Infrastructure/Services/TokenHasher.cs)). `ProjectManager.AddProject` accepts a **caller-supplied** API key ([ProjectManager.cs:195-201](../src/Shonkor.Infrastructure/Services/ProjectManager.cs)): a token that happens to be exactly 64 hex characters long (the most common form of a 32-byte token) is stored in **plaintext** in `projects.json` — and because `Verify` hashes the presented token (`SHA256(token) != token`), authentication for this key **always** fails, with no explanatory error.
 
-Nebenbefund (gleiches Modul): `LooksHashed` akzeptiert Großbuchstaben-Hex, `Hash` emittiert Kleinbuchstaben, `Verify` vergleicht byte-genau → ein groß geschriebener gespeicherter Digest matcht nie.
+Side finding (same module): `LooksHashed` accepts uppercase hex, `Hash` emits lowercase, `Verify` compares byte-for-byte → an uppercase stored digest never matches.
 
-## Reproduktion
+## Reproduction
 
-Projekt/User mit API-Key `"a" * 64` (bzw. 64 zufälligen Hex-Zeichen) anlegen → Key steht im Klartext in `projects.json`; Auth mit genau diesem Key liefert 401.
+Create a project/user with API key `"a" * 64` (or 64 random hex characters) → the key is in plaintext in `projects.json`; auth with exactly this key returns 401.
 
 ## Fix
 
-Shape-Sniffing abschaffen: Hashes selbstbeschreibend speichern (`sha256:<hex>`); `EnsureHashed` hasht alles ohne Präfix und stempelt das Präfix; Migration bestehender Einträge einmalig beim Laden. `Verify` normalisiert (`ToLowerInvariant`) vor dem Vergleich.
+Abolish shape-sniffing: store hashes self-describingly (`sha256:<hex>`); `EnsureHashed` hashes everything without a prefix and stamps the prefix; one-time migration of existing entries on load. `Verify` normalizes (`ToLowerInvariant`) before comparison.
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] Ein 64-Hex-Klartext-Token wird gehasht gespeichert und authentifiziert korrekt.
-- [ ] Bestehende gehashte Einträge (mit/ohne Präfix, groß/klein) verifizieren weiterhin.
-- [ ] `projects.json` enthält nach Migration keine Klartext-Secrets (Test über das Datei-Format).
+- [ ] A 64-hex plaintext token is stored hashed and authenticates correctly.
+- [ ] Existing hashed entries (with/without prefix, upper/lower case) still verify.
+- [ ] `projects.json` contains no plaintext secrets after migration (test via the file format).
 
-## DoD
+## Definition of Done
 
-- Fix + Migration + Tests gemerged; Format-Änderung im CHANGELOG.
+- Fix + migration + tests merged; format change in the CHANGELOG.
