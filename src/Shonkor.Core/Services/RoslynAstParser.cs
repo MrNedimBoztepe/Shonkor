@@ -130,7 +130,8 @@ public sealed class RoslynAstParser : IFileParser
                 EndLine = span.EndLinePosition.Line + 1,
                 Properties = new Dictionary<string, string>
                 {
-                    ["modifiers"] = node.Modifiers.ToString()
+                    ["modifiers"] = node.Modifiers.ToString(),
+                    ["signature"] = Normalize($"{node.Modifiers} enum {typeName}")
                 }
             });
 
@@ -161,7 +162,7 @@ public sealed class RoslynAstParser : IFileParser
                 Id = methodNodeId,
                 Name = methodName,
                 Type = "Method",
-                Content = GetTruncatedContent(node),
+                Content = GetFullContent(node),
                 FilePath = filePath,
                 StartLine = span.StartLinePosition.Line + 1,
                 EndLine = span.EndLinePosition.Line + 1,
@@ -169,7 +170,8 @@ public sealed class RoslynAstParser : IFileParser
                 {
                     ["returnType"] = node.ReturnType.ToString(),
                     ["modifiers"] = node.Modifiers.ToString(),
-                    ["parameters"] = node.ParameterList.Parameters.ToString()
+                    ["parameters"] = node.ParameterList.Parameters.ToString(),
+                    ["signature"] = MethodSignature(node)
                 }
             });
 
@@ -205,7 +207,8 @@ public sealed class RoslynAstParser : IFileParser
                 Properties = new Dictionary<string, string>
                 {
                     ["returnType"] = node.Type.ToString(),
-                    ["modifiers"] = node.Modifiers.ToString()
+                    ["modifiers"] = node.Modifiers.ToString(),
+                    ["signature"] = PropertySignature(node)
                 }
             });
 
@@ -236,14 +239,15 @@ public sealed class RoslynAstParser : IFileParser
                 Id = constructorNodeId,
                 Name = constructorName,
                 Type = "Constructor",
-                Content = GetTruncatedContent(node),
+                Content = GetFullContent(node),
                 FilePath = filePath,
                 StartLine = span.StartLinePosition.Line + 1,
                 EndLine = span.EndLinePosition.Line + 1,
                 Properties = new Dictionary<string, string>
                 {
                     ["modifiers"] = node.Modifiers.ToString(),
-                    ["parameters"] = node.ParameterList.Parameters.ToString()
+                    ["parameters"] = node.ParameterList.Parameters.ToString(),
+                    ["signature"] = ConstructorSignature(node)
                 }
             });
 
@@ -319,9 +323,11 @@ public sealed class RoslynAstParser : IFileParser
             // edges by the linker, enabling "who uses type X?" impact traversal.
             var referencedTypes = CollectReferencedTypeNames(node, typeName);
 
+            var signature = TypeSignature(modifiers, defaultType, identifier, node.TypeParameterList, baseList);
             var properties = new Dictionary<string, string>
             {
-                ["modifiers"] = modifiers.ToString()
+                ["modifiers"] = modifiers.ToString(),
+                ["signature"] = signature
             };
             if (referencedTypes.Count > 0)
             {
@@ -334,6 +340,9 @@ public sealed class RoslynAstParser : IFileParser
                 Id = typeNodeId,
                 Name = typeName,
                 Type = defaultType,
+                // Member-signature skeleton (TICKET-204): a class node otherwise stored no content, so FTS
+                // and embeddings had nothing to match. Member bodies stay on their own nodes.
+                Content = TypeSkeleton(node, signature),
                 FilePath = filePath,
                 StartLine = span.StartLinePosition.Line + 1,
                 EndLine = span.EndLinePosition.Line + 1,
@@ -468,14 +477,50 @@ public sealed class RoslynAstParser : IFileParser
             }
         }
 
-        private static string GetTruncatedContent(SyntaxNode node)
+        /// <summary>The full source of a member (TICKET-204). Bounding for embeddings is <see cref="EmbeddingTextBuilder"/>'s
+        /// job, not the parser's — a truncated body kills FTS on the second half and shrinks the get_source result.</summary>
+        private static string GetFullContent(SyntaxNode node) => node.ToFullString().Trim();
+
+        private static string Normalize(string s) =>
+            string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        /// <summary>Signature of a method: <c>modifiers returnType Name(paramList)</c>.</summary>
+        private static string MethodSignature(MethodDeclarationSyntax node) =>
+            Normalize($"{node.Modifiers} {node.ReturnType} {node.Identifier.Text}{node.TypeParameterList}({node.ParameterList.Parameters})");
+
+        /// <summary>Signature of a constructor: <c>modifiers Name(paramList)</c>.</summary>
+        private static string ConstructorSignature(ConstructorDeclarationSyntax node) =>
+            Normalize($"{node.Modifiers} {node.Identifier.Text}({node.ParameterList.Parameters})");
+
+        /// <summary>Signature of a property: <c>modifiers type Name</c>.</summary>
+        private static string PropertySignature(PropertyDeclarationSyntax node) =>
+            Normalize($"{node.Modifiers} {node.Type} {node.Identifier.Text}");
+
+        /// <summary>Signature of a type: <c>modifiers kind Name&lt;T&gt; : bases</c>.</summary>
+        private static string TypeSignature(SyntaxTokenList modifiers, string kind, SyntaxToken identifier, TypeParameterListSyntax? typeParams, BaseListSyntax? baseList) =>
+            Normalize($"{modifiers} {kind.ToLowerInvariant()} {identifier.Text}{typeParams} {baseList}");
+
+        /// <summary>
+        /// A member-signature skeleton for a type node's <c>Content</c> (TICKET-204): the type's own signature
+        /// plus a one-line signature for each declared method/constructor/property — so FTS and embeddings have
+        /// something to match on a class node (which otherwise stored no content), without its members' bodies.
+        /// </summary>
+        private static string TypeSkeleton(TypeDeclarationSyntax node, string typeSignature)
         {
-            var content = node.ToFullString().Trim();
-            if (content.Length > 500)
+            var sb = new System.Text.StringBuilder();
+            sb.Append(typeSignature).Append('\n');
+            foreach (var member in node.Members)
             {
-                content = content.Substring(0, 500) + "...";
+                var line = member switch
+                {
+                    MethodDeclarationSyntax m => MethodSignature(m),
+                    ConstructorDeclarationSyntax c => ConstructorSignature(c),
+                    PropertyDeclarationSyntax p => PropertySignature(p),
+                    _ => null
+                };
+                if (line is not null) sb.Append("  ").Append(line).Append(";\n");
             }
-            return content;
+            return sb.ToString().TrimEnd();
         }
 
         /// <summary>
