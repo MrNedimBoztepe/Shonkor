@@ -1,5 +1,7 @@
 # TICKET-205 – Overall prompt budget + `num_ctx` + truncation detection in the RAG path
 
+**Status:** ✅ Implemented — `RagPromptBuilder.PlanContext` + `num_ctx` + `OllamaSemanticAnalyzer.WarnIfPromptTruncated` (commit `a83f475`); tests: `RagContextBudgetTests`.
+
 **Severity ref:** K4 · **Effort:** S · **Risk:** low × low
 
 ## Context

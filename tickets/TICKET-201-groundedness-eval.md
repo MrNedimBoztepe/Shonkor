@@ -1,5 +1,7 @@
 # TICKET-201 – Restore answer-groundedness eval (`--answers`)
 
+**Status:** ✅ Implemented — `src/Shonkor.Bench/AnswersBenchmark.cs` (PR #61, commit `6b42bbb`); tests: `AnswersBenchmarkTests`, `GroundingPrepTests`.
+
 **Severity ref:** K1 · **Effort:** M · **Risk:** low × low
 
 ## Context
