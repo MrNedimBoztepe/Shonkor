@@ -111,7 +111,7 @@ public static class SearchEndpoints
         // NOTE: intentionally NOT under /api/rag/* — that prefix is reserved for the SaaS, API-key-gated
         // endpoints (ApiKeyMiddleware never loopback-bypasses /api/rag). This is the local dashboard's
         // AI chat, so it lives under /api/* and follows the normal dashboard auth (dev loopback bypass).
-        app.MapPost("/api/ask", async (AskRagRequest req, HttpContext context, ProjectManager pm, ISemanticAnalyzer semanticAnalyzer, CancellationToken ct) =>
+        app.MapPost("/api/ask", async (AskRagRequest req, HttpContext context, ProjectManager pm, ISemanticAnalyzer semanticAnalyzer, IConfiguration config, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(req.Query) || req.NodeIds == null || req.NodeIds.Length == 0)
             {
@@ -121,23 +121,19 @@ public static class SearchEndpoints
             try
             {
                 var storage = await pm.GetStorageForRequestAsync(context, ct);
+                var prep = await GroundingPrep.BuildAsync(req, storage, config, ct);
 
-                var contextNodes = new List<GraphNode>();
-                foreach (var id in req.NodeIds)
+                if (prep.NoEvidence)
                 {
-                    var node = await storage.GetNodeByIdAsync(id, ct);
-                    if (node != null)
-                    {
-                        contextNodes.Add(node);
-                    }
+                    // Deterministic abstention WITHOUT an LLM call: nothing cleared the relevance floor.
+                    return Results.Ok(new { response = prep.AbstentionText, grounded = false });
                 }
-
-                if (contextNodes.Count == 0)
+                if (prep.ContextNodes.Count == 0)
                 {
                     return Results.BadRequest("None of the provided NodeIds were found in the database.");
                 }
 
-                var responseText = await semanticAnalyzer.GenerateRAGResponseAsync(req.Query, contextNodes, ct);
+                var responseText = await semanticAnalyzer.GenerateRAGResponseAsync(req.Query, prep.ContextNodes, prep.Options, ct);
                 return Results.Ok(new { response = responseText });
             }
             catch (Exception ex)
@@ -159,17 +155,16 @@ public static class SearchEndpoints
             }
 
             var storage = await pm.GetStorageForRequestAsync(context, ct);
-            var contextNodes = new List<GraphNode>();
-            foreach (var id in req.NodeIds)
-            {
-                var node = await storage.GetNodeByIdAsync(id, ct);
-                if (node != null)
-                {
-                    contextNodes.Add(node);
-                }
-            }
+            var prep = await GroundingPrep.BuildAsync(req, storage, config, ct);
 
-            if (contextNodes.Count == 0)
+            if (prep.NoEvidence)
+            {
+                // Deterministic abstention WITHOUT an LLM call — write it as the (single-chunk) answer.
+                context.Response.ContentType = "text/plain; charset=utf-8";
+                await context.Response.WriteAsync(prep.AbstentionText, ct);
+                return;
+            }
+            if (prep.ContextNodes.Count == 0)
             {
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await context.Response.WriteAsync("None of the provided NodeIds were found in the database.", ct);
@@ -183,7 +178,7 @@ public static class SearchEndpoints
             {
                 if (streamingEnabled)
                 {
-                    await foreach (var chunk in semanticAnalyzer.StreamRAGResponseAsync(req.Query, contextNodes, ct).WithCancellation(ct))
+                    await foreach (var chunk in semanticAnalyzer.StreamRAGResponseAsync(req.Query, prep.ContextNodes, prep.Options, ct).WithCancellation(ct))
                     {
                         await context.Response.WriteAsync(chunk, ct);
                         await context.Response.Body.FlushAsync(ct);
@@ -191,7 +186,7 @@ public static class SearchEndpoints
                 }
                 else
                 {
-                    var full = await semanticAnalyzer.GenerateRAGResponseAsync(req.Query, contextNodes, ct);
+                    var full = await semanticAnalyzer.GenerateRAGResponseAsync(req.Query, prep.ContextNodes, prep.Options, ct);
                     await context.Response.WriteAsync(full, ct);
                 }
             }
