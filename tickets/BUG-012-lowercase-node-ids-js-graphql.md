@@ -1,30 +1,30 @@
-# BUG-012 — JS-/GraphQL-Parser erzeugen kleingeschriebene Node-IDs → ganze Kantenfamilien hängen ins Leere
+# BUG-012 — JS/GraphQL parsers produce lowercased node IDs → entire edge families point into the void
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** Parser (JS/TS, GraphQL)
+**Severity:** High · **Status:** Confirmed · **Area:** Parser (JS/TS, GraphQL)
 
-## Kontext
+## Context
 
-`JavaScriptParser` ([JavaScriptParser.cs:48,119](../src/Shonkor.Core/Services/JavaScriptParser.cs)) und `GraphQLParser` ([GraphQLParser.cs:48](../src/Shonkor.Core/Services/GraphQLParser.cs)) bilden Node-IDs mit `filePath.ToLowerInvariant()`; der Scanner erzeugt File-Nodes mit Original-Case-Pfad ([GraphIndexScanner.cs:169](../src/Shonkor.Infrastructure/Services/GraphIndexScanner.cs)). `Nodes.Id` ist case-sensitiv:
+`JavaScriptParser` ([JavaScriptParser.cs:48,119](../src/Shonkor.Core/Services/JavaScriptParser.cs)) and `GraphQLParser` ([GraphQLParser.cs:48](../src/Shonkor.Core/Services/GraphQLParser.cs)) build node IDs with `filePath.ToLowerInvariant()`; the scanner creates file nodes with the original-case path ([GraphIndexScanner.cs:169](../src/Shonkor.Infrastructure/Services/GraphIndexScanner.cs)). `Nodes.Id` is case-sensitive:
 
-- Windows-Pfade (`C:\Projects\…`): **alle** `IMPORTS`- und `DEFINED_IN`-Kanten zeigen auf IDs ohne Knoten — die JS/GraphQL-Teilgraphen sind strukturell tot.
-- Komplett kleingeschriebene Pfade (Linux): Komponenten-ID kollidiert mit der File-Node-ID; der Gewinner ist wegen `ConcurrentBag`-Reihenfolge nichtdeterministisch — verliert der File-Node, ist sein `ContentHash` weg und die Datei wird bei jedem Scan neu indiziert.
+- Windows paths (`C:\Projects\…`): **all** `IMPORTS` and `DEFINED_IN` edges point to IDs without nodes — the JS/GraphQL subgraphs are structurally dead.
+- Fully lowercased paths (Linux): the component ID collides with the file-node ID; the winner is nondeterministic due to `ConcurrentBag` ordering — if the file node loses, its `ContentHash` is gone and the file is re-indexed on every scan.
 
-Verwandt (im selben Zug fixen): relative Imports ohne Extension-/Index-Auflösung (`./Button` ≠ `Button.tsx`, Zeilen 133-142) und Esprima kann kein TypeScript (Imports der meisten `.ts/.tsx`-Dateien werden still verworfen, Zeilen 88-99). Hinweis: Die geplante JS/TS-Plugin-Familie (Node-Sidecar) ersetzt diesen Parser perspektivisch — bis dahin sollte der Bestandsparser aber keine toten Kanten produzieren.
+Related (fix in the same pass): relative imports without extension/index resolution (`./Button` ≠ `Button.tsx`, lines 133-142) and Esprima cannot handle TypeScript (imports of most `.ts/.tsx` files are silently discarded, lines 88-99). Note: the planned JS/TS plugin family (Node sidecar) will eventually replace this parser — but until then the existing parser should not produce dead edges.
 
-## Reproduktion
+## Reproduction
 
-Repo mit `.tsx`-Dateien auf Windows indizieren; `get_subgraph` auf einen JS-Component-Seed → `IMPORTS`-Kanten zeigen auf nicht existente Ziele.
+Index a repo with `.tsx` files on Windows; `get_subgraph` on a JS component seed → `IMPORTS` edges point to nonexistent targets.
 
 ## Fix
 
-`ToLowerInvariant()` entfernen; kanonische Pfadform des Scanners übernehmen (gemeinsamer `PathNodeId`-Helper). Import-Auflösung: `source + {.ts,.tsx,.js,.jsx}` und `source/index.*` gegen Kandidaten proben.
+Remove `ToLowerInvariant()`; adopt the scanner's canonical path form (shared `PathNodeId` helper). Import resolution: probe `source + {.ts,.tsx,.js,.jsx}` and `source/index.*` against candidates.
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] Jede `IMPORTS`-/`DEFINED_IN`-Kante referenziert existierende Knoten (Integritätstest nach Index-Lauf über ein Fixture-Repo).
-- [ ] Keine ID-Kollision zwischen Komponenten- und File-Node; `ContentHash` des File-Node bleibt über Scans stabil.
-- [ ] `import './Button'` verbindet zur `Button.tsx`-File-Node.
+- [ ] Every `IMPORTS`/`DEFINED_IN` edge references existing nodes (integrity test after an index run over a fixture repo).
+- [ ] No ID collision between component and file node; the file node's `ContentHash` stays stable across scans.
+- [ ] `import './Button'` connects to the `Button.tsx` file node.
 
 ## DoD
 
-- Fix + Fixture-Test gemerged; Re-Index-Hinweis im CHANGELOG.
+- Fix + fixture test merged; re-index note in the CHANGELOG.

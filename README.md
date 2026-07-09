@@ -47,42 +47,39 @@ All numbers below come from one reproducible harness, `src/Shonkor.Bench`, over 
 
 ```powershell
 dotnet run --project src/Shonkor.Bench -- shonkor.db                              # exact-symbol set + token reduction
-dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/doc-intent.json --compare-rag
-dotnet run --project src/Shonkor.Bench -- shonkor.db --answers bench/golden/answers.json   # answer groundedness (needs Ollama)
+dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/agent-queries.json   # FTS/vector/hybrid on hand-labeled NL queries
+dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/agent-queries.json --compare-rag
+dotnet run --project src/Shonkor.Bench -- shonkor.db --answers bench/golden/answers.json      # answer groundedness (needs Ollama)
+dotnet run --project src/Shonkor.Bench -- shonkor.db --check-circularity bench/golden/agent-queries.json  # circularity guard
 ```
 
-It writes `bench/report.md` (human) and `bench/metrics.json` (machine); `--baseline bench/metrics.json` gates retrieval Precision@k against a stored run (exit 2 on a regression). Vector/RAG rows need a reachable Ollama embedding backend; without one the FTS rows still run.
+It writes `bench/report.md` (human) and `bench/metrics.json` (machine); `--baseline <metrics.json>` gates **P@1 / MRR / Recall@k** against a stored run (a >5 % relative drop in any retriever exits 2). The FTS rows run without Ollama; the **vector** and **hybrid (RRF)** rows need a reachable embedding backend and are gated in a nightly CI job (a missing backend there is a hard fail, not a silent skip). `--check-circularity` flags any golden case whose query shares more than N content words with its target's embedding document — so a set can't quietly become self-matching.
 
-`--answers` measures the **answer path**, not retrieval: each golden case pins a fixed context (node ids/symbol names) and asks the production RAG prompt (temperature 0, fixed seed) a question. Metrics: citation validity (does every `[Name @ file:lines]` reference a context node?), must-cite recall, abstention recall/precision (does the model say "nicht belegt" exactly when the context doesn't cover the question?), and the uncited-paragraph rate. Writes `bench/answers-report.md` + `bench/answers-metrics.json`; `--baseline bench/answers-baseline.json` gates the four headline metrics (>5 % relative drop → exit 2). Greedy decoding on a GPU is near- but not bit-deterministic (~1 in 40 answers can flip a borderline token across runs); the 5 % gate tolerance absorbs that noise.
-
-**Measured run** — Shonkor's own graph (`shonkor.db`, 1.763 nodes / 4.036 edges), 2026-07-06, local Ollama `nomic-embed-text`:
+`--answers` measures the **answer path**, not retrieval: each golden case pins a fixed context (node ids/symbol names) and asks the production RAG prompt (temperature 0, fixed seed) a question. Metrics: citation validity (does every `[Name @ file:lines]` reference a context node?), must-cite recall, abstention recall/precision (does the model say "This is not supported by the current graph data." exactly when the context doesn't cover the question?), and the uncited-paragraph rate. Writes `bench/answers-report.md` + `bench/answers-metrics.json`; `--baseline bench/answers-baseline.json` gates the four headline metrics (>5 % relative drop → exit 2). Greedy decoding on a GPU is near- but not bit-deterministic (~1 in 40 answers can flip a borderline token across runs); the 5 % gate tolerance absorbs that noise.
 
 **1. Can it find the right symbol? (retrieval precision)**
 
+_Measured run: `shonkor.db`, 200 self-retrieval + 33 agent-query cases, 2026-07-09 (post-TICKET-204, full method bodies)._
+
 | Search task | Retriever | Precision@1 | Recall@10 |
 |---|---|---:|---:|
-| **Exact name** ("`SqliteGraphStorageProvider`") — 200 self-retrieval cases | FTS5 keyword | **0,95** | **1,00** |
-| **Plain-English intent** ("marks a plugin so the loader picks it up") — 150 cases from the code's own doc comments, symbol name stripped so keywords can't cheat | FTS5 keyword | 0,13 | 0,37 |
-| same intent set | **vector (code embeddings)** | **0,88** | **0,97** |
+| **Exact name** ("`SqliteGraphStorageProvider`") — 200 auto-bootstrapped self-retrieval cases | FTS5 keyword | **0,90** | **0,99** |
+| **Plain-English intent** — 33 hand-labeled agent queries (`bench/golden/agent-queries.json`), validated non-circular by `--check-circularity` | FTS5 keyword | **0,00** | **0,12** |
+| same intent set | **vector / hybrid (RRF)** | _nightly gate_ | _nightly gate_ |
 
-*In plain terms:* keyword search is already excellent when you know the name (top hit 95 % of the time). But ask in your own words and keyword search finds the right code only ~37 % of the time — while meaning-based vector search finds it ~97 %. That gap is the whole point of embedding the code.
+*In plain terms:* keyword search is strong when you already know the name (top hit 90 % of the time) and **useless at plain-English intent** (top hit 0 % — the target is in the top 10 but rarely rank 1, because full method bodies + class skeletons now give many nodes the same keywords). That is exactly why meaning-based vector + hybrid retrieval exist; those rows need an embedding backend and are measured in the nightly CI gate. The deterministic PR gate therefore uses the exact-name self-retrieval set, where FTS is meaningful; the NL set is a vector/hybrid benchmark.
+
+> **Note on an earlier "~88 % vector P@1" claim (removed).** It came from `doc-intent.json`, whose query is the target symbol's own doc-comment summary — which is embedded verbatim in that symbol's vector document. That is **circular**: the hit is trivial, so 0,88 was an upper bound, not real NL→code recall. The new `agent-queries.json` set uses independently-worded queries and is guarded by `--check-circularity`; the honest FTS baseline above is correspondingly lower.
 
 **2. How much context does it save? (token reduction)**
 
-The budget-aware capsule (seed-first, hub-capped) vs a **full dump of the *same* retrieved subgraph** — a fair baseline, not a whole-repo strawman: **41,1 % fewer tokens** (7 queries, 189.750 → 111.773). This scales with graph size and hub density — on a larger, denser graph (3.784 nodes) the same comparison reached **~88 %**, because fat 2-hop neighbourhoods around hub nodes are exactly what the budget caps.
+The budget-aware capsule (seed-first, hub-capped) vs a **full dump of the *same* retrieved subgraph** — a fair baseline, not a whole-repo strawman: **85,7 % fewer tokens** (7 queries, 931.030 → 133.423) on Shonkor's own graph (2026-07-09, post-TICKET-204). The saving rose from ~41 % once methods stored their full bodies and class nodes gained a member skeleton — the naive full-dump is now much larger, which is exactly what the budget caps. The figure is DB-dependent — reproduce it on yours with the first command above. _(An earlier "~88 % on a denser graph" anecdote was unstored and has been removed; this number is from a checked-in run.)_
 
 **3. Is it better than plain RAG? (head-to-head, `--compare-rag`)**
 
-Against a **chunked-RAG-without-graph** baseline at a **matched token budget** (both start from the same embedding search, the baseline then takes as many top text chunks as fit into Shonkor's per-query token count) — so this compares *coverage at equal cost*:
+Against a **chunked-RAG-without-graph** baseline at a **matched token budget** (both start from the same embedding search, the baseline then takes as many top text chunks as fit into Shonkor's per-query token count), so this compares *coverage at equal cost*. Coverage is now measured **symmetrically on the delivered text** for both sides (the baseline's chunks and Shonkor's budgeted capsule string), plus a **seed-survival** rate (how many semantic seeds survive the capsule budget) — the earlier Shonkor figure measured the pre-budget subgraph, which was over-optimistic. Current numbers land in `bench/report.md` from the `--compare-rag` run (needs Ollama); they are intentionally not pinned here until the nightly gate stores them.
 
-| Retriever | Avg tokens | Covers the target symbol |
-|---|---:|---:|
-| chunked-RAG (no graph) | 5.216 | 76,7 % |
-| **Shonkor capsule** | 5.445 | **98,0 %** |
-
-At roughly equal tokens, Shonkor lands the symbol you actually need **+21 pp more often** — and hands it over as a structured capsule (call graph + signatures) rather than loose text chunks.
-
-> **Honest by construction.** The token comparison is the budgeted capsule vs the *same retrieved nodes* dumped in full (no whole-repo strawman). The RAG head-to-head matches token budgets, so it compares coverage, not a rigged token count. The intent set is generated from the code's own doc comments with the symbol name removed, so keywords can't cheat. All numbers are DB-dependent — they will differ on your codebase; reproduce with the commands above.
+> **Honest by construction.** The token comparison is the budgeted capsule vs the *same retrieved nodes* dumped in full (no whole-repo strawman). The RAG head-to-head matches token budgets and measures delivered-text coverage symmetrically. Golden query sets are guarded against circularity (`--check-circularity`). All numbers are DB-dependent — they differ on your codebase; reproduce with the commands above.
 
 ---
 
@@ -127,11 +124,11 @@ dotnet build
 **A. Prebuilt binary (no .NET SDK needed)** — self-contained release binaries are published per OS:
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/nottherealluckybuddha/Shonkor/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/MrNedimBoztepe/Shonkor/main/scripts/install.sh | sh
 ```
 ```powershell
 # Windows
-irm https://raw.githubusercontent.com/nottherealluckybuddha/Shonkor/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/MrNedimBoztepe/Shonkor/main/scripts/install.ps1 | iex
 ```
 
 **B. .NET global tool** (needs the .NET 10 SDK):

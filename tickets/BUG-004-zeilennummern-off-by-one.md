@@ -1,25 +1,25 @@
-# BUG-004 — Alle C#-Zitate um eine Zeile daneben (0-basierte StartLine als 1-basiert ausgegeben)
+# BUG-004 — All C# citations off by one line (0-based StartLine emitted as 1-based)
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** Parser / Tool-Ausgabe
+**Severity:** High · **Status:** Confirmed · **Area:** Parser / Tool output
 
-## Kontext
+## Context
 
-`RoslynAstParser` speichert `StartLinePosition.Line` (0-basiert) in `GraphNode.StartLine` ([RoslynAstParser.cs:128,163,198,234,329](../src/Shonkor.Core/Services/RoslynAstParser.cs)). Alle Ausgabe-Stellen (`signature`, `locate`, `find_usages`, `edit_plan`, `implementations_of`, CLI) drucken den Wert roh als `file:line` — Leser interpretieren das 1-basiert. `CSharpDiagnostics.cs:90` rechnet dagegen explizit `+ 1 // 1-based for humans/agents`; nur `TryReadSourceSlice` ([McpToolContext.cs:109-123](../src/Shonkor.Infrastructure/Services/Mcp/McpToolContext.cs)) behandelt die Werte korrekt 0-basiert. Jede Zeilenangabe für C#-Symbole zeigt eine Zeile über die echte Deklaration — bei einem „präzisen" Graph-RAG die Kernwährung.
+`RoslynAstParser` stores `StartLinePosition.Line` (0-based) in `GraphNode.StartLine` ([RoslynAstParser.cs:128,163,198,234,329](../src/Shonkor.Core/Services/RoslynAstParser.cs)). All output sites (`signature`, `locate`, `find_usages`, `edit_plan`, `implementations_of`, CLI) print the value raw as `file:line` — readers interpret it as 1-based. `CSharpDiagnostics.cs:90`, by contrast, explicitly computes `+ 1 // 1-based for humans/agents`; only `TryReadSourceSlice` ([McpToolContext.cs:109-123](../src/Shonkor.Infrastructure/Services/Mcp/McpToolContext.cs)) treats the values correctly as 0-based. Every line reference for C# symbols points one line above the real declaration — the core currency of a "precise" Graph-RAG.
 
-## Reproduktion
+## Reproduction
 
-`signature` für eine bekannte Klasse aufrufen, ausgegebene Zeile mit der Datei vergleichen → um 1 zu niedrig.
+Call `signature` for a known class, compare the emitted line with the file → one too low.
 
 ## Fix
 
-Eine Konvention festlegen und auf `GraphNode.StartLine`/`EndLine` dokumentieren. Empfehlung: **1-basiert speichern** (`Line + 1` in den Parsern), `TryReadSourceSlice` auf `-1` umstellen. Alle Parser prüfen (JS/GraphQL/Markdown — Markdown setzt heute gar keine Zeilen, siehe BUG-055). Kein `SchemeVersion`-Bump nötig (IDs unverändert), aber ein Re-Index ist für korrekte Werte erforderlich.
+Establish a convention and document it on `GraphNode.StartLine`/`EndLine`. Recommendation: **store 1-based** (`Line + 1` in the parsers), switch `TryReadSourceSlice` to `-1`. Check all parsers (JS/GraphQL/Markdown — Markdown sets no lines at all today, see BUG-055). No `SchemeVersion` bump needed (IDs unchanged), but a re-index is required for correct values.
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] `signature`/`locate`/`find_usages` geben exakt die Deklarationszeile aus (Stichproben-Test über bekannte Symbole).
-- [ ] `get_source`-Fallback (`TryReadSourceSlice`) liefert weiterhin den korrekten Ausschnitt.
-- [ ] Konvention als XML-Doc auf dem Model dokumentiert; Test, der Parser-Output gegen eine Fixture-Datei mit bekannten Zeilen prüft.
+- [ ] `signature`/`locate`/`find_usages` emit exactly the declaration line (spot-check test over known symbols).
+- [ ] The `get_source` fallback (`TryReadSourceSlice`) still returns the correct slice.
+- [ ] Convention documented as XML doc on the model; a test that checks parser output against a fixture file with known lines.
 
-## DoD
+## Definition of Done
 
-- Fix + Tests gemerged; Hinweis im CHANGELOG, dass ein Re-Index empfohlen ist.
+- Fix + tests merged; note in the CHANGELOG that a re-index is recommended.

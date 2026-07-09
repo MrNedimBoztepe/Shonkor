@@ -73,18 +73,18 @@ public static partial class CitationValidator
     /// Appends a visible warning footer when the answer cites sources that were not in the context, so an
     /// invented citation is flagged to the reader instead of passing as grounded. Returns the answer
     /// unchanged when every citation is valid. The model's own text is never rewritten (only annotated).
+    /// The footer is a FIXED marker — ALWAYS English, regardless of the answer language (app.js strips this
+    /// exact prefix). <paramref name="language"/> is accepted for call-site symmetry but no longer branches.
     /// </summary>
     public static string AnnotateInvalid(string answer, IReadOnlySet<string> validNames, string? language = null)
     {
+        _ = language; // the fixed marker is language-independent (English-only)
         var report = Validate(answer, validNames);
         if (!report.HasInvalidCitations) return answer;
 
-        var german = !string.Equals(language, "en", StringComparison.OrdinalIgnoreCase);
         var sb = new StringBuilder(answer.TrimEnd());
         sb.AppendLine().AppendLine();
-        sb.AppendLine(german
-            ? "> ⚠ **Unbelegte Quellen:** Die folgenden zitierten Quellen sind NICHT im bereitgestellten Kontext enthalten und daher nicht belegt:"
-            : "> ⚠ **Unsupported sources:** the following cited sources are NOT in the provided context and are therefore unverified:");
+        sb.AppendLine("> ⚠ **Unsupported sources:** the following cited sources are NOT in the provided context and are therefore unverified:");
         foreach (var name in report.InvalidCitations)
         {
             sb.AppendLine($"> - {name}");

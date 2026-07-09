@@ -1,27 +1,27 @@
-# BUG-013 — PHP-Parser: `metadata.php` erzeugt Phantom-`EXTENDS`-Kanten aus jedem `'k' => 'v'`-Paar
+# BUG-013 — PHP parser: `metadata.php` produces phantom `EXTENDS` edges from every `'k' => 'v'` pair
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** Parser (PHP/OXID)
+**Severity:** High · **Status:** Confirmed · **Area:** Parser (PHP/OXID)
 
-## Kontext
+## Context
 
-`MetadataExtendPattern` (`['"](\w+)['"]\s*=>\s*['"]([^'"]+)['"]`, [PhpModuleParser.cs:29](../src/Shonkor.Core/Services/PhpModuleParser.cs)) wird auf die **ganze Datei** angewendet (Zeile 148) statt nur auf das `'extend'`-Array. Ein normales OXID-`metadata.php` (`'id'`, `'title'`, `'author'`, `'templates'`, `'settings'`, …) erzeugt Dutzende Bogus-Kanten wie `My Module EXTENDS title` — Modul-Abhängigkeits- und Impact-Abfragen sind mit Müll geflutet.
+`MetadataExtendPattern` (`['"](\w+)['"]\s*=>\s*['"]([^'"]+)['"]`, [PhpModuleParser.cs:29](../src/Shonkor.Core/Services/PhpModuleParser.cs)) is applied to the **whole file** (line 148) instead of only to the `'extend'` array. A normal OXID `metadata.php` (`'id'`, `'title'`, `'author'`, `'templates'`, `'settings'`, …) produces dozens of bogus edges like `My Module EXTENDS title` — module dependency and impact queries are flooded with garbage.
 
-Im selben Zug: `^\s*class\s+(\w+)\s+extends\s+(\w+)` (Zeile 21) verfehlt `abstract class`/`final class` und namespaced Basisklassen (`\w+` stoppt am `\`) — genau die Basisklassen-Schicht der OXID-Modulketten. Smarty-Block-Regex (Zeile 36) verlangt doppelte Anführungszeichen und keine Zusatzattribute.
+In the same pass: `^\s*class\s+(\w+)\s+extends\s+(\w+)` (line 21) misses `abstract class`/`final class` and namespaced base classes (`\w+` stops at the `\`) — exactly the base-class layer of the OXID module chains. The Smarty block regex (line 36) requires double quotes and no extra attributes.
 
-## Reproduktion
+## Reproduction
 
-Standard-OXID-Modul mit `metadata.php` indizieren; `references` auf den Modul-Knoten → `EXTENDS`-Kanten auf `title`, `author` etc.
+Index a standard OXID module with `metadata.php`; `references` on the module node → `EXTENDS` edges to `title`, `author`, etc.
 
 ## Fix
 
-Zuerst den `'extend' => [ … ]`-Block isolieren (Balanced-Bracket-Slice), Pair-Pattern nur darin anwenden. Klassen-Regex: `^\s*(?:final\s+|abstract\s+)*class\s+(\w+)\s+extends\s+([\w\\]+)`. Smarty: einfache/doppelte Quotes + optionale Attribute zulassen.
+First isolate the `'extend' => [ … ]` block (balanced-bracket slice), apply the pair pattern only within it. Class regex: `^\s*(?:final\s+|abstract\s+)*class\s+(\w+)\s+extends\s+([\w\\]+)`. Smarty: allow single/double quotes + optional attributes.
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] Fixture-`metadata.php` mit `id/title/templates/settings/extend` erzeugt ausschließlich für die `extend`-Einträge Kanten.
-- [ ] `abstract class X extends oxArticle` und `class Y extends \OxidEsales\...\Article` erzeugen Knoten + Kante.
-- [ ] Bestehende Fälle (einfacher `class A extends B`) unverändert.
+- [ ] A fixture `metadata.php` with `id/title/templates/settings/extend` produces edges only for the `extend` entries.
+- [ ] `abstract class X extends oxArticle` and `class Y extends \OxidEsales\...\Article` produce a node + edge.
+- [ ] Existing cases (simple `class A extends B`) unchanged.
 
 ## DoD
 
-- Fix + Fixture-Tests gemerged; Re-Index-Hinweis für PHP-Projekte.
+- Fix + fixture tests merged; re-index note for PHP projects.

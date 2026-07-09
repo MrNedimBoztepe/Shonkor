@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
 # Install the latest `shonkor` release binary (Linux/macOS) — no .NET SDK required.
-# Usage:  curl -fsSL https://raw.githubusercontent.com/nottherealluckybuddha/Shonkor/main/scripts/install.sh | sh
+# Usage:  curl -fsSL https://raw.githubusercontent.com/MrNedimBoztepe/Shonkor/main/scripts/install.sh | sh
 set -e
 
-REPO="nottherealluckybuddha/Shonkor"
+REPO="MrNedimBoztepe/Shonkor"
 os="$(uname -s)"
 arch="$(uname -m)"
 

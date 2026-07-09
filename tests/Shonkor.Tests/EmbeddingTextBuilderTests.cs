@@ -53,6 +53,6 @@ public class EmbeddingTextBuilderTests
         Assert.True(result.Length <= EmbeddingTextBuilder.MaxBodyChars);
         Assert.Contains("HEAD_MARKER_START", result);   // opening survives
         Assert.Contains("TAIL_MARKER_END", result);      // closing survives (not just the head)
-        Assert.Contains("gekürzt", result);              // the middle-gap marker is present
+        Assert.Contains("middle truncated", result);     // the middle-gap marker is present
     }
 }

@@ -40,7 +40,8 @@ internal static class RagBaselineBenchmark
     public sealed record ComparisonResult(
         int Queries, int Chunks,
         double RagAvgTokens, double RagCoverage,
-        double ShonkorAvgTokens, double ShonkorCoverage)
+        double ShonkorAvgTokens, double ShonkorCoverage,
+        double ShonkorSeedSurvival)
     {
         public double TokenSavingPct => RagAvgTokens > 0 ? (1.0 - ShonkorAvgTokens / RagAvgTokens) * 100 : 0;
     }
@@ -63,11 +64,11 @@ internal static class RagBaselineBenchmark
         var embedded = chunks.Where(c => c.Embedding is { Length: > 0 }).ToList();
         if (embedded.Count == 0) { log.WriteLine("  rag baseline: no chunk embeddings — skipped"); return null; }
 
-        double ragTok = 0, ragCov = 0, shTok = 0, shCov = 0;
+        double ragTok = 0, ragCov = 0, shTok = 0, shCov = 0, shSeedSurv = 0;
         var n = 0;
         foreach (var c in cases)
         {
-            var qv = await emb.GenerateEmbeddingAsync(c.Query);
+            var qv = await emb.GenerateEmbeddingAsync(c.Query, EmbeddingKind.Query);
 
             // Shonkor first: same embedding → semantic seeds → 2-hop subgraph → budgeted capsule. Its token
             // count sets the budget for a FAIR baseline comparison (equal tokens, then compare coverage).
@@ -80,7 +81,14 @@ internal static class RagBaselineBenchmark
                 new CapsuleOptions { SeedIds = seeds, MaxContentChars = BudgetChars, MaxNodes = 40 });
             var shTokQ = capsule.Length / CharsPerToken;
             shTok += shTokQ;
-            shCov += subNodes.Any(sn => c.Expected.Any(e => sn.Id.Contains(e, StringComparison.OrdinalIgnoreCase))) ? 1 : 0;
+
+            // Coverage on the DELIVERED capsule TEXT (TICKET-202) — symmetric with the baseline, which
+            // checks its delivered chunks. The pre-budget subgraph was an asymmetric, over-optimistic proxy:
+            // the capsule budget can drop a node the subgraph contained.
+            shCov += CapsuleCovers(capsule, c, byId) ? 1 : 0;
+            // Seed survival: fraction of the semantic seeds whose node still appears in the delivered capsule.
+            if (seeds.Count > 0)
+                shSeedSurv += (double)seeds.Count(id => CapsuleMentions(capsule, byId.GetValueOrDefault(id))) / seeds.Count;
 
             // Baseline: take top chunks by cosine up to the SAME token budget, then compare coverage.
             var ranked = embedded
@@ -101,7 +109,27 @@ internal static class RagBaselineBenchmark
             n++;
         }
 
-        return n == 0 ? null : new ComparisonResult(n, embedded.Count, ragTok / n, ragCov / n, shTok / n, shCov / n);
+        return n == 0 ? null : new ComparisonResult(n, embedded.Count, ragTok / n, ragCov / n, shTok / n, shCov / n, shSeedSurv / n);
+    }
+
+    /// <summary>True when the delivered capsule TEXT mentions an expected node (by its name as a token).</summary>
+    private static bool CapsuleCovers(string capsule, GoldenCase c, Dictionary<string, GraphNode> byId) =>
+        c.Expected.Any(e => byId.TryGetValue(e, out var node) && CapsuleMentions(capsule, node));
+
+    /// <summary>True when <paramref name="node"/>'s name appears as a whole word in the capsule text.</summary>
+    private static bool CapsuleMentions(string capsule, GraphNode? node)
+    {
+        if (node is null || string.IsNullOrEmpty(node.Name)) return false;
+        var idx = capsule.IndexOf(node.Name, StringComparison.Ordinal);
+        while (idx >= 0)
+        {
+            var before = idx == 0 || !char.IsLetterOrDigit(capsule[idx - 1]);
+            var afterPos = idx + node.Name.Length;
+            var after = afterPos >= capsule.Length || !char.IsLetterOrDigit(capsule[afterPos]);
+            if (before && after) return true;
+            idx = capsule.IndexOf(node.Name, idx + 1, StringComparison.Ordinal);
+        }
+        return false;
     }
 
     private static List<Chunk> BuildChunks(List<string> files)

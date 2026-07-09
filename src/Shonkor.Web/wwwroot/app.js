@@ -245,8 +245,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // These are UI annotations, not part of the model's grounded answer, and must not become context.
     function stripAnswerMarkers(text) {
         return text
-            .replace(/\n*_… \[Antwort unvollständig[^\]]*\]_\s*$/u, '')
-            .replace(/\n*> ⚠ \*\*(Unbelegte Quellen|Unsupported sources):\*\*[\s\S]*$/u, '')
+            .replace(/\n*_… \[Answer incomplete[^\]]*\]_\s*$/u, '')
+            .replace(/\n*> ⚠ \*\*Unsupported sources:\*\*[\s\S]*$/u, '')
             .trim();
     }
 
@@ -349,6 +349,17 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             if (res.ok && res.body) {
+                // Context metadata (TICKET-205) arrives as headers before the answer streams.
+                const nodesUsed = parseInt(res.headers.get('X-Context-Nodes-Used') || '0', 10);
+                const truncated = parseInt(res.headers.get('X-Context-Truncated') || '0', 10);
+                const dropped = parseInt(res.headers.get('X-Context-Dropped') || '0', 10);
+                if (nodesUsed > 0 && aiChatContext) {
+                    let label = `${nodesUsed} ${window.t ? window.t('nodes') : 'nodes'}`;
+                    if (truncated > 0) label += `, ${truncated} truncated`;
+                    if (dropped > 0) label += `, ${dropped} dropped`;
+                    aiChatContext.textContent = label;
+                }
+
                 const reader = res.body.getReader();
                 const decoder = new TextDecoder();
                 let answer = '';

@@ -1,23 +1,25 @@
-# TICKET-205 – Gesamt-Prompt-Budget + `num_ctx` + Truncation-Detection im RAG-Pfad
+# TICKET-205 – Overall prompt budget + `num_ctx` + truncation detection in the RAG path
 
-**Schweregrad-Bezug:** K4 · **Aufwand:** S · **Risiko:** niedrig × niedrig
+**Status:** ✅ Implemented — `RagPromptBuilder.PlanContext` + `num_ctx` + `OllamaSemanticAnalyzer.WarnIfPromptTruncated` (commit `a83f475`); tests: `RagContextBudgetTests`.
 
-## Kontext
-`BuildRagPrompt` (`OllamaSemanticAnalyzer.cs:158-196`) kappt nur pro Knoten (2.000 Zeichen), ohne Gesamtbudget; die UI sendet bis zu 10 Knoten + 6 Chat-Turns. `num_ctx` wird nie gesetzt (Ollama-Default oft 2048–4096 Tokens). Bei Überlauf trunkiert Ollama still und wirft zuerst den Instruktionsblock (Grounding, Abstention, Zitierpflicht, Injection-Fence) am Prompt-Anfang weg — das Modell generiert dann frei über rohem Code, genau im kontextreichen Fall.
+**Severity ref:** K4 · **Effort:** S · **Risk:** low × low
 
-## Akzeptanzkriterien
-- [ ] `options.num_ctx` wird pro Modell aus Config gesetzt (Default z. B. 8192, dokumentiert).
-- [ ] Prompt-Assembly schätzt Tokens (chars/3,5) und reduziert Knotenzahl bzw. Per-Node-Budget, bis Schätzung + Antwort-Reserve < `num_ctx`.
-- [ ] Nach dem Call wird `prompt_eval_count` aus der Ollama-Antwort mit der Schätzung verglichen; erkannte Truncation wird geloggt und als Warnung in der Antwort-Metadata an die UI gegeben.
-- [ ] Instruktionsblock (Regeln + Abstention + Zitierpflicht) steht am Prompt-**Ende**, nach dem Kontext.
-- [ ] Antwort-Metadata enthält `nodesUsed` inkl. `truncated`-Flag pro Knoten (schließt M2 des Grounding-Reviews mit); UI zeigt „Kontext: N Knoten, M gekürzt".
-- [ ] `/api/ask` cappt und dedupliziert `NodeIds` (z. B. ≤ 20).
+## Context
+`BuildRagPrompt` (`OllamaSemanticAnalyzer.cs:158-196`) only caps per node (2,000 characters), without an overall budget; the UI sends up to 10 nodes + 6 chat turns. `num_ctx` is never set (Ollama default often 2048–4096 tokens). On overflow, Ollama truncates silently and first discards the instruction block (grounding, abstention, citation obligation, injection fence) at the start of the prompt — the model then generates freely over raw code, precisely in the context-rich case.
 
-## Betroffene Bereiche
-`OllamaSemanticAnalyzer.cs` (blocking + streaming), `SearchEndpoints.cs`, `app.js` (Metadata-Anzeige), Config/Settings-Tab.
+## Acceptance Criteria
+- [ ] `options.num_ctx` is set per model from config (default e.g. 8192, documented).
+- [ ] Prompt assembly estimates tokens (chars/3.5) and reduces the node count or per-node budget until estimate + answer reserve < `num_ctx`.
+- [ ] After the call, `prompt_eval_count` from the Ollama response is compared against the estimate; detected truncation is logged and passed to the UI as a warning in the answer metadata.
+- [ ] The instruction block (rules + abstention + citation obligation) sits at the **end** of the prompt, after the context.
+- [ ] Answer metadata contains `nodesUsed` including a `truncated` flag per node (closes M2 of the grounding review); UI shows "Context: N nodes, M truncated".
+- [ ] `/api/ask` caps and deduplicates `NodeIds` (e.g. ≤ 20).
 
-## Abhängigkeiten
-Vor TICKET-206 (Zitat-Validierung setzt stabilen, nicht trunkierten Prompt voraus). Effektmessung via TICKET-201.
+## Affected Areas
+`OllamaSemanticAnalyzer.cs` (blocking + streaming), `SearchEndpoints.cs`, `app.js` (metadata display), config/settings tab.
+
+## Dependencies
+Before TICKET-206 (citation validation presupposes a stable, non-truncated prompt). Effect measured via TICKET-201.
 
 ## Definition of Done
-Test mit künstlich großem Kontext: Truncation wird erkannt und gemeldet statt still verschluckt; Groundedness-Metriken (TICKET-201) vorher/nachher dokumentiert.
+Test with an artificially large context: truncation is detected and reported instead of silently swallowed; groundedness metrics (TICKET-201) documented before/after.

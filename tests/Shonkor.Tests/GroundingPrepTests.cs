@@ -40,7 +40,8 @@ public class GroundingPrepTests
 
         Assert.True(prep.NoEvidence); // deterministic abstention, no context handed to a model
         Assert.Empty(prep.ContextNodes);
-        Assert.Contains("nicht belegt", prep.AbstentionText);
+        // Default answer language is now English.
+        Assert.Contains("not supported by the current graph data", prep.AbstentionText);
     }
 
     [Fact]
@@ -102,6 +103,37 @@ public class GroundingPrepTests
 
         Assert.Contains("id-b", prep.Options.FlaggedNodeIds);
         Assert.DoesNotContain("id-a", prep.Options.FlaggedNodeIds);
+    }
+
+    [Fact]
+    public async Task NodeIds_AreDedupedAndCapped()
+    {
+        var nodes = Enumerable.Range(0, 30).Select(i => Node($"id-{i}", $"N{i}")).ToArray();
+        using var storage = await StorageAsync(nodes);
+        // 30 ids + a duplicate; cap at 20 (default) → at most 20 distinct nodes resolved.
+        var ids = nodes.Select(n => n.Id).Append("id-0").ToArray();
+        var req = new AskRagRequest("Frage", ids);
+
+        var prep = await GroundingPrep.BuildAsync(req, storage, Config(), default);
+
+        Assert.True(prep.ContextNodes.Count <= 20);
+        Assert.Equal(prep.ContextNodes.Select(n => n.Id).Distinct().Count(), prep.ContextNodes.Count);
+    }
+
+    [Fact]
+    public async Task ContextMetadata_ReportsPlannedNodes_AndTruncationCounts()
+    {
+        using var storage = await StorageAsync(Node("id-a", "Alpha"), Node("id-b", "Beta"));
+        var req = new AskRagRequest("Frage", ["id-a", "id-b"]);
+
+        var prep = await GroundingPrep.BuildAsync(req, storage, Config(), default);
+        var meta = prep.ContextMetadata();
+
+        // Small context → both nodes used, none truncated/dropped. Shape is what the UI reads.
+        var json = System.Text.Json.JsonSerializer.Serialize(meta);
+        Assert.Contains("\"nodesUsed\":2", json);
+        Assert.Contains("\"truncated\":0", json);
+        Assert.Contains("\"dropped\":0", json);
     }
 
     [Fact]

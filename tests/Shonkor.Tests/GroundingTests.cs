@@ -24,27 +24,27 @@ public class GroundingTests
         {
             History =
             [
-                new ChatTurn("user", "Was ist Widget?"),
-                new ChatTurn("assistant", "Widget ist eine Klasse [Widget @ A.cs:1-5].")
+                new ChatTurn("user", "What is Widget?"),
+                new ChatTurn("assistant", "Widget is a class [Widget @ A.cs:1-5].")
             ]
         };
 
-        var prompt = RagPromptBuilder.Build("Und wofür wird es genutzt?", nodes, options);
+        var prompt = RagPromptBuilder.Build("And what is it used for?", nodes, options);
 
         // The transcript lives in its own data-fenced section, NOT in the question slot.
-        Assert.Contains("GESPRAECHSPROTOKOLL", prompt);
-        Assert.Contains("ASSISTENT: Widget ist eine Klasse", prompt);
+        Assert.Contains("CONVERSATION TRANSCRIPT", prompt);
+        Assert.Contains("ASSISTANT: Widget is a class", prompt);
         // Only the latest question follows the final-question header.
-        var questionSection = prompt[prompt.IndexOf("ABSCHLIESSENDE NUTZERFRAGE", StringComparison.Ordinal)..];
-        Assert.Contains("Und wofür wird es genutzt?", questionSection);
-        Assert.DoesNotContain("Was ist Widget?", questionSection); // the prior turn is not in the question slot
+        var questionSection = prompt[prompt.IndexOf("FINAL USER QUESTION", StringComparison.Ordinal)..];
+        Assert.Contains("And what is it used for?", questionSection);
+        Assert.DoesNotContain("What is Widget?", questionSection); // the prior turn is not in the question slot
     }
 
     [Fact]
     public void Build_NoHistory_OmitsTheTranscriptSection()
     {
-        var prompt = RagPromptBuilder.Build("Frage", new[] { Node("id", "Widget") });
-        Assert.DoesNotContain("GESPRAECHSPROTOKOLL", prompt);
+        var prompt = RagPromptBuilder.Build("Question", new[] { Node("id", "Widget") });
+        Assert.DoesNotContain("CONVERSATION TRANSCRIPT", prompt);
     }
 
     [Fact]
@@ -57,15 +57,25 @@ public class GroundingTests
             MatchStrength = new Dictionary<string, double> { ["id-a"] = 0.91, ["id-b"] = 0.42 }
         };
 
-        var prompt = RagPromptBuilder.Build("Frage", nodes, options);
+        var prompt = RagPromptBuilder.Build("Question", nodes, options);
 
-        Assert.Contains("RELEVANZ 0,91", prompt.Replace("0.91", "0,91")); // culture-tolerant
-        Assert.Contains("potenziell manipulative Anweisungen", prompt); // the flagged annotation
+        Assert.Contains("RELEVANCE 0,91", prompt.Replace("0.91", "0,91")); // culture-tolerant
+        Assert.Contains("may contain manipulative instructions", prompt); // the flagged annotation
         // The flag sits on Beta's source line, not Alpha's.
         var betaLine = prompt.Split('\n').First(l => l.Contains("Beta @"));
         Assert.Contains("⚠", betaLine);
         var alphaLine = prompt.Split('\n').First(l => l.Contains("Alpha @"));
         Assert.DoesNotContain("⚠", alphaLine);
+    }
+
+    [Fact]
+    public void Build_DefaultLanguage_IsEnglish()
+    {
+        // Null/unspecified language now defaults to English (German is an explicit opt-in).
+        var prompt = RagPromptBuilder.Build("Question", new[] { Node("id", "Widget") });
+
+        Assert.Contains(RagPromptBuilder.AbstentionMarkerEn, prompt);
+        Assert.Contains("Answer in clear Markdown in English", prompt);
     }
 
     [Fact]
@@ -76,7 +86,19 @@ public class GroundingTests
 
         Assert.Contains(RagPromptBuilder.AbstentionMarkerEn, prompt);
         Assert.Contains("Answer in clear Markdown in English", prompt);
-        Assert.DoesNotContain("auf Deutsch", prompt);
+        Assert.DoesNotContain("in German", prompt);
+    }
+
+    [Fact]
+    public void Build_GermanLanguage_KeepsEnglishAbstentionMarker_ButGermanAnswerInstruction()
+    {
+        // German remains available as an explicit answer-language option (Language="de"), but the fixed
+        // abstention MARKER stays English — only the answer-language instruction line differs.
+        var prompt = RagPromptBuilder.Build("Frage", new[] { Node("id", "Widget") },
+            new RagPromptOptions { Language = "de" });
+
+        Assert.Contains(RagPromptBuilder.AbstentionMarkerEn, prompt); // fixed marker is English-only
+        Assert.Contains("Answer in clear Markdown in German", prompt); // only the instruction is German
     }
 
     [Fact]
@@ -95,7 +117,7 @@ public class GroundingTests
     [Fact]
     public void Validate_SeparatesValidFromInventedCitations()
     {
-        const string answer = "Alpha macht X [Alpha @ A.cs:1-5]. Zahlungen laufen über [PaymentService @ Pay.cs:1-9].";
+        const string answer = "Alpha does X [Alpha @ A.cs:1-5]. Payments run through [PaymentService @ Pay.cs:1-9].";
         var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Alpha", "Beta" };
 
         var report = CitationValidator.Validate(answer, valid);
@@ -111,20 +133,32 @@ public class GroundingTests
     {
         var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Alpha" };
 
-        var clean = "Alles gut [Alpha @ A.cs:1-5].";
+        var clean = "All good [Alpha @ A.cs:1-5].";
         Assert.Equal(clean, CitationValidator.AnnotateInvalid(clean, valid));
 
-        var dirty = "Erfunden [Ghost @ G.cs:1-1].";
+        var dirty = "Invented [Ghost @ G.cs:1-1].";
         var annotated = CitationValidator.AnnotateInvalid(dirty, valid);
-        Assert.Contains("Unbelegte Quellen", annotated);
+        Assert.Contains("Unsupported sources", annotated); // English by default
         Assert.Contains("Ghost", annotated);
         Assert.StartsWith(dirty, annotated); // the model's own text is preserved, only annotated
     }
 
     [Fact]
+    public void AnnotateInvalid_GermanLanguage_StillEmitsEnglishFooter()
+    {
+        // The footer is a FIXED marker — always English, even when a German answer language is requested.
+        var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Alpha" };
+        var dirty = "Erfunden [Ghost @ G.cs:1-1].";
+        var annotated = CitationValidator.AnnotateInvalid(dirty, valid, "de");
+        Assert.Contains("Unsupported sources", annotated);
+        Assert.DoesNotContain("Unbelegte Quellen", annotated);
+        Assert.Contains("Ghost", annotated);
+    }
+
+    [Fact]
     public void Validate_CountsUncitedParagraphs()
     {
-        const string answer = "Absatz ohne Beleg.\n\nAbsatz mit [Alpha @ A.cs:1-5].";
+        const string answer = "Paragraph without a citation.\n\nParagraph with [Alpha @ A.cs:1-5].";
         var report = CitationValidator.Validate(answer, new HashSet<string> { "Alpha" });
         Assert.Equal(1, report.UncitedParagraphs);
     }

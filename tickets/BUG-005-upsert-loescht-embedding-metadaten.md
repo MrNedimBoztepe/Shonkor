@@ -1,29 +1,29 @@
-# BUG-005 — `INSERT OR REPLACE` löscht Embedding-Versionierung und Enrichment bei jedem Re-Upsert
+# BUG-005 — `INSERT OR REPLACE` wipes embedding versioning and enrichment on every re-upsert
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** Storage / Enrichment
+**Severity:** High · **Status:** Confirmed · **Area:** Storage / Enrichment
 
-## Kontext
+## Context
 
-Die REPLACE-Spaltenliste in `UpsertNodesAsync` ([SqliteGraphStorageProvider.cs:104-105](../src/Shonkor.Infrastructure/Storage/SqliteGraphStorageProvider.cs)) enthält weder `EmbeddingDim` noch `EmbeddingModel` → beide werden bei jedem Upsert NULL. `MarkStaleEmbeddingsForReembedAsync` (Zeilen 1509-1517) überspringt `EmbeddingDim IS NULL` gezielt → überlebende Embeddings sind für den Stale-Detektor unsichtbar; ein dimensionsgleicher Modellwechsel mischt still Vektoren zweier Modelle. Zusätzlich: `NeedsSemanticAnalysis = 1` hartkodiert (Zeile 148), `Summary`/`Embedding` werden mit den (meist leeren) Werten des eingehenden Knotens überschrieben → jeder Re-Index wirft bezahltes LLM-Enrichment weg.
+The REPLACE column list in `UpsertNodesAsync` ([SqliteGraphStorageProvider.cs:104-105](../src/Shonkor.Infrastructure/Storage/SqliteGraphStorageProvider.cs)) contains neither `EmbeddingDim` nor `EmbeddingModel` → both become NULL on every upsert. `MarkStaleEmbeddingsForReembedAsync` (lines 1509-1517) deliberately skips `EmbeddingDim IS NULL` → surviving embeddings are invisible to the stale detector; a dimension-preserving model switch silently mixes vectors from two models. Additionally: `NeedsSemanticAnalysis = 1` is hardcoded (line 148), and `Summary`/`Embedding` are overwritten with the (usually empty) values of the incoming node → every re-index throws away paid-for LLM enrichment.
 
-Verschärfung: `POST /api/interactions/status` ([StatsEndpoints.cs:96-109](../src/Shonkor.Web/Endpoints/StatsEndpoints.cs)) lädt einen Knoten (Mapper liest kein Embedding, [SqliteRowMapper.cs:51-63](../src/Shonkor.Infrastructure/Storage/SqliteRowMapper.cs)) und upsertet ihn zurück → zerstört das Embedding; akzeptiert beliebige Node-IDs.
+Aggravating factor: `POST /api/interactions/status` ([StatsEndpoints.cs:96-109](../src/Shonkor.Web/Endpoints/StatsEndpoints.cs)) loads a node (the mapper reads no embedding, [SqliteRowMapper.cs:51-63](../src/Shonkor.Infrastructure/Storage/SqliteRowMapper.cs)) and upserts it back → destroys the embedding; accepts arbitrary node IDs.
 
-## Reproduktion
+## Reproduction
 
-1. Node mit Embedding + `EmbeddingDim/Model` anlegen; Datei unverändert re-indizieren → `EmbeddingDim/Model` sind NULL, `NeedsSemanticAnalysis = 1`.
-2. `POST /api/interactions/status` auf eine beliebige Node-ID → `Embedding` ist NULL.
+1. Create a node with an embedding + `EmbeddingDim/Model`; re-index the file unchanged → `EmbeddingDim/Model` are NULL, `NeedsSemanticAnalysis = 1`.
+2. `POST /api/interactions/status` on an arbitrary node ID → `Embedding` is NULL.
 
 ## Fix
 
-`INSERT … ON CONFLICT(Id) DO UPDATE SET …` mit COALESCE-Semantik: `Summary`/`Embedding`/`EmbeddingDim`/`EmbeddingModel` nur überschreiben, wenn der eingehende Knoten Werte liefert; `NeedsSemanticAnalysis = 1` nur bei geändertem `ContentHash`. Den `interactions/status`-Endpoint auf ein gezieltes `UPDATE Nodes SET Metadata = …` umstellen statt Full-Node-Roundtrip. (Gleiche Änderung wie BUG-002 — zusammen umsetzen.)
+`INSERT … ON CONFLICT(Id) DO UPDATE SET …` with COALESCE semantics: only overwrite `Summary`/`Embedding`/`EmbeddingDim`/`EmbeddingModel` when the incoming node provides values; set `NeedsSemanticAnalysis = 1` only when `ContentHash` changed. Switch the `interactions/status` endpoint to a targeted `UPDATE Nodes SET Metadata = …` instead of a full-node roundtrip. (Same change as BUG-002 — implement together.)
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] Re-Index einer unveränderten Datei erhält Summary, Embedding, Dim, Modell und setzt `NeedsSemanticAnalysis` nicht.
-- [ ] Re-Index einer geänderten Datei invalidiert wie bisher.
-- [ ] `MarkStaleEmbeddingsForReembedAsync` erkennt einen Modellwechsel auch nach zwischenzeitlichen Upserts.
-- [ ] Status-Update eines Knotens lässt sein Embedding unangetastet.
+- [ ] Re-indexing an unchanged file preserves Summary, Embedding, Dim, Model and does not set `NeedsSemanticAnalysis`.
+- [ ] Re-indexing a changed file invalidates as before.
+- [ ] `MarkStaleEmbeddingsForReembedAsync` detects a model switch even after intervening upserts.
+- [ ] A node's status update leaves its embedding untouched.
 
-## DoD
+## Definition of Done
 
-- Fix + Tests gemerged; Enrichment-Kostenverhalten (kein Re-Queue unveränderter Knoten) im CHANGELOG vermerkt.
+- Fix + tests merged; enrichment cost behavior (no re-queue of unchanged nodes) noted in the CHANGELOG.

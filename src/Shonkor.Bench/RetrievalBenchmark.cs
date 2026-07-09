@@ -4,75 +4,75 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
+using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Services;
 using Shonkor.Infrastructure.Storage;
 
 namespace Shonkor.Bench;
 
 /// <summary>
-/// Retrieval precision over the graph: Precision@1, Precision@k, Recall@k, MRR for FTS (<c>search_graph</c>)
-/// and — when an Ollama embedding backend is reachable — vector (<c>search_semantic</c>). The golden set
-/// auto-bootstraps a self-retrieval set from the DB (query a symbol by its own name, expect itself), which
-/// honestly measures ranking/tokenisation quality without hand-curated fixtures.
+/// Retrieval precision over the graph: Precision@1, Precision@k, Recall@k, MRR for FTS (<c>search_graph</c>),
+/// vector (<c>search_semantic</c>) and their RRF fusion (<c>search_hybrid</c> — the default mode) when an
+/// Ollama embedding backend is reachable. The golden set auto-bootstraps a self-retrieval set from the DB
+/// (query a symbol by its own name, expect itself) unless a curated set is supplied.
 /// </summary>
 internal static class RetrievalBenchmark
 {
-    public static async Task<(MetricSet Fts, MetricSet? Semantic)> RunAsync(
+    public static async Task<(MetricSet Fts, MetricSet? Semantic, MetricSet? Hybrid)> RunAsync(
         SqliteGraphStorageProvider provider, IReadOnlyList<GraphNode> allNodes, int k, TextWriter log,
         List<GoldenCase>? goldenSet = null, string? setLabel = null)
     {
-        // Both retrievers are scored on the SAME cases (per-case Mode is ignored), so a curated golden set
-        // (e.g. natural-language intent queries) yields a clean FTS-vs-semantic comparison.
+        // Every retriever is scored on the SAME cases, so a curated golden set (e.g. natural-language intent
+        // queries) yields a clean FTS-vs-semantic-vs-hybrid comparison.
         var cases = goldenSet ?? Bootstrap(allNodes);
         log.WriteLine($"  golden cases: {cases.Count} ({setLabel ?? "auto-bootstrapped self-retrieval"}), k={k}");
 
-        var fts = await Score(provider, embedding: null, cases, k, semantic: false);
+        var fts = await Score(cases, k, c => provider.SearchAsync(c.Query, k));
 
-        MetricSet? semantic = null;
+        MetricSet? semantic = null, hybrid = null;
         var emb = TryCreateEmbeddingService();
+        var reachable = false;
         if (emb is not null)
         {
-            var reachable = false;
-            try { reachable = (await emb.GenerateEmbeddingAsync("probe")).Length > 0; }
+            try { reachable = (await emb.GenerateEmbeddingAsync("probe", EmbeddingKind.Query)).Length > 0; }
             catch { reachable = false; }
-            if (reachable)
+        }
+
+        if (reachable && emb is not null)
+        {
+            // Embed the QUERY with the query prefix (TICKET-202): the kind-less overload defaulted to the
+            // Document prefix, so an earlier A/B "within noise" result measured document-prefixed queries.
+            semantic = await Score(cases, k, async c =>
+                await provider.SearchSemanticAsync(await emb.GenerateEmbeddingAsync(c.Query, EmbeddingKind.Query), k));
+
+            // Hybrid = RRF of FTS + vector, exactly like the /api/search/hybrid endpoint (over-fetch k*2).
+            hybrid = await Score(cases, k, async c =>
             {
-                semantic = await Score(provider, emb, cases, k, semantic: true);
-            }
-            else
-            {
-                log.WriteLine("  semantic: embedding backend unreachable — skipped");
-            }
+                var ftsHits = await provider.SearchAsync(c.Query, k * 2);
+                var qv = await emb.GenerateEmbeddingAsync(c.Query, EmbeddingKind.Query);
+                var semHits = await provider.SearchSemanticAsync(qv, k * 2);
+                return HybridFusion.ReciprocalRankFusion(ftsHits, semHits, k);
+            });
         }
         else
         {
-            log.WriteLine("  semantic: no embedding backend — skipped");
+            log.WriteLine(emb is null
+                ? "  semantic/hybrid: no embedding backend — skipped"
+                : "  semantic/hybrid: embedding backend unreachable — skipped");
         }
 
-        return (fts, semantic);
+        return (fts, semantic, hybrid);
     }
 
     private static async Task<MetricSet> Score(
-        SqliteGraphStorageProvider provider, IEmbeddingService? embedding,
-        List<GoldenCase> cases, int k, bool semantic)
+        List<GoldenCase> cases, int k, Func<GoldenCase, Task<IReadOnlyList<SearchResult>>> retrieve)
     {
         double sumP1 = 0, sumPk = 0, sumRecall = 0, sumRr = 0;
         var n = 0;
 
         foreach (var c in cases)
         {
-            IReadOnlyList<SearchResult> hits;
-            if (semantic)
-            {
-                if (embedding is null) continue;
-                var qv = await embedding.GenerateEmbeddingAsync(c.Query);
-                hits = await provider.SearchSemanticAsync(qv, k);
-            }
-            else
-            {
-                hits = await provider.SearchAsync(c.Query, k);
-            }
-
+            var hits = await retrieve(c);
             var ranked = hits.Select(h => h.Node).ToList();
             bool Match(GraphNode node) => c.Expected.Any(e =>
                 node.Id.Contains(e, StringComparison.OrdinalIgnoreCase) ||
