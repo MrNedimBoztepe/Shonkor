@@ -57,6 +57,9 @@ publish-test/
 publish/
 
 # Bench: per-run, DB-dependent output of the Shonkor.Bench harness (reproduce by running it).
+# The checked-in exceptions: bench/golden/* (curated sets) and bench/answers-baseline.json (the gate).
 bench/report.md
 bench/metrics.json
 bench/rag-chunk-cache.json
+bench/answers-report.md
+bench/answers-metrics.json

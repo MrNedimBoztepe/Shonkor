@@ -19,4 +19,9 @@
     <ProjectReference Include="..\Shonkor.Infrastructure\Shonkor.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The groundedness metric logic (citation parsing, abstention classification) is unit-tested. -->
+    <InternalsVisibleTo Include="Shonkor.Tests" />
+  </ItemGroup>
+
 </Project>
