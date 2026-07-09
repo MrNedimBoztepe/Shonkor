@@ -43,6 +43,7 @@ public static class McpToolRegistryFactory
         new ImplementationsOfTool(),
         new FindPathTool(),
         new SurprisingConnectionsTool(),
+        new BlastRadiusTool(),
 
         // Group 5 — edit loop
         new ReindexFileTool(),
