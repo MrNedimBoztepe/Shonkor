@@ -12,12 +12,20 @@ namespace Shonkor.Tests;
 /// </summary>
 public class JsGraphqlPhpParserRegressionTests
 {
+    /// <summary>
+    /// OS-aware fixture path: on Unix a verbatim <c>C:\…</c> string has no separators at all, so
+    /// <c>Path.GetFileName(WithoutExtension)</c> would return the whole string and the fixtures would
+    /// exercise nothing (CI runs Linux, dev runs Windows).
+    /// </summary>
+    private static string P(string unixStylePath) =>
+        OperatingSystem.IsWindows() ? "C:" + unixStylePath.Replace('/', '\\') : unixStylePath;
+
     // ---------- JavaScript (BUG-012) ----------
 
     [Fact]
     public async Task JsComponent_Id_PreservesCase_AndIsDistinctFromTheFileNodeId()
     {
-        var filePath = @"C:\Projects\App\src\Button.tsx";
+        var filePath = P("/Projects/App/src/Button.tsx");
         var (nodes, edges) = await new JavaScriptParser().ParseAsync(filePath, "export const Button = () => null;");
 
         var component = Assert.Single(nodes);
@@ -60,7 +68,7 @@ public class JsGraphqlPhpParserRegressionTests
     [Fact]
     public async Task GraphQl_DefinedInEdges_TargetTheOriginalCaseFileId()
     {
-        var filePath = @"C:\Projects\App\Queries\GetBlog.graphql";
+        var filePath = P("/Projects/App/Queries/GetBlog.graphql");
         var (nodes, edges) = await new GraphQLParser().ParseAsync(filePath, "query GetBlogPost { id }");
 
         var query = Assert.Single(nodes);
@@ -72,7 +80,7 @@ public class JsGraphqlPhpParserRegressionTests
     public async Task GraphQl_InlineFragmentWithoutSpace_IsDetected()
     {
         var (nodes, _) = await new GraphQLParser().ParseAsync(
-            @"C:\q.graphql", "query Q { item { ...on Promo { title } } }");
+            P("/q.graphql"), "query Q { item { ...on Promo { title } } }");
 
         var query = Assert.Single(nodes);
         Assert.Equal("Promo", query.Properties.GetValueOrDefault("referencedTemplates"));
@@ -97,7 +105,7 @@ public class JsGraphqlPhpParserRegressionTests
                 'settings'    => [ [ 'name' => 'blDebug', 'type' => 'bool' ] ],
             ];
             """;
-        var (_, edges) = await new PhpModuleParser().ParseAsync(@"C:\shop\modules\mymodule\metadata.php", metadata);
+        var (_, edges) = await new PhpModuleParser().ParseAsync(P("/shop/modules/mymodule/metadata.php"), metadata);
 
         // Pre-fix: id/title/author/templates/settings pairs each became a phantom EXTENDS edge.
         Assert.Equal(2, edges.Count);
@@ -113,7 +121,7 @@ public class JsGraphqlPhpParserRegressionTests
             <?php
             $aModule = [ 'id' => 'mymodule', 'title' => 'My Module' ];
             """;
-        var (_, edges) = await new PhpModuleParser().ParseAsync(@"C:\shop\modules\mymodule\metadata.php", metadata);
+        var (_, edges) = await new PhpModuleParser().ParseAsync(P("/shop/modules/mymodule/metadata.php"), metadata);
         Assert.Empty(edges);
     }
 
@@ -126,7 +134,7 @@ public class JsGraphqlPhpParserRegressionTests
             final class MyFinal extends oxOrder { }
             class Plain extends MyBase { }
             """;
-        var (nodes, edges) = await new PhpModuleParser().ParseAsync(@"C:\shop\modules\m\classes.php", php);
+        var (nodes, edges) = await new PhpModuleParser().ParseAsync(P("/shop/modules/m/classes.php"), php);
 
         Assert.Equal(3, nodes.Count); // pre-fix, abstract/final classes produced no node at all
         Assert.Contains(edges, e => e.SourceId.EndsWith("::MyBase") && e.TargetId == @"\OxidEsales\Eshop\Application\Model\Article");
@@ -138,7 +146,7 @@ public class JsGraphqlPhpParserRegressionTests
     public async Task SmartyBlocks_SingleQuotes_AndExtraAttributes_AreDetected()
     {
         const string tpl = "[{block name='details_header'}]…[{/block}] [{block name=\"footer\" append}]…[{/block}]";
-        var (_, edges) = await new PhpModuleParser().ParseAsync(@"C:\shop\modules\m\views\page.tpl", tpl);
+        var (_, edges) = await new PhpModuleParser().ParseAsync(P("/shop/modules/m/views/page.tpl"), tpl);
 
         var blocks = edges.Where(e => e.Relationship == "OVERRIDES_BLOCK").Select(e => e.TargetId).ToList();
         Assert.Contains("details_header", blocks); // single quotes — previously missed
