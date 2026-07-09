@@ -87,16 +87,22 @@ public sealed class GetSourceTool : IMcpTool
         {
             return SendToolResponse(id, $"No definition found for '{symbol}'.");
         }
-        // Prefer the stored body; for nodes that store none (type declarations) read the line range locally.
+        // Prefer the stored body; for nodes that store none (or, for a DB indexed before TICKET-204, a body
+        // truncated with the legacy "..." marker) read the exact line range from the file instead.
         var body = def.Content;
-        if (string.IsNullOrEmpty(body))
+        if (string.IsNullOrEmpty(body) || IsLegacyTruncated(body))
         {
-            body = ctx.TryReadSourceSlice(def);
-            if (string.IsNullOrEmpty(body))
+            var slice = ctx.TryReadSourceSlice(def);
+            if (!string.IsNullOrEmpty(slice))
+            {
+                body = slice;
+            }
+            else if (string.IsNullOrEmpty(body))
             {
                 return SendToolResponse(id,
                     $"'{def.Name}' ({def.Type}) at {ToHandle(def.Id, basePath)} stores no source, and no local file access is available to read it.");
             }
+            // else: keep the legacy-truncated stored body (no filesystem access to improve on it).
         }
 
         var loc = Shorten(string.IsNullOrEmpty(def.FilePath) ? def.Id : def.FilePath, basePath);
@@ -110,6 +116,13 @@ public sealed class GetSourceTool : IMcpTool
         }
         return SendToolResponse(id, $"{def.Name} ({def.Type}) — {loc}{range}\n\n{body}" + await ctx.StaleSuffixAsync(storage, def).ConfigureAwait(false));
     }
+
+    /// <summary>
+    /// True when a stored body looks like it was truncated by the pre-TICKET-204 parser, which capped member
+    /// content at 500 chars and appended "...". Such a DB predates full-body storage; prefer the file slice.
+    /// </summary>
+    private static bool IsLegacyTruncated(string body) =>
+        body.Length >= 500 && body.EndsWith("...", StringComparison.Ordinal);
 }
 
 /// <summary>A file's type/member structure as an indented CONTAINS tree.</summary>

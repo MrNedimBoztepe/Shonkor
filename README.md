@@ -59,19 +59,21 @@ It writes `bench/report.md` (human) and `bench/metrics.json` (machine); `--basel
 
 **1. Can it find the right symbol? (retrieval precision)**
 
+_Measured run: `shonkor.db`, 200 self-retrieval + 33 agent-query cases, 2026-07-09 (post-TICKET-204, full method bodies)._
+
 | Search task | Retriever | Precision@1 | Recall@10 |
 |---|---|---:|---:|
-| **Exact name** ("`SqliteGraphStorageProvider`") — auto-bootstrapped self-retrieval | FTS5 keyword | **~0,95** | **~1,00** |
-| **Plain-English intent** — 33 hand-labeled agent queries (`bench/golden/agent-queries.json`), validated non-circular by `--check-circularity` | FTS5 keyword | **0,09** | **0,12** |
+| **Exact name** ("`SqliteGraphStorageProvider`") — 200 auto-bootstrapped self-retrieval cases | FTS5 keyword | **0,90** | **0,99** |
+| **Plain-English intent** — 33 hand-labeled agent queries (`bench/golden/agent-queries.json`), validated non-circular by `--check-circularity` | FTS5 keyword | **0,00** | **0,12** |
 | same intent set | **vector / hybrid (RRF)** | _nightly gate_ | _nightly gate_ |
 
-*In plain terms:* keyword search is excellent when you already know the name, and **poor at plain-English intent** (top hit ~9 % of the time) — which is exactly why meaning-based vector + hybrid retrieval exist. Those rows need an embedding backend and are measured in the nightly CI gate; run the `--set agent-queries.json` command above locally with Ollama to reproduce them.
+*In plain terms:* keyword search is strong when you already know the name (top hit 90 % of the time) and **useless at plain-English intent** (top hit 0 % — the target is in the top 10 but rarely rank 1, because full method bodies + class skeletons now give many nodes the same keywords). That is exactly why meaning-based vector + hybrid retrieval exist; those rows need an embedding backend and are measured in the nightly CI gate. The deterministic PR gate therefore uses the exact-name self-retrieval set, where FTS is meaningful; the NL set is a vector/hybrid benchmark.
 
 > **Note on an earlier "~88 % vector P@1" claim (removed).** It came from `doc-intent.json`, whose query is the target symbol's own doc-comment summary — which is embedded verbatim in that symbol's vector document. That is **circular**: the hit is trivial, so 0,88 was an upper bound, not real NL→code recall. The new `agent-queries.json` set uses independently-worded queries and is guarded by `--check-circularity`; the honest FTS baseline above is correspondingly lower.
 
 **2. How much context does it save? (token reduction)**
 
-The budget-aware capsule (seed-first, hub-capped) vs a **full dump of the *same* retrieved subgraph** — a fair baseline, not a whole-repo strawman: **41,1 % fewer tokens** (7 queries, 189.750 → 111.773) on Shonkor's own graph. The saving scales with graph size and hub density (fat 2-hop hub neighbourhoods are what the budget caps), but the exact figure is DB-dependent — reproduce it on yours with the first command above. _(An earlier "~88 % on a denser graph" figure was an unstored anecdote and has been removed.)_
+The budget-aware capsule (seed-first, hub-capped) vs a **full dump of the *same* retrieved subgraph** — a fair baseline, not a whole-repo strawman: **85,7 % fewer tokens** (7 queries, 931.030 → 133.423) on Shonkor's own graph (2026-07-09, post-TICKET-204). The saving rose from ~41 % once methods stored their full bodies and class nodes gained a member skeleton — the naive full-dump is now much larger, which is exactly what the budget caps. The figure is DB-dependent — reproduce it on yours with the first command above. _(An earlier "~88 % on a denser graph" anecdote was unstored and has been removed; this number is from a checked-in run.)_
 
 **3. Is it better than plain RAG? (head-to-head, `--compare-rag`)**
 
