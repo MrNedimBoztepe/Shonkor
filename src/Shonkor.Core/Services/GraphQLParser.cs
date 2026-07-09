@@ -16,6 +16,11 @@ public sealed partial class GraphQLParser : IFileParser
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".graphql", ".gql" }.ToFrozenSet();
 
     /// <inheritdoc />
+    /// <remarks>Regex-based extraction — heuristic, not compiler-proven (TICKET-207). Structural
+    /// <c>DEFINED_IN</c> edges stay Extracted via the scanner's structural-edge exemption.</remarks>
+    public Provenance DefaultProvenance => Provenance.Inferred;
+
+    /// <inheritdoc />
     public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
     {
         new NodeTypeDescriptor("GraphQLQuery", "Code", true),

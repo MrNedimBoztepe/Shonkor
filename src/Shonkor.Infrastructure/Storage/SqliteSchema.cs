@@ -62,6 +62,7 @@ internal static class SqliteSchema
                 TargetId     TEXT NOT NULL,
                 RelationType TEXT NOT NULL,
                 Provenance   INTEGER NOT NULL DEFAULT 0,
+                Properties   TEXT,
                 PRIMARY KEY (SourceId, TargetId, RelationType)
             );
             """,
@@ -70,6 +71,8 @@ internal static class SqliteSchema
         // Additive migration: edges in a graph created before provenance existed read back as 0 (Extracted),
         // matching the prior implicit "all edges are hard facts" semantics until they are re-indexed.
         await TryExecuteAsync(connection, "ALTER TABLE Edges ADD COLUMN Provenance INTEGER NOT NULL DEFAULT 0;", cancellationToken).ConfigureAwait(false);
+        // Edge properties (TICKET-207): dynamic parser-specific attributes, persisted as a JSON object.
+        await TryExecuteAsync(connection, "ALTER TABLE Edges ADD COLUMN Properties TEXT;", cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_edges_source ON Edges(SourceId);", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_edges_target ON Edges(TargetId);", cancellationToken).ConfigureAwait(false);

@@ -728,10 +728,12 @@ public sealed class GraphIndexScanner
     /// per-edge Ambiguous escalation is preserved. This is the enforcement point that keeps the
     /// provenance signal honest even if a parser forgets to tag an individual edge.
     /// </summary>
+    /// <summary>Structural membership edges are deterministic facts (the node IS in this file), so a
+    /// heuristic parser default must not downgrade them from Extracted (TICKET-207).</summary>
+    private static readonly HashSet<string> StructuralEdges = new(StringComparer.Ordinal) { "CONTAINS", "DEFINED_IN" };
+
     private static GraphEdge StampProvenance(GraphEdge edge, Provenance parserDefault) =>
-        // Structural containment (file → symbol) is a deterministic fact even when the parser's OTHER
-        // relationships are heuristic — a heuristic parser default must not downgrade CONTAINS.
-        edge.Relationship != "CONTAINS" && (int)parserDefault > (int)edge.Provenance
+        !StructuralEdges.Contains(edge.Relationship) && (int)parserDefault > (int)edge.Provenance
             ? edge with { Provenance = parserDefault }
             : edge;
 

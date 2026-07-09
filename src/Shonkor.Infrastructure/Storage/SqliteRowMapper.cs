@@ -70,8 +70,26 @@ internal static class SqliteRowMapper
             SourceId = reader.GetString(reader.GetOrdinal("SourceId")),
             TargetId = reader.GetString(reader.GetOrdinal("TargetId")),
             Relationship = reader.GetString(reader.GetOrdinal("RelationType")),
-            Provenance = ReadProvenance(reader)
+            Provenance = ReadProvenance(reader),
+            Properties = ReadEdgeProperties(reader)
         };
+
+    /// <summary>
+    /// Materializes the edge's JSON properties (TICKET-207) tolerantly: a query that doesn't select the
+    /// Properties column, a NULL, or unparseable JSON yields an empty dictionary.
+    /// </summary>
+    private static Dictionary<string, string> ReadEdgeProperties(SqliteDataReader reader)
+    {
+        int ordinal;
+        try { ordinal = reader.GetOrdinal("Properties"); }
+        catch (Exception ex) when (ex is IndexOutOfRangeException or ArgumentOutOfRangeException)
+        {
+            return new Dictionary<string, string>(); // query didn't select the column
+        }
+        if (reader.IsDBNull(ordinal)) return new Dictionary<string, string>();
+        try { return JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(ordinal)) ?? new(); }
+        catch (JsonException) { return new Dictionary<string, string>(); }
+    }
 
     /// <summary>
     /// Reads the edge's provenance tier tolerantly: a query that does not select the Provenance column
@@ -81,7 +99,10 @@ internal static class SqliteRowMapper
     {
         int ordinal;
         try { ordinal = reader.GetOrdinal("Provenance"); }
-        catch (IndexOutOfRangeException) { return Provenance.Extracted; }
+        catch (Exception ex) when (ex is IndexOutOfRangeException or ArgumentOutOfRangeException)
+        {
+            return Provenance.Extracted;
+        }
         return reader.IsDBNull(ordinal) ? Provenance.Extracted : (Provenance)reader.GetInt32(ordinal);
     }
 

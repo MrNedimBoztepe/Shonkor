@@ -26,6 +26,9 @@ namespace Shonkor.Plugin.Sitecore;
 /// </summary>
 public sealed class SitecoreConfigPlugin : IFileParser
 {
+    /// <remarks>Regex/pattern-based config extraction — heuristic, never Extracted (TICKET-207).</remarks>
+    public Provenance DefaultProvenance => Provenance.Inferred;
+
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".config" }.ToFrozenSet();
 
