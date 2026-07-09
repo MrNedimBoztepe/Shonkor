@@ -111,14 +111,14 @@ public static class SemanticCsharpLinker
         }
 
         var trees = compilation.SyntaxTrees.Where(t => filePaths.Contains(t.FilePath));
-        var edges = new HashSet<(string Source, string Target, string Relationship)>();
+        var edges = new HashSet<(string Source, string Target, string Relationship, Provenance Provenance)>();
         var unresolved = new HashSet<(string EnclosingId, string TypeName)>();
         await CollectEdgesAsync(compilation, trees, edges, unresolved, cancellationToken).ConfigureAwait(false);
         await ResolveUnresolvedByNameAsync(storage, unresolved, edges, cancellationToken).ConfigureAwait(false);
 
         if (edges.Count == 0) return;
         await storage.UpsertEdgesAsync(
-            edges.Select(e => new GraphEdge { SourceId = e.Source, TargetId = e.Target, Relationship = e.Relationship }),
+            edges.Select(e => new GraphEdge { SourceId = e.Source, TargetId = e.Target, Relationship = e.Relationship, Provenance = e.Provenance }),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -132,7 +132,7 @@ public static class SemanticCsharpLinker
         ArgumentNullException.ThrowIfNull(compilation);
 
         // Dedup by (source, target, relationship).
-        var edges = new HashSet<(string Source, string Target, string Relationship)>();
+        var edges = new HashSet<(string Source, string Target, string Relationship, Provenance Provenance)>();
         var unresolved = new HashSet<(string EnclosingId, string TypeName)>();
         await CollectEdgesAsync(compilation, compilation.SyntaxTrees, edges, unresolved, cancellationToken).ConfigureAwait(false);
 
@@ -143,7 +143,7 @@ public static class SemanticCsharpLinker
 
         if (edges.Count == 0) return;
         await storage.UpsertEdgesAsync(
-            edges.Select(e => new GraphEdge { SourceId = e.Source, TargetId = e.Target, Relationship = e.Relationship }),
+            edges.Select(e => new GraphEdge { SourceId = e.Source, TargetId = e.Target, Relationship = e.Relationship, Provenance = e.Provenance }),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -156,7 +156,7 @@ public static class SemanticCsharpLinker
     private static async Task ResolveUnresolvedByNameAsync(
         IGraphStore storage,
         HashSet<(string EnclosingId, string TypeName)> unresolved,
-        HashSet<(string Source, string Target, string Relationship)> edges,
+        HashSet<(string Source, string Target, string Relationship, Provenance Provenance)> edges,
         CancellationToken cancellationToken)
     {
         if (unresolved.Count == 0) return;
@@ -168,10 +168,16 @@ public static class SemanticCsharpLinker
         foreach (var (enclosingId, typeName) in unresolved)
         {
             if (!definitions.TryGetValue(typeName, out var defs)) continue;
-            foreach (var def in defs)
+
+            // Heuristic, name-based resolution — NEVER Extracted (TICKET-207). A single candidate is a
+            // plausible-but-unproven Inferred edge; multiple same-named candidates are Ambiguous (the same
+            // residual ambiguity CrossTechLinker tags this way). A later exact resolution can upgrade the
+            // trust via the MIN-provenance edge upsert.
+            var eligible = defs.Where(d => d.Id != enclosingId).ToList();
+            var provenance = eligible.Count > 1 ? Provenance.Ambiguous : Provenance.Inferred;
+            foreach (var def in eligible)
             {
-                if (def.Id == enclosingId) continue;
-                edges.Add((enclosingId, def.Id, ReferencesType));
+                edges.Add((enclosingId, def.Id, ReferencesType, provenance));
             }
         }
     }
@@ -193,7 +199,7 @@ public static class SemanticCsharpLinker
     private static async Task CollectEdgesAsync(
         CSharpCompilation compilation,
         IEnumerable<SyntaxTree> trees,
-        HashSet<(string Source, string Target, string Relationship)> edges,
+        HashSet<(string Source, string Target, string Relationship, Provenance Provenance)> edges,
         HashSet<(string EnclosingId, string TypeName)> unresolved,
         CancellationToken cancellationToken)
     {
@@ -215,7 +221,7 @@ public static class SemanticCsharpLinker
                     if (model.GetSymbolInfo(baseType.Type).Symbol is not INamedTypeSymbol baseSymbol) continue;
                     var baseId = RoslynSemantics.ToNodeId(baseSymbol);
                     if (baseId is null || baseId == typeId) continue;
-                    edges.Add((typeId, baseId, baseSymbol.TypeKind == TypeKind.Interface ? Implements : Extends));
+                    edges.Add((typeId, baseId, baseSymbol.TypeKind == TypeKind.Interface ? Implements : Extends, Provenance.Extracted));
                 }
             }
 
@@ -230,7 +236,7 @@ public static class SemanticCsharpLinker
                     var enclosingType = typeSyntax.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
                     var enclosingId = enclosingType is null ? null : RoslynSemantics.ToNodeId(model.GetDeclaredSymbol(enclosingType));
                     if (enclosingId is null || enclosingId == referencedId) continue;
-                    edges.Add((enclosingId, referencedId, ReferencesType));
+                    edges.Add((enclosingId, referencedId, ReferencesType, Provenance.Extracted));
                 }
                 else if (typeSyntax is IdentifierNameSyntax or GenericNameSyntax)
                 {
@@ -257,7 +263,7 @@ public static class SemanticCsharpLinker
                 var enclosingMethod = invocation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
                 var callerId = enclosingMethod is null ? null : RoslynSemantics.ToNodeId(model.GetDeclaredSymbol(enclosingMethod));
                 if (callerId is null || callerId == calleeId) continue;
-                edges.Add((callerId, calleeId, Calls));
+                edges.Add((callerId, calleeId, Calls, Provenance.Extracted));
             }
 
             // INSTANTIATES — each object creation (`new Foo()`, incl. `new()`), from the enclosing method
@@ -282,7 +288,7 @@ public static class SemanticCsharpLinker
                     sourceId = enclosingTypeDecl is null ? null : RoslynSemantics.ToNodeId(model.GetDeclaredSymbol(enclosingTypeDecl));
                 }
                 if (sourceId is null || sourceId == typeId) continue;
-                edges.Add((sourceId, typeId, Instantiates));
+                edges.Add((sourceId, typeId, Instantiates, Provenance.Extracted));
             }
 
             // OVERRIDES — an override member to the base member it overrides (method-level override chain,
@@ -301,7 +307,7 @@ public static class SemanticCsharpLinker
                 var memberId = RoslynSemantics.ToNodeId(declared);
                 var overriddenId = RoslynSemantics.ToNodeId(overridden);
                 if (memberId is null || overriddenId is null || memberId == overriddenId) continue;
-                edges.Add((memberId, overriddenId, Overrides));
+                edges.Add((memberId, overriddenId, Overrides, Provenance.Extracted));
             }
 
             // IMPLEMENTS_MEMBER — the concrete member that satisfies an interface member (method-level
@@ -324,7 +330,7 @@ public static class SemanticCsharpLinker
                         var implId = RoslynSemantics.ToNodeId(impl);
                         var memberId = RoslynSemantics.ToNodeId(member);
                         if (implId is null || memberId is null || implId == memberId) continue;
-                        edges.Add((implId, memberId, ImplementsMember));
+                        edges.Add((implId, memberId, ImplementsMember, Provenance.Extracted));
                     }
                 }
             }

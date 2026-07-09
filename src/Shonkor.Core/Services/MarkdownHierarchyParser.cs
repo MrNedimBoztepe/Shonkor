@@ -27,6 +27,11 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
     private static partial Regex RelativeLinkPattern();
 
     /// <inheritdoc />
+    /// <inheritdoc />
+    /// <remarks>Regex-based Markdown extraction — heuristic (TICKET-207). Structural CONTAINS edges stay
+    /// Extracted via the scanner's structural-edge exemption; link REFERENCES are Inferred.</remarks>
+    public Provenance DefaultProvenance => Provenance.Inferred;
+
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".md", ".mdx" }.ToFrozenSet();
 
