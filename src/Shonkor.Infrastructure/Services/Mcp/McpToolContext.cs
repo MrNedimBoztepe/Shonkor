@@ -115,12 +115,15 @@ public sealed class McpToolContext
 
     /// <summary>
     /// Fallback for <c>get_source</c> on nodes that store no body: reads the exact line range from the file
-    /// when this server has filesystem access. Returns <c>null</c> if unavailable.
-    /// <see cref="GraphNode.StartLine"/>/<see cref="GraphNode.EndLine"/> are 1-based (scheme v4).
+    /// when this server has filesystem access. Returns <c>null</c> if unavailable. The node's stored
+    /// <see cref="GraphNode.FilePath"/> is re-validated against <paramref name="basePath"/> before any read,
+    /// so a poisoned/legacy graph entry pointing outside the project can never turn get_source into an
+    /// arbitrary-file reader. <see cref="GraphNode.StartLine"/>/<see cref="GraphNode.EndLine"/> are 1-based.
     /// </summary>
-    public string? TryReadSourceSlice(GraphNode node)
+    public string? TryReadSourceSlice(GraphNode node, string basePath)
     {
         if (FileParsers == null || string.IsNullOrEmpty(node.FilePath) || !node.StartLine.HasValue) return null;
+        if (!TryResolveContainedPath(node.FilePath, basePath, out _, out _)) return null; // never read outside the root
         if (!System.IO.File.Exists(node.FilePath)) return null;
         try
         {
@@ -208,6 +211,12 @@ public sealed class McpToolContext
     /// supplied <paramref name="connectedNodeIds"/> via <paramref name="edgeRelationship"/>, persists both,
     /// and returns the JSON-RPC tool response built by <paramref name="messageFactory"/>.
     /// </summary>
+    /// <summary>Max stored length for a recorded node's free-text content — bounds the persistent write.</summary>
+    public const int MaxRecordContentChars = 8 * 1024;
+
+    /// <summary>Max stored length for a recorded node's name (rendered in listings; kept short).</summary>
+    public const int MaxRecordNameChars = 512;
+
     public async Task<string> RecordNodeAsync(
         System.Text.Json.JsonElement id,
         IGraphStorageProvider storage,
@@ -222,31 +231,41 @@ public sealed class McpToolContext
     {
         var nodeId = $"{idPrefix}::{Guid.NewGuid().ToString("N")[..8]}";
 
+        // record is a cross-session, persistent write channel: bound the stored content and name so a
+        // single call can't balloon the graph (unbounded write) and can't smuggle an oversized payload.
+        var boundedContent = Truncate(content, MaxRecordContentChars);
+        var boundedName = Truncate(name, MaxRecordNameChars);
+
         var node = new GraphNode
         {
             Id = nodeId,
-            Name = name,
+            Name = boundedName,
             Type = nodeType,
-            Content = content,
+            Content = boundedContent,
             Properties = properties
         };
         await storage.UpsertNodesAsync(new[] { node }).ConfigureAwait(false);
 
+        // Only link to nodes that actually EXIST: an unverified connectedNodeId would create a dangling
+        // edge (an injected relationship to a node id the caller never proved is real). Non-existent ids
+        // are dropped and reported rather than silently persisted.
         var edges = new List<GraphEdge>();
+        var skipped = 0;
         if (connectedNodeIds != null)
         {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var connectedNode in connectedNodeIds)
             {
                 var connId = connectedNode?.ToString();
-                if (!string.IsNullOrEmpty(connId))
+                if (string.IsNullOrEmpty(connId) || !seen.Add(connId)) continue;
+                var exists = await storage.GetNodeByIdAsync(connId).ConfigureAwait(false);
+                if (exists is null) { skipped++; continue; }
+                edges.Add(new GraphEdge
                 {
-                    edges.Add(new GraphEdge
-                    {
-                        SourceId = connId,
-                        TargetId = nodeId,
-                        Relationship = edgeRelationship
-                    });
-                }
+                    SourceId = connId,
+                    TargetId = nodeId,
+                    Relationship = edgeRelationship
+                });
             }
         }
 
@@ -255,6 +274,17 @@ public sealed class McpToolContext
             await storage.UpsertEdgesAsync(edges).ConfigureAwait(false);
         }
 
-        return SendToolResponse(id, messageFactory(nodeId, edges.Count));
+        var message = messageFactory(nodeId, edges.Count);
+        if (skipped > 0)
+        {
+            message += $" ({skipped} connected id(s) skipped — no such node in the graph; no dangling edge created.)";
+        }
+        return SendToolResponse(id, message);
+    }
+
+    private static string Truncate(string? value, int maxChars)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length <= maxChars) return value ?? string.Empty;
+        return value[..maxChars] + "… [truncated]";
     }
 }
