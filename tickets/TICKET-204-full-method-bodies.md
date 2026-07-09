@@ -1,23 +1,23 @@
-# TICKET-204 – Volle Methoden-Bodies speichern + `signature`-Property emittieren
+# TICKET-204 – Store full method bodies + emit `signature` property
 
-**Schweregrad-Bezug:** K2, M9 · **Aufwand:** S · **Risiko:** niedrig × niedrig (DB wächst; Voll-Re-Index nötig)
+**Severity ref:** K2, M9 · **Effort:** S · **Risk:** low × low (DB grows; full re-index required)
 
-## Kontext
-`RoslynAstParser.GetTruncatedContent` (`RoslynAstParser.cs:462-470`) kappt Method-/Constructor-Content auf 500 Zeichen. Folgen: `EmbeddingTextBuilder` (MaxBodyChars 1500, Head+Tail aus TICKET-105) sieht nie mehr — das Tail-Fenster ist für C# tot; FTS kann die zweite Methodenhälfte nicht matchen; `get_source` bevorzugt den gespeicherten (gekürzten) Body vor dem Datei-Slice (`ReadTools.cs:91-94`). Zusätzlich liest `EmbeddingTextBuilder.cs:39` `Properties["signature"]`, aber kein Parser schreibt den Key; Klassen-Knoten haben gar keinen Content (`RoslynAstParser.cs:323-332`).
+## Context
+`RoslynAstParser.GetTruncatedContent` (`RoslynAstParser.cs:462-470`) caps method/constructor content at 500 characters. Consequences: `EmbeddingTextBuilder` (MaxBodyChars 1500, head+tail from TICKET-105) never sees more — the tail window is dead for C#; FTS cannot match the second half of a method; `get_source` prefers the stored (truncated) body over the file slice (`ReadTools.cs:91-94`). Additionally, `EmbeddingTextBuilder.cs:39` reads `Properties["signature"]`, but no parser writes the key; class nodes have no content at all (`RoslynAstParser.cs:323-332`).
 
-## Akzeptanzkriterien
-- [ ] Method-/Constructor-Knoten speichern den vollen Body (`ToFullString()`), Bounding passiert ausschließlich in `EmbeddingTextBuilder`.
-- [ ] `EndLine` wird für Methoden/Konstruktoren gesetzt.
-- [ ] `get_source` fällt auf `TryReadSourceSlice` zurück, wenn `Content` mit einem Truncation-Marker endet (Übergangsfall Bestands-DBs).
-- [ ] Alle Roslyn-Symbolknoten erhalten `Properties["signature"]` (Modifier + Rückgabetyp + Name + Parameterliste).
-- [ ] Class/Interface/Record/Struct-Knoten erhalten ein Member-Signatur-Skelett als `Content`.
-- [ ] Test: Methode > 500 Zeichen → FTS-Treffer auf einen String aus der zweiten Hälfte; `get_source` liefert den vollständigen Body.
+## Acceptance Criteria
+- [ ] Method/constructor nodes store the full body (`ToFullString()`), bounding happens exclusively in `EmbeddingTextBuilder`.
+- [ ] `EndLine` is set for methods/constructors.
+- [ ] `get_source` falls back to `TryReadSourceSlice` when `Content` ends with a truncation marker (transition case for existing DBs).
+- [ ] All Roslyn symbol nodes receive `Properties["signature"]` (modifiers + return type + name + parameter list).
+- [ ] Class/interface/record/struct nodes receive a member-signature skeleton as `Content`.
+- [ ] Test: method > 500 characters → FTS hit on a string from the second half; `get_source` returns the full body.
 
-## Betroffene Bereiche
-`RoslynAstParser.cs`, `EmbeddingTextBuilder.cs` (nur Verifikation), `ReadTools.cs`, Tests.
+## Affected Areas
+`RoslynAstParser.cs`, `EmbeddingTextBuilder.cs` (verification only), `ReadTools.cs`, tests.
 
-## Abhängigkeiten
-Keine. Nach Merge: Voll-Re-Index der Bestandsdatenbanken (mit TICKET-207/208 bündeln). Effekt via TICKET-202-Suite messen (NL-Retrieval sollte steigen).
+## Dependencies
+None. After merge: full re-index of existing databases (bundle with TICKET-207/208). Measure effect via the TICKET-202 suite (NL retrieval should improve).
 
 ## Definition of Done
-Tests grün; Bench Vorher/Nachher dokumentiert; DB-Größenzuwachs auf Shonkor selbst gemessen und im PR vermerkt.
+Tests green; bench before/after documented; DB size growth measured on Shonkor itself and noted in the PR.

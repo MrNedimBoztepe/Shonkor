@@ -43,11 +43,11 @@ public class AnswersBenchmarkTests
     {
         using var storage = await CreateStorageAsync();
         var analyzer = new ScriptedAnalyzer(_ =>
-            "Der Widget-Typ ist eine Klasse [Widget @ A.cs:1-1].\n\nSie hat keine Abhängigkeiten [Widget @ A.cs:1-1].");
+            "The Widget type is a class [Widget @ A.cs:1-1].\n\nIt has no dependencies [Widget @ A.cs:1-1].");
 
         var result = await AnswersBenchmark.RunAsync(storage, analyzer, new[]
         {
-            new AnswerCase { Id = "c1", Question = "Was ist Widget?", ContextNodeIds = ["Widget"], MustCite = ["Widget"] }
+            new AnswerCase { Id = "c1", Question = "What is Widget?", ContextNodeIds = ["Widget"], MustCite = ["Widget"] }
         }, TextWriter.Null);
 
         Assert.Equal(1.0, result.CitationValidity);
@@ -61,11 +61,11 @@ public class AnswersBenchmarkTests
     {
         using var storage = await CreateStorageAsync();
         var analyzer = new ScriptedAnalyzer(_ =>
-            "Das regelt der PaymentService [PaymentService @ Pay.cs:1-10], gemeinsam mit [Widget @ A.cs:1-1].");
+            "This is handled by the PaymentService [PaymentService @ Pay.cs:1-10], together with [Widget @ A.cs:1-1].");
 
         var result = await AnswersBenchmark.RunAsync(storage, analyzer, new[]
         {
-            new AnswerCase { Id = "c1", Question = "Was ist Widget?", ContextNodeIds = ["Widget"], MustCite = ["Widget"] }
+            new AnswerCase { Id = "c1", Question = "What is Widget?", ContextNodeIds = ["Widget"], MustCite = ["Widget"] }
         }, TextWriter.Null);
 
         Assert.Equal(0.5, result.CitationValidity); // 1 of 2 citations resolves to the context
@@ -77,11 +77,11 @@ public class AnswersBenchmarkTests
     {
         using var storage = await CreateStorageAsync();
         var analyzer = new ScriptedAnalyzer(_ =>
-            "Erster Absatz ohne Beleg.\n\nZweiter Absatz zitiert [Gadget @ B.cs:1-1].");
+            "First paragraph without a citation.\n\nSecond paragraph cites [Gadget @ B.cs:1-1].");
 
         var result = await AnswersBenchmark.RunAsync(storage, analyzer, new[]
         {
-            new AnswerCase { Id = "c1", Question = "Frage", ContextNodeIds = ["Widget", "Gadget"], MustCite = ["Widget"] }
+            new AnswerCase { Id = "c1", Question = "Question", ContextNodeIds = ["Widget", "Gadget"], MustCite = ["Widget"] }
         }, TextWriter.Null);
 
         Assert.Equal(0.0, result.MustCiteRecall);        // Gadget cited, Widget expected
@@ -95,10 +95,10 @@ public class AnswersBenchmarkTests
         using var storage = await CreateStorageAsync();
         var analyzer = new ScriptedAnalyzer(question => question switch
         {
-            "abstain-ok" => "Das ist in den aktuellen Graphen-Daten nicht belegt.",
-            "abstain-miss" => "Natürlich, das System nutzt Redis mit LRU-Eviction [Widget @ A.cs:1-1].",
-            "answerable-falseabstain" => "Das ist in den aktuellen Graphen-Daten nicht belegt.",
-            _ => "Antwort [Widget @ A.cs:1-1]."
+            "abstain-ok" => "This is not supported by the current graph data.",
+            "abstain-miss" => "Of course, the system uses Redis with LRU eviction [Widget @ A.cs:1-1].",
+            "answerable-falseabstain" => "This is not supported by the current graph data.",
+            _ => "Answer [Widget @ A.cs:1-1]."
         });
 
         var result = await AnswersBenchmark.RunAsync(storage, analyzer, new[]
@@ -119,12 +119,12 @@ public class AnswersBenchmarkTests
     public async Task ContentChecks_AndUnresolvableContext_AreReported()
     {
         using var storage = await CreateStorageAsync();
-        var analyzer = new ScriptedAnalyzer(_ => "Die Antwort erwähnt SQLite [Widget @ A.cs:1-1].");
+        var analyzer = new ScriptedAnalyzer(_ => "The answer mentions SQLite [Widget @ A.cs:1-1].");
 
         var result = await AnswersBenchmark.RunAsync(storage, analyzer, new[]
         {
-            new AnswerCase { Id = "c1", Question = "Frage", ContextNodeIds = ["Widget"], MustContain = ["SQLite"], MustNotContain = ["Postgres"] },
-            new AnswerCase { Id = "c2", Question = "Frage", ContextNodeIds = ["DoesNotExist"] }
+            new AnswerCase { Id = "c1", Question = "Question", ContextNodeIds = ["Widget"], MustContain = ["SQLite"], MustNotContain = ["Postgres"] },
+            new AnswerCase { Id = "c2", Question = "Question", ContextNodeIds = ["DoesNotExist"] }
         }, TextWriter.Null);
 
         Assert.Equal(1.0, result.ContentCheckPassRate);
@@ -143,7 +143,7 @@ public class AnswersBenchmarkTests
 
         await AnswersBenchmark.RunAsync(storage, capture, new[]
         {
-            new AnswerCase { Id = "c1", Question = "Frage", ContextNodeIds = ["/repo/A.cs::N.Widget", "Gadget"] }
+            new AnswerCase { Id = "c1", Question = "Question", ContextNodeIds = ["/repo/A.cs::N.Widget", "Gadget"] }
         }, TextWriter.Null);
 
         Assert.NotNull(seenContext);

@@ -1,73 +1,73 @@
-# Shonkor – Priorisierte Roadmap
+# Shonkor – Prioritized Roadmap
 
-Vier Phasen, jeweils mit Abhängigkeiten und Rollback-Strategie. Prinzip: **Phase 0 misst, bevor Phase 1–3 verändern** — jeder Fix bekommt ein Vorher/Nachher. Tickets in `tickets/`, Details in [improvements.md](improvements.md).
+Four phases, each with dependencies and a rollback strategy. Principle: **Phase 0 measures before Phases 1–3 change anything** — every fix gets a before/after. Tickets in `tickets/`, details in [improvements.md](improvements.md).
 
 ```
-Phase 0 (Messen)  ──►  Phase 1 (Quick Wins)  ──►  Phase 2 (Struktur)  ──►  Phase 3 (Skalierung/Optional)
-TICKET-201, 202        203, 204, 205, 206,        211, 212, 213           215, SDK-Frage, Reranking-Frage
-                       207, 208, 209, 210, 214
+Phase 0 (Measure)  ──►  Phase 1 (Quick Wins)  ──►  Phase 2 (Structure)  ──►  Phase 3 (Scaling/Optional)
+TICKET-201, 202         203, 204, 205, 206,        211, 212, 213           215, SDK question, Reranking question
+                        207, 208, 209, 210, 214
 ```
 
 ---
 
-## Phase 0 — Eval-Fundament (zuerst; ~1 Woche)
+## Phase 0 — Eval foundation (first; ~1 week)
 
-| Ticket | Inhalt | Warum zuerst |
+| Ticket | Content | Why first |
 |---|---|---|
-| TICKET-201 | `--answers`-Groundedness-Eval wiederherstellen | Ohne sie ist jeder Grounding-Fix unbelegbar |
-| TICKET-202 | Golden-Set entzirkularisieren, hybrid benchen, Coverage-Symmetrie, Gate auf P@1/MRR, CI-Wiring | Baseline für alle Phase-1/2-Deltas |
+| TICKET-201 | Restore the `--answers` groundedness eval | Without it every grounding fix is unprovable |
+| TICKET-202 | De-circularize the golden set, benchmark hybrid, coverage symmetry, gate on P@1/MRR, CI wiring | Baseline for all Phase-1/2 deltas |
 
-**Abhängigkeiten:** keine. **Rollback:** trivial — reine Messinfrastruktur, berührt keinen Produktionspfad. Einziger irreversibler Effekt: ehrlichere Zahlen im README (gewollt).
+**Dependencies:** none. **Rollback:** trivial — pure measurement infrastructure, touches no production path. The only irreversible effect: more honest numbers in the README (intended).
 
-## Phase 1 — Quick Wins (parallelisierbar; ~2–3 Wochen)
+## Phase 1 — Quick wins (parallelizable; ~2–3 weeks)
 
-Alle Punkte sind klein, lokal und unabhängig voneinander; Reihenfolge innerhalb der Phase nach Präzisions-Hebel:
+All points are small, local, and independent of one another; order within the phase by precision leverage:
 
-| Ticket | Inhalt | Aufwand |
+| Ticket | Content | Effort |
 |---|---|---|
-| TICKET-203 | `ON CONFLICT DO UPDATE`-Upsert + FTS-Query-Sanitizer (K3/H1) | S |
-| TICKET-205 | Prompt-Budget + `num_ctx` + Truncation-Detection (K4) | S |
-| TICKET-204 | Volle Methoden-Bodies + `signature` (K2/M9) | S |
-| TICKET-207 | Provenance-Integrität (K5/M5) | S |
-| TICKET-208 | Zeilennummern-Normalisierung (H7) | S |
-| TICKET-206 | Zitat-Validierung + Relevanz-Schwelle + History-Fence (H2/H3/H14) | M |
-| TICKET-214 | `generate_capsule` auf Budget-Synthesizer (H10) | S |
-| TICKET-209 | MCP-Sicherheit: Containment, set_project, Bypass, record (H8/H9/M11/M12) | M |
-| TICKET-210 | MCP-Protokoll: isError, ping, Clamps, Retry-Hygiene (H13/M7/M10) | M |
+| TICKET-203 | `ON CONFLICT DO UPDATE` upsert + FTS query sanitizer (K3/H1) | S |
+| TICKET-205 | Prompt budget + `num_ctx` + truncation detection (K4) | S |
+| TICKET-204 | Full method bodies + `signature` (K2/M9) | S |
+| TICKET-207 | Provenance integrity (K5/M5) | S |
+| TICKET-208 | Line-number normalization (H7) | S |
+| TICKET-206 | Citation validation + relevance threshold + history fence (H2/H3/H14) | M |
+| TICKET-214 | `generate_capsule` on the budget synthesizer (H10) | S |
+| TICKET-209 | MCP security: containment, set_project, bypass, record (H8/H9/M11/M12) | M |
+| TICKET-210 | MCP protocol: isError, ping, clamps, retry hygiene (H13/M7/M10) | M |
 
-**Abhängigkeiten:** 204, 207, 208 erfordern anschließend einen **Voll-Re-Index** der bestehenden Datenbanken (einmalig; 208 idealerweise mit `SchemeVersion`-Bump bündeln, dann erzwingt der vorhandene Mechanismus den Reparse automatisch). 206 sollte nach 205 landen (Validierung setzt stabilen Prompt voraus).
-**Rollback:** Jedes Ticket ist ein eigener PR mit eigenem Feature-Verhalten; 203 ist die einzige zentrale Semantik-Änderung — Rollback = Revert des Upsert-Statements (FTS-Rebuild beim nächsten Start heilt Reste). 206-Schwelle als Config mit Default „aus" ausrollen, per Eval kalibrieren, dann Default „an".
+**Dependencies:** 204, 207, 208 subsequently require a **full re-index** of the existing databases (one-time; bundle 208 ideally with a `SchemeVersion` bump, then the existing mechanism forces the reparse automatically). 206 should land after 205 (validation presupposes a stable prompt).
+**Rollback:** Each ticket is its own PR with its own feature behavior; 203 is the only central semantics change — rollback = revert of the upsert statement (the FTS rebuild at the next start heals the remnants). Roll out the 206 threshold as config with default "off", calibrate via eval, then default "on".
 
-**Gate am Phasenende:** Phase-0-Suite erneut laufen lassen; erwartet werden messbare Verbesserungen bei Must-Cite-Recall (205/206), NL-Retrieval (204) und Citation-Genauigkeit (208). Regression irgendwo → betreffendes Ticket zurückrollen.
+**Gate at end of phase:** Run the Phase-0 suite again; expected are measurable improvements in must-cite recall (205/206), NL retrieval (204), and citation accuracy (208). A regression anywhere → roll back the ticket in question.
 
-## Phase 2 — Strukturelle Umbauten (sequenziell; ~4–6 Wochen)
+## Phase 2 — Structural rework (sequential; ~4–6 weeks)
 
-| Ticket | Inhalt | Abhängigkeit |
+| Ticket | Content | Dependency |
 |---|---|---|
-| TICKET-211 | Markdown-Sektions-Chunking + Summary-in-FTS + Concept-Embeddings (H6/M8) | Eval Phase 0 (Doku-Fälle ins Golden-Set) |
-| TICKET-212 | Embedding-Lifecycle: per-Node-Hash-Carry-over, CLI-Filter, stdio-Re-Embed, Race-Guard, Queue-Attempts, Ein-Transaktions-Replace, Plugin-File-Node-Verbot (H11/M1–M3) | 203 (Upsert-Semantik zuerst stabil) |
-| TICKET-213 | Kanten-Kanonisierung: implementations_of, Phantom-Hubs, JS-Import-Resolution, Id-Schema (Arity/Ordinal/Partials), Traversal-Filter (H4/H5/M4/M6/M15) | 208 (bündelt den zweiten SchemeVersion-Bump — **beide Id-relevanten Änderungen in einem Bump**, sonst zwei Voll-Reparses beim Nutzer) |
+| TICKET-211 | Markdown section chunking + Summary-in-FTS + concept embeddings (H6/M8) | Eval Phase 0 (doc cases into the golden set) |
+| TICKET-212 | Embedding lifecycle: per-node hash carry-over, CLI filter, stdio re-embed, race guard, queue attempts, single-transaction replace, plugin file-node prohibition (H11/M1–M3) | 203 (upsert semantics stable first) |
+| TICKET-213 | Edge canonicalization: implementations_of, phantom hubs, JS import resolution, id scheme (arity/ordinal/partials), traversal filter (H4/H5/M4/M6/M15) | 208 (bundles the second SchemeVersion bump — **both id-relevant changes in one bump**, otherwise two full reparses for the user) |
 
-**Rollback:** 212 hinter Feature-Flag (`Indexing:PerNodeHashCarryover`) — bei Fehlverhalten Flag aus = heutiges Wipe-Verhalten (korrekt, nur teuer). 213 ist per Definition nicht heiß zurückrollbar (Id-Schema); Absicherung stattdessen: Graph-Diff-Test vor Merge (Voll-Index vorher/nachher auf Shonkor selbst; erwartete Kanten-Deltas explizit auflisten) + die Phase-0-Suite. 211 rein additiv, Rollback = Revert + FTS-Rebuild.
+**Rollback:** 212 behind a feature flag (`Indexing:PerNodeHashCarryover`) — on misbehavior, flag off = today's wipe behavior (correct, just expensive). 213 is by definition not hot-rollbackable (id scheme); the safeguard instead: a graph-diff test before merge (full index before/after on Shonkor itself; explicitly list the expected edge deltas) + the Phase-0 suite. 211 purely additive, rollback = revert + FTS rebuild.
 
-**Gate:** Seed-Survival, `implementations_of`-Recall (neue Golden-Fälle!), Edit-Loop-Szenariotest (Edit → reindex_file → search_semantic findet den neuen Code).
+**Gate:** Seed survival, `implementations_of` recall (new golden cases!), edit-loop scenario test (edit → reindex_file → search_semantic finds the new code).
 
-## Phase 3 — Skalierung & bewusste Entscheidungen (bei Bedarf)
+## Phase 3 — Scaling & deliberate decisions (as needed)
 
-| Thema | Trigger | Inhalt |
+| Topic | Trigger | Content |
 |---|---|---|
-| TICKET-215 | Graphen > ~20k Knoten oder Latenz-Beschwerden | Vektor: Normalisierung + MemoryMarshal sofort, Matrix-Cache, ggf. sqlite-vec; CTE auf UNION-Branches |
-| MCP-C#-SDK / Streamable HTTP | Remote-MCP wird strategisch (mehrere externe Clients) | Ersetzt handgerollten Handler + löst Session-Problem strukturell; sonst nicht nötig |
-| Cross-Encoder-Reranking | Erst wenn Phase-0-Eval nach Phase 1/2 noch Präzisionslücken im Top-K zeigt | Messbar einführen, nicht auf Verdacht |
-| nomic-Prefix-Umstellung | Ergebnis des korrigierten A/B (Teil von 202) | Falls Gewinn: Prefix-Paar in Modell-Stempel, gesteuertes Re-Embed |
+| TICKET-215 | Graphs > ~20k nodes or latency complaints | Vector: normalization + MemoryMarshal immediately, matrix cache, possibly sqlite-vec; CTE on UNION branches |
+| MCP C# SDK / Streamable HTTP | Remote MCP becomes strategic (multiple external clients) | Replaces the hand-rolled handler + solves the session problem structurally; otherwise not needed |
+| Cross-encoder reranking | Only if the Phase-0 eval still shows precision gaps in the top-K after Phases 1/2 | Introduce measurably, not on suspicion |
+| nomic prefix switch | Result of the corrected A/B (part of 202) | If a gain: prefix pair into the model stamp, controlled re-embed |
 
-**Rollback:** alles hier ist opt-in bzw. hinter Config; Vektor-Cache degradiert bei Bugs auf den heutigen Brute-Force-Pfad.
+**Rollback:** everything here is opt-in or behind config; the vector cache degrades to today's brute-force path on bugs.
 
 ---
 
-## Bewusst verschoben / abgelehnt
+## Deliberately deferred / rejected
 
-- **Graph-Store-Wechsel (Neo4j o. ä.):** kein gemessener Bedarf; SQLite-CTE ist korrekt und offline. Abgelehnt.
-- **Externer Vektorstore:** bricht das Offline-Versprechen; erst weit jenseits 1M Knoten diskutieren. Abgelehnt.
-- **LLM-Judge-Faithfulness als CI-Gate:** zu flakey auf lokalen Modellen; nur als Reporting-Zeile (eval-plan §1C). Verschoben.
-- **Konsolidierung der MCP-Tool-Palette** (31 Tools, Überlappungen `locate`/`search_graph`, `edit_plan`/`rename_plan`): nice-to-have, aber die Beschreibungen differenzieren gut; erst angehen, wenn Telemetrie Fehlgriffe der Agenten zeigt. Verschoben.
+- **Graph-store switch (Neo4j or similar):** no measured need; the SQLite CTE is correct and offline. Rejected.
+- **External vector store:** breaks the offline promise; discuss only well beyond 1M nodes. Rejected.
+- **LLM-judge faithfulness as a CI gate:** too flaky on local models; only as a reporting line (eval-plan §1C). Deferred.
+- **Consolidation of the MCP tool palette** (31 tools, overlaps `locate`/`search_graph`, `edit_plan`/`rename_plan`): nice-to-have, but the descriptions differentiate well; only tackle once telemetry shows agents mis-picking. Deferred.

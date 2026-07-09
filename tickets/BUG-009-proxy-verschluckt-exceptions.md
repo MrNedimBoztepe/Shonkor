@@ -1,25 +1,25 @@
-# BUG-009 — MCP-Proxy verschluckt Transport-Exceptions → Host hängt unbegrenzt
+# BUG-009 — MCP proxy swallows transport exceptions → host hangs indefinitely
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** CLI / MCP-Proxy
+**Severity:** High · **Status:** Confirmed · **Area:** CLI / MCP proxy
 
-## Kontext
+## Context
 
-Im Exception-Pfad von `McpProxyClient` wird nur nach stderr geloggt, aber **keine** JSON-RPC-Antwort auf stdout geschrieben ([McpProxyClient.cs:162-165](../src/Shonkor.CLI/McpProxyClient.cs)) — der MCP-Host wartet ewig auf die Antwort zur Request-ID; typische Clients blockieren damit die ganze Konversation. Der Nicht-2xx-Zweig (Zeilen 139-159) synthetisiert korrekt einen Fehler. Betroffen sind Netzwerkfehler, DNS — und vor allem der **Default-`HttpClient.Timeout` von 100 s**, den langsame Tools (`audit`, `generate_capsule` auf großen Graphen) real reißen.
+In the exception path of `McpProxyClient`, only stderr is logged, but **no** JSON-RPC response is written to stdout ([McpProxyClient.cs:162-165](../src/Shonkor.CLI/McpProxyClient.cs)) — the MCP host waits forever for the response to the request ID; typical clients thereby block the entire conversation. The non-2xx branch (lines 139-159) correctly synthesizes an error. Affected are network errors, DNS — and above all the **default `HttpClient.Timeout` of 100 s**, which slow tools (`audit`, `generate_capsule` on large graphs) actually hit.
 
-## Reproduktion
+## Reproduction
 
-Backend stoppen (oder ein Tool > 100 s laufen lassen), `tools/call` über den Proxy senden → Host erhält nie eine Antwort.
+Stop the backend (or let a tool run > 100 s), send `tools/call` through the proxy → the host never receives a response.
 
 ## Fix
 
-Im `catch`: die `id` aus der Anfragezeile parsen und eine `-32603`-Fehlerantwort (mit knapper Ursache) auf stdout emittieren — gleiche Mechanik wie der HTTP-Fehler-Zweig. `httpClient.Timeout` konfigurierbar machen bzw. deutlich erhöhen.
+In the `catch`: parse the `id` from the request line and emit a `-32603` error response (with a brief cause) to stdout — same mechanics as the HTTP error branch. Make `httpClient.Timeout` configurable, or increase it significantly.
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] Jede Anfrage mit `id` erhält garantiert genau eine Antwort — auch bei Timeout, DNS-Fehler, Verbindungsabbruch.
-- [ ] Notifications (ohne `id`) erzeugen weiterhin keine Antwort.
-- [ ] Test: Backend nicht erreichbar → wohlgeformter `-32603` auf stdout.
+- [ ] Every request with an `id` is guaranteed exactly one response — even on timeout, DNS error, connection drop.
+- [ ] Notifications (without `id`) still produce no response.
+- [ ] Test: backend unreachable → well-formed `-32603` on stdout.
 
-## DoD
+## Definition of Done
 
-- Fix + Test gemerged; Timeout-Konfiguration dokumentiert.
+- Fix + test merged; timeout configuration documented.

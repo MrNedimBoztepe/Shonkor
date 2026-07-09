@@ -1,33 +1,33 @@
-# BUG-014 — C#-Typ-ID-Kollisionen: gleichnamige Typen in einer Datei werden zu einem Knoten verschmolzen
+# BUG-014 — C# type-ID collisions: identically named types in one file are merged into a single node
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** Node-ID-Schema / C#-Parser
+**Severity:** High · **Status:** Confirmed · **Area:** Node-ID scheme / C# parser
 
-## Kontext
+## Context
 
-`CsharpNodeId.ForType = "{filePath}::{typeName}"` ([CsharpNodeId.cs:33](../src/Shonkor.Core/Services/CsharpNodeId.cs)) trägt weder Namespace noch Generik-Arity noch die Nesting-Kette. Kollisionen:
+`CsharpNodeId.ForType = "{filePath}::{typeName}"` ([CsharpNodeId.cs:33](../src/Shonkor.Core/Services/CsharpNodeId.cs)) carries neither namespace nor generic arity nor the nesting chain. Collisions:
 
-- `namespace A { class C {} } namespace B { class C {} }` in einer Datei → ein Knoten.
-- `class Foo {}` + `class Foo<T> {}` (Identifier.Text verliert die Arity) → ein Knoten.
-- Zwei Klassen mit gleichnamiger nested `class Builder` → ein Knoten; Member-IDs kollidieren transitiv ([RoslynAstParser.cs:152](../src/Shonkor.Core/Services/RoslynAstParser.cs) nutzt nur den innersten Typnamen).
+- `namespace A { class C {} } namespace B { class C {} }` in one file → a single node.
+- `class Foo {}` + `class Foo<T> {}` (Identifier.Text loses the arity) → a single node.
+- Two classes with an identically named nested `class Builder` → a single node; member IDs collide transitively ([RoslynAstParser.cs:152](../src/Shonkor.Core/Services/RoslynAstParser.cs) uses only the innermost type name).
 
-Letzter Upsert gewinnt → falsche Call-Hierarchien, falsche Impact-/Rename-Ergebnisse; Inhalt/Zeilen des einen Typs überschreiben den anderen. Die `CsharpNodeId`-Remarks dokumentieren nur die Partial-Type-Restambiguität — diese Kollisionen sind undokumentiert.
+Last upsert wins → incorrect call hierarchies, incorrect impact/rename results; content/lines of one type overwrite the other. The `CsharpNodeId` remarks document only the partial-type residual ambiguity — these collisions are undocumented.
 
-Verwandt (Mittel, BUG-034): Record-Primärkonstruktoren erzeugen inkonsistente Ctor-IDs zwischen `RoslynSemantics.ToNodeId` und dem Parser → hängende `CALLS`-Kanten. Beim Schema-Umbau mitlösen.
+Related (Medium, BUG-034): record primary constructors produce inconsistent ctor IDs between `RoslynSemantics.ToNodeId` and the parser → dangling `CALLS` edges. Solve alongside the scheme rework.
 
-## Reproduktion
+## Reproduction
 
-Fixture-Datei mit `namespace A { class C {} } namespace B { class C {} }` indizieren → `search_graph C` liefert einen Knoten statt zwei.
+Index a fixture file with `namespace A { class C {} } namespace B { class C {} }` → `search_graph C` returns a single node instead of two.
 
 ## Fix
 
-ID um Nesting-Kette + Generik-Arity (und idealerweise Namespace) erweitern, z. B. `{file}::{Namespace}.{Outer+Inner}`{`n}`; identische Ableitung in `RoslynSemantics.ToNodeId` (via `ContainingType`-Walk). **`SchemeVersion` bumpen** (Graphen unter altem Schema werden beim Öffnen als stale erkannt → Re-Index-Empfehlung greift automatisch).
+Extend the ID with the nesting chain + generic arity (and ideally namespace), e.g. `{file}::{Namespace}.{Outer+Inner}`{`n}`; identical derivation in `RoslynSemantics.ToNodeId` (via `ContainingType` walk). **Bump `SchemeVersion`** (graphs under the old scheme are detected as stale on open → the re-index recommendation kicks in automatically).
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] Die drei Kollisionsfälle oben erzeugen jeweils getrennte Knoten mit korrekten Membern.
-- [ ] Parser- und Semantik-Seite erzeugen für dieselben Symbole identische IDs (Roundtrip-Test).
-- [ ] `SchemeVersion` erhöht; Alt-Graphen melden Stale-Zustand.
+- [ ] The three collision cases above each produce separate nodes with correct members.
+- [ ] The parser side and the semantics side produce identical IDs for the same symbols (round-trip test).
+- [ ] `SchemeVersion` incremented; old graphs report a stale state.
 
 ## DoD
 
-- Fix + Tests gemerged; Re-Index zwingend, im CHANGELOG dokumentiert.
+- Fix + tests merged; re-index mandatory, documented in the CHANGELOG.

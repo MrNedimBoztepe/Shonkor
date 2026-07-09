@@ -1,27 +1,27 @@
-# BUG-008 — Plugin-Registry wird bei transientem Lesefehler komplett geleert
+# BUG-008 — Plugin registry is completely wiped on a transient read error
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** Plugins · **Datenverlust**
+**Severity:** High · **Status:** Confirmed · **Area:** Plugins · **Data loss**
 
-## Kontext
+## Context
 
-`PluginRegistry.Load()` verschluckt alle Exceptions und gibt eine leere Liste zurück ([PluginRegistry.cs:261-273](../src/Shonkor.Infrastructure/Services/PluginRegistry.cs)). Schreibpfade wie `InstallFromZip` (Zeile 133-134) machen `Load().Where(…).Append(entry)` und `Save(updated)` — war die Datei gerade gesperrt (AV, Backup, zweite Instanz), persistiert der nächste Save den leeren Zustand: **alle installierten Plugins verschwinden aus der Registry**. Verschärfend: `Save()` schreibt nicht-atomar (`File.WriteAllText`, Zeile 278), und `AssemblyPluginLoader.LoadActive` baut eine **eigene** Registry-Instanz mit eigenem Lock ([AssemblyPluginLoader.cs:71](../src/Shonkor.Infrastructure/Services/AssemblyPluginLoader.cs)) — Interleaving zweier Instanzen auf derselben Datei ist möglich.
+`PluginRegistry.Load()` swallows all exceptions and returns an empty list ([PluginRegistry.cs:261-273](../src/Shonkor.Infrastructure/Services/PluginRegistry.cs)). Write paths like `InstallFromZip` (lines 133-134) do `Load().Where(…).Append(entry)` and `Save(updated)` — if the file was just locked (AV, backup, second instance), the next Save persists the empty state: **all installed plugins vanish from the registry**. Aggravating: `Save()` writes non-atomically (`File.WriteAllText`, line 278), and `AssemblyPluginLoader.LoadActive` builds its **own** registry instance with its own lock ([AssemblyPluginLoader.cs:71](../src/Shonkor.Infrastructure/Services/AssemblyPluginLoader.cs)) — interleaving of two instances on the same file is possible.
 
-## Reproduktion
+## Reproduction
 
-`registry.json` mit exklusivem Handle sperren (z. B. Test-Prozess), währenddessen ein Plugin installieren → Registry enthält danach nur noch das neue Plugin.
+Lock `registry.json` with an exclusive handle (e.g. a test process), install a plugin during that time → the registry afterwards contains only the new plugin.
 
 ## Fix
 
-1. In `Load()` „Datei fehlt" (→ leere Liste ist korrekt) von „Lesen fehlgeschlagen" unterscheiden — Letzteres wirft, die Operation schlägt sauber fehl.
-2. Atomar schreiben: Temp-Datei + `File.Replace`.
-3. Eine gemeinsame Registry-Instanz injizieren (oder prozess-/instanzübergreifendes `Mutex` keyed auf den Registry-Pfad).
+1. In `Load()`, distinguish "file missing" (→ empty list is correct) from "read failed" — the latter throws, and the operation fails cleanly.
+2. Write atomically: temp file + `File.Replace`.
+3. Inject a single shared registry instance (or a cross-process/cross-instance `Mutex` keyed on the registry path).
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] Gesperrte/halb geschriebene Registry-Datei führt zu einem Fehler der laufenden Operation, nie zu Datenverlust.
-- [ ] Crash mid-write hinterlässt eine gültige (alte) Registry.
-- [ ] Parallel-Test: Install + MarkFailed aus zwei Instanzen verliert keine Einträge.
+- [ ] A locked/half-written registry file leads to a failure of the running operation, never to data loss.
+- [ ] A crash mid-write leaves a valid (old) registry.
+- [ ] Parallel test: Install + MarkFailed from two instances loses no entries.
 
-## DoD
+## Definition of Done
 
-- Fix + Tests gemerged.
+- Fix + tests merged.

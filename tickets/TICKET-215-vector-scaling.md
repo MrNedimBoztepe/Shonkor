@@ -1,29 +1,29 @@
-# TICKET-215 – Vektor-Suche skalieren (Normalisierung, Zero-Copy, Matrix-Cache)
+# TICKET-215 – Scale Vector Search (Normalization, Zero-Copy, Matrix Cache)
 
-**Schweregrad-Bezug:** H12, M6 (SQL-Teil), M3 (Score-Sichtbarkeit) · **Aufwand:** S (Stufe 1) / M (Stufe 2) · **Risiko:** niedrig × niedrig (Stufe 1), mittel × niedrig (Cache-Invalidierung)
+**Severity ref:** H12, M6 (SQL part), M3 (score visibility) · **Effort:** S (Stage 1) / M (Stage 2) · **Risk:** low × low (Stage 1), medium × low (cache invalidation)
 
-## Kontext
-`SearchSemanticAsync` (`SqliteGraphStorageProvider.cs:353-435`) liest pro Query **jeden** Embedding-Blob der DB und allokiert pro Zeile ein frisches `float[]` (`:387-388`) vor `TensorPrimitives.CosineSimilarity`. Bei 100k Knoten ≈ 300 MB Page-I/O + 100k Allokationen pro Query; `search_hybrid` fordert `limit*2` an. Der Top-K-Heap ist exakt — der `overscanFactor=4` (`:366-367`) bringt daher nichts. Kein Similarity-Floor; MCP-Output blendet Scores aus (`FindTools.cs:197-202`) — Rausch-Treffer bei Cosine ~0,3 sehen aus wie echte.
+## Context
+`SearchSemanticAsync` (`SqliteGraphStorageProvider.cs:353-435`) reads **every** embedding blob in the DB per query and allocates a fresh `float[]` per row (`:387-388`) before `TensorPrimitives.CosineSimilarity`. At 100k nodes ≈ 300 MB page I/O + 100k allocations per query; `search_hybrid` requests `limit*2`. The top-K heap is exact — so the `overscanFactor=4` (`:366-367`) buys nothing. No similarity floor; MCP output hides scores (`FindTools.cs:197-202`) — noise hits at cosine ~0.3 look like real ones.
 
-## Akzeptanzkriterien — Stufe 1 (sofort)
-- [ ] Vektoren werden beim Schreiben L2-normalisiert (Bestand: beim Re-Embed bzw. einmalige Migration); Scoring per Dot-Product.
-- [ ] `MemoryMarshal.Cast<byte, float>(blob)` statt per-Row-Kopie; `overscanFactor` entfernt.
-- [ ] Konfigurierbarer Similarity-Floor (Default ~0,5 für nomic); gefilterte Treffer werden als „schwache Treffer unterhalb der Schwelle ausgeblendet" vermerkt; MCP-Output zeigt den gerundeten Score pro Zeile.
-- [ ] Subgraph-CTE als zwei UNION-Branches (`e.SourceId = s.Id` / `e.TargetId = s.Id`) → nutzt `idx_edges_source`/`idx_edges_target` (kann alternativ in TICKET-213 landen — nicht doppelt).
+## Acceptance Criteria — Stage 1 (immediate)
+- [ ] Vectors are L2-normalized on write (existing data: on re-embed or a one-time migration); scoring via dot product.
+- [ ] `MemoryMarshal.Cast<byte, float>(blob)` instead of a per-row copy; `overscanFactor` removed.
+- [ ] Configurable similarity floor (default ~0.5 for nomic); filtered hits are noted as "weak hits below the threshold hidden"; MCP output shows the rounded score per row.
+- [ ] Subgraph CTE as two UNION branches (`e.SourceId = s.Id` / `e.TargetId = s.Id`) → uses `idx_edges_source`/`idx_edges_target` (may alternatively land in TICKET-213 — not duplicated).
 
-## Akzeptanzkriterien — Stufe 2 (Trigger: > ~20k Knoten oder Latenz > 200 ms)
-- [ ] In-Memory-(Id, Vektor)-Matrix pro Projekt mit Generation-Counter, invalidiert bei Upsert/Delete; Fallback auf DB-Scan bei Cache-Miss.
-- [ ] Speicher-Budget dokumentiert (float32 ~3 KB/Knoten; optional fp16-Ablage).
-- [ ] Benchmark: Query-Latenz auf synthetischem 100k-Graph < 100 ms (vorher/nachher im PR).
+## Acceptance Criteria — Stage 2 (Trigger: > ~20k nodes or latency > 200 ms)
+- [ ] In-memory (Id, vector) matrix per project with a generation counter, invalidated on upsert/delete; fallback to DB scan on cache miss.
+- [ ] Memory budget documented (float32 ~3 KB/node; optional fp16 storage).
+- [ ] Benchmark: query latency on a synthetic 100k graph < 100 ms (before/after in the PR).
 
-## Alternative (bewusst vertagt)
-`sqlite-vec` (ANN, bleibt SQLite-only) — evaluieren, falls Stufe 2 nicht reicht; externer Vektorstore bricht das Offline-Versprechen und ist erst weit jenseits 1M Knoten diskutabel.
+## Alternative (deliberately deferred)
+`sqlite-vec` (ANN, stays SQLite-only) — evaluate if Stage 2 is not enough; an external vector store breaks the offline promise and is only debatable well beyond 1M nodes.
 
-## Betroffene Bereiche
-`SqliteGraphStorageProvider.cs`, `OllamaEmbeddingService.cs`/`SemanticEnrichmentService.cs` (Normalisierung beim Schreiben), `FindTools.cs`, Bench.
+## Affected Areas
+`SqliteGraphStorageProvider.cs`, `OllamaEmbeddingService.cs`/`SemanticEnrichmentService.cs` (normalization on write), `FindTools.cs`, bench.
 
-## Abhängigkeiten
-Stufe 1: keine. Stufe 2: nach TICKET-212 (Cache-Invalidierung braucht dessen saubere Upsert-Pfade). Floor-Kalibrierung via TICKET-202-`negatives.json`.
+## Dependencies
+Stage 1: none. Stage 2: after TICKET-212 (cache invalidation needs its clean upsert paths). Floor calibration via TICKET-202 `negatives.json`.
 
 ## Definition of Done
-Stufe-1-Änderungen gemerged, Retrieval-Metriken unverändert (Exaktheit bleibt), Latenz/Allokationen vorher/nachher gemessen; Stufe 2 nur bei Trigger, mit eigenem Benchmark.
+Stage 1 changes merged, retrieval metrics unchanged (exactness preserved), latency/allocations measured before/after; Stage 2 only on trigger, with its own benchmark.

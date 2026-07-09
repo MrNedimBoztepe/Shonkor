@@ -1,22 +1,22 @@
-# TICKET-214 – MCP `generate_capsule` auf den Budget-Synthesizer umstellen
+# TICKET-214 – Switch MCP `generate_capsule` to the Budget Synthesizer
 
-**Schweregrad-Bezug:** H10 · **Aufwand:** S · **Risiko:** niedrig × niedrig
+**Severity ref:** H10 · **Effort:** S · **Risk:** low × low
 
-## Kontext
-Das MCP-Tool `generate_capsule` (`ReadTools.cs:317-335`) seeded FTS-only (`SearchAsync(query, 5)`), ruft den **Legacy-Overload** `Synthesize(nodes, edges)` ohne `CapsuleOptions` auf und kappt danach blind am letzten `##` vor `maxChars` (`McpToolHelpers.cs:186-202`). Der unlimitierte Renderer gruppiert alphabetisch nach Dateipfad (`ContextCapsuleSynthesizer.cs:169`) — unter Truncation fliegen ausgerechnet die Seed-Knoten raus, die die Query getroffen haben. Die Web-Endpoints machen es richtig (`SearchEndpoints.cs:359-360`: `SeedIds`, `MaxContentChars=12000`, `MaxNodes=40` — Seeds zuerst, immer vollständig, Hub-Schutz). Das Tool, das Agenten tatsächlich aufrufen, hat davon nichts.
+## Context
+The MCP tool `generate_capsule` (`ReadTools.cs:317-335`) seeds FTS-only (`SearchAsync(query, 5)`), calls the **legacy overload** `Synthesize(nodes, edges)` without `CapsuleOptions`, and then blindly truncates at the last `##` before `maxChars` (`McpToolHelpers.cs:186-202`). The unlimited renderer groups alphabetically by file path (`ContextCapsuleSynthesizer.cs:169`) — under truncation the very seed nodes that matched the query get dropped. The web endpoints do it right (`SearchEndpoints.cs:359-360`: `SeedIds`, `MaxContentChars=12000`, `MaxNodes=40` — seeds first, always complete, hub protection). The tool that agents actually call gets none of that.
 
-## Akzeptanzkriterien
-- [ ] `GenerateCapsuleTool` übergibt `CapsuleOptions { SeedIds, MaxContentChars = maxChars > 0 ? maxChars : 12000, MaxNodes = 40 }`.
-- [ ] Seeding nutzt den Hybrid-Pfad, wenn ein Embedding-Backend verfügbar ist (Fallback FTS wie bisher).
-- [ ] Die nachgelagerte `TruncateAtBoundary`-Kappung entfällt für den budgetierten Pfad (Budget ist bereits enforced) bzw. bleibt nur als Sicherheitsnetz.
-- [ ] Test: Query mit alphabetisch spät sortiertem Seed + kleinem `maxChars` → Seed-Body vollständig in der Capsule (schlägt auf altem Code fehl).
-- [ ] Bench: Seed-Survival-Rate (TICKET-202) für den MCP-Pfad == Web-Pfad.
+## Acceptance Criteria
+- [ ] `GenerateCapsuleTool` passes `CapsuleOptions { SeedIds, MaxContentChars = maxChars > 0 ? maxChars : 12000, MaxNodes = 40 }`.
+- [ ] Seeding uses the hybrid path when an embedding backend is available (fallback to FTS as before).
+- [ ] The downstream `TruncateAtBoundary` truncation is removed for the budgeted path (budget is already enforced), or kept only as a safety net.
+- [ ] Test: query with an alphabetically late-sorted seed + a small `maxChars` → seed body complete in the capsule (fails on the old code).
+- [ ] Bench: seed-survival rate (TICKET-202) for the MCP path == web path.
 
-## Betroffene Bereiche
-`ReadTools.cs`, ggf. `McpToolHelpers.cs`, Tests.
+## Affected Areas
+`ReadTools.cs`, possibly `McpToolHelpers.cs`, tests.
 
-## Abhängigkeiten
-Keine. Messbarkeit via TICKET-202 (Seed-Survival).
+## Dependencies
+None. Measurability via TICKET-202 (seed survival).
 
 ## Definition of Done
-Test grün; Stichprobe mit einem echten Agenten-Query dokumentiert (Capsule enthält Seeds vollständig, Omission-Notice statt stiller Kappung).
+Test green; a sample with a real agent query documented (capsule contains seeds in full, omission notice instead of silent truncation).

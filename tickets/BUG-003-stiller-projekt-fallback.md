@@ -1,28 +1,28 @@
-# BUG-003 — Unbekannter Projektname fällt still auf das aktive Projekt zurück (Cross-Projekt-/Cross-Tenant-Leak)
+# BUG-003 — Unknown project name silently falls back to the active project (cross-project/cross-tenant leak)
 
-**Schweregrad:** Kritisch · **Status:** Bestätigt · **Bereich:** MCP / ProjectManager · **Security-relevant**
+**Severity:** Critical · **Status:** Confirmed · **Area:** MCP / ProjectManager · **Security-relevant**
 
-## Kontext
+## Context
 
-`ResolveProject` ([ProjectManager.cs:309-323](../src/Shonkor.Infrastructure/Services/ProjectManager.cs), Zeile 320: `project ??= GetActiveProject();`): Wird ein explizit angefragter Projektname nicht gefunden, gibt es keinen Fehler — es wird still das aktive Projekt verwendet. Das aktive Projekt ist global persistiert und über das Web-Dashboard änderbar.
+`ResolveProject` ([ProjectManager.cs:309-323](../src/Shonkor.Infrastructure/Services/ProjectManager.cs), line 320: `project ??= GetActiveProject();`): If an explicitly requested project name is not found, there is no error — the active project is silently used. The active project is persisted globally and can be changed via the web dashboard.
 
-Folgen: Tippfehler in `projectName`/`X-Project-Name` → Antworten und `record`-**Schreibzugriffe** landen im falschen Graph. SaaS-Worst-Case: Projekt eines tenant-gebundenen Keys verschwindet zwischen Auth und Query aus der Registry → Anfrage wird auf das aktive Projekt eines anderen Tenants umgeleitet (Datenleck).
+Consequences: A typo in `projectName`/`X-Project-Name` → responses and `record` **write accesses** end up in the wrong graph. SaaS worst case: the project of a tenant-bound key disappears from the registry between auth and query → the request is redirected to another tenant's active project (data leak).
 
-## Reproduktion
+## Reproduction
 
-`tools/call` mit `projectName="Gibtsnicht"` → Ergebnis kommt kommentarlos aus dem aktiven Projekt.
+`tools/call` with `projectName="Gibtsnicht"` → the result comes silently from the active project.
 
 ## Fix
 
-In `ResolveProject` (bzw. an der Aufrufgrenze in `McpToolContext.GetStorageAsync`): Wenn ein Name explizit angefragt wurde und die Auflösung fehlschlägt → Fehler (JSON-RPC `-32602` mit klarer Meldung), niemals Fallback. Für tenant-gebundene Sessions zusätzlich: schlägt die Auflösung des authentifizierten Tenants fehl → harter Fehler, kein Fallback.
+In `ResolveProject` (or at the call boundary in `McpToolContext.GetStorageAsync`): if a name was explicitly requested and resolution fails → error (JSON-RPC `-32602` with a clear message), never a fallback. For tenant-bound sessions, additionally: if resolution of the authenticated tenant fails → hard error, no fallback.
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] Unbekannter expliziter `projectName` → Fehlerantwort mit dem angefragten Namen; kein Zugriff auf einen anderen Graph.
-- [ ] Tenant-gebundene Session, deren Projekt fehlt → Fehler, kein Fallback.
-- [ ] Ohne expliziten Namen (Session ohne Bindung) bleibt das bisherige Verhalten (aktives Projekt) erhalten und wird in der Antwort benannt.
-- [ ] Tests für alle drei Pfade.
+- [ ] Unknown explicit `projectName` → error response with the requested name; no access to another graph.
+- [ ] Tenant-bound session whose project is missing → error, no fallback.
+- [ ] Without an explicit name (session without binding) the previous behavior (active project) is preserved and named in the response.
+- [ ] Tests for all three paths.
 
-## DoD
+## Definition of Done
 
-- Fix + Tests gemerged; Verhalten in der Tool-Beschreibung (`projectName`-Parameter) dokumentiert.
+- Fix + tests merged; behavior documented in the tool description (`projectName` parameter).

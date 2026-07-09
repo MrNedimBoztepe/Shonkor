@@ -45,19 +45,19 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         }
 
         var prompt = $$"""
-        Du bist ein Software-Architektur-Experte. Analysiere den folgenden Code-Knoten und gib genau ZWEI Dinge im JSON-Format zurück:
-        1. "Summary": Ein prägnanter 1-Satz Steckbrief (max 200 Zeichen) über den fachlichen Geschäftszweck dieser Datei/Klasse/Methode. Keine technischen Details wie "Das ist eine C# Klasse", sondern WAS sie tut.
-        2. "ExtractedConcepts": Ein Array von 1-3 abstrakten Architektur-Konzepten (z.B. "Authentication", "Data Access", "UI Component").
+        You are a software-architecture expert. Analyze the following code node and return exactly TWO things in JSON format:
+        1. "Summary": A concise 1-sentence profile (max 200 characters) of the business purpose of this file/class/method. No technical details like "This is a C# class", but WHAT it does.
+        2. "ExtractedConcepts": An array of 1-3 abstract architecture concepts (e.g. "Authentication", "Data Access", "UI Component").
 
-        Knoten Name: {{node.Name}}
-        Knoten Typ: {{node.Type}}
+        Node Name: {{node.Name}}
+        Node Type: {{node.Type}}
 
         Code:
         ```
         {{contentToAnalyze}}
         ```
 
-        Antworte AUSSCHLIESSLICH mit gültigem JSON, ohne Markdown Formatierung drumherum. Format:
+        Reply EXCLUSIVELY with valid JSON, without any surrounding Markdown formatting. Format:
         { "Summary": "...", "ExtractedConcepts": ["...", "..."] }
         """;
 
@@ -146,7 +146,10 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
     public async Task<string> GenerateRAGResponseAsync(string query, IReadOnlyList<GraphNode> contextNodes, RagPromptOptions options, CancellationToken cancellationToken = default)
     {
-        var prompt = RagPromptBuilder.Build(query, contextNodes, options);
+        // Budget the context to the model window (TICKET-205), then build from the plan so validation and
+        // logging see exactly the nodes the model saw.
+        var plan = RagPromptBuilder.PlanContext(contextNodes, options);
+        var prompt = RagPromptBuilder.Build(query, plan, options);
 
         var requestBody = new
         {
@@ -154,8 +157,8 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             prompt = prompt,
             stream = false,
             // temperature=0 + fixed seed → reproducible answers for the same context (TICKET-005
-            // determinism; the groundedness eval relies on two runs producing identical numbers).
-            options = new { temperature = 0, seed = 42 }
+            // determinism). num_ctx sizes the window so the prompt isn't silently truncated (TICKET-205).
+            options = new { temperature = 0, seed = 42, num_ctx = options.NumCtx }
         };
 
         var ragEndpoint = $"{_ollamaUrl}/api/generate";
@@ -171,11 +174,13 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
                 var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
                 var responseText = responseJson?["response"]?.ToString();
-                if (responseText is null) return "Es konnte keine Antwort generiert werden.";
+                if (responseText is null) return "No answer could be generated.";
+
+                WarnIfPromptTruncated(responseJson, options.NumCtx);
 
                 // Grounding safety net (TICKET-206): flag any citation the model invented (a source not in
                 // the context) so an ungrounded reference is visible, not silently trusted.
-                var validNames = RagPromptBuilder.ValidCitationNames(contextNodes);
+                var validNames = RagPromptBuilder.ValidCitationNames(plan.Nodes);
                 return CitationValidator.AnnotateInvalid(responseText, validNames, options.Language);
             }
             catch (Exception ex)
@@ -190,7 +195,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             }
         }
 
-        return "Es konnte keine Antwort generiert werden.";
+        return "No answer could be generated.";
     }
 
     /// <summary>
@@ -214,12 +219,13 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         RagPromptOptions options,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var plan = RagPromptBuilder.PlanContext(contextNodes, options);
         var requestBody = new
         {
             model = _ollamaModel,
-            prompt = RagPromptBuilder.Build(query, contextNodes, options),
+            prompt = RagPromptBuilder.Build(query, plan, options),
             stream = true,
-            options = new { temperature = 0, seed = 42 }
+            options = new { temperature = 0, seed = 42, num_ctx = options.NumCtx }
         };
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_ollamaUrl}/api/generate")
@@ -256,9 +262,10 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
             string? token = null;
             var done = false;
+            JsonObject? obj = null;
             try
             {
-                var obj = JsonNode.Parse(line)?.AsObject();
+                obj = JsonNode.Parse(line)?.AsObject();
                 token = obj?["response"]?.ToString();
                 done = obj?["done"]?.GetValue<bool>() ?? false;
             }
@@ -275,6 +282,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             }
             if (done)
             {
+                WarnIfPromptTruncated(obj, options.NumCtx); // the terminal line carries prompt_eval_count
                 completed = true;
                 break;
             }
@@ -283,15 +291,14 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         if (completed)
         {
             // Append the invalid-citation footer (if any) after the model's own text — never rewrite it.
-            var validNames = RagPromptBuilder.ValidCitationNames(contextNodes);
+            var validNames = RagPromptBuilder.ValidCitationNames(plan.Nodes);
             var report = CitationValidator.Validate(full.ToString(), validNames);
             if (report.HasInvalidCitations)
             {
-                var german = !string.Equals(options.Language, "en", StringComparison.OrdinalIgnoreCase);
+                // Fixed marker — ALWAYS English, identical to CitationValidator's footer so app.js strips it
+                // consistently across the streaming and blocking paths (regardless of answer language).
                 var sb = new System.Text.StringBuilder("\n\n");
-                sb.AppendLine(german
-                    ? "> ⚠ **Unbelegte Quellen:** Die folgenden zitierten Quellen sind NICHT im bereitgestellten Kontext enthalten:"
-                    : "> ⚠ **Unsupported sources:** the following cited sources are NOT in the provided context:");
+                sb.AppendLine("> ⚠ **Unsupported sources:** the following cited sources are NOT in the provided context and are therefore unverified:");
                 foreach (var name in report.InvalidCitations) sb.AppendLine($"> - {name}");
                 yield return sb.ToString();
             }
@@ -300,7 +307,28 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         {
             // Stream ended without Ollama's terminal done=true — the backend was cut off mid-answer.
             // Emit a marker so the caller/UI doesn't present a truncated answer as complete.
-            yield return "\n\n_… [Antwort unvollständig — Verbindung zum Modell abgebrochen]_";
+            yield return "\n\n_… [Answer incomplete — connection to the model was interrupted]_";
+        }
+    }
+
+    /// <summary>
+    /// Detects a silently truncated prompt (TICKET-205): if Ollama actually consumed as many prompt tokens
+    /// as the whole window (<c>prompt_eval_count ≥ num_ctx</c>), the front of the prompt was dropped. Logged
+    /// as a warning so an operator sees it instead of it being swallowed. Best-effort — some responses omit
+    /// the count.
+    /// </summary>
+    private void WarnIfPromptTruncated(JsonObject? responseJson, int numCtx)
+    {
+        if (responseJson?["prompt_eval_count"] is not { } node) return;
+        int promptTokens;
+        try { promptTokens = node.GetValue<int>(); }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException) { return; }
+
+        if (promptTokens >= numCtx)
+        {
+            _logger.LogWarning(
+                "RAG prompt likely truncated by the model: prompt_eval_count={PromptTokens} reached num_ctx={NumCtx}. " +
+                "Reduce context nodes or raise SemanticAnalyzer:NumCtx.", promptTokens, numCtx);
         }
     }
 }

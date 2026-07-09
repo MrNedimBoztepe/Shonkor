@@ -53,7 +53,7 @@ dotnet run --project src/Shonkor.Bench -- shonkor.db --answers bench/golden/answ
 
 It writes `bench/report.md` (human) and `bench/metrics.json` (machine); `--baseline bench/metrics.json` gates retrieval Precision@k against a stored run (exit 2 on a regression). Vector/RAG rows need a reachable Ollama embedding backend; without one the FTS rows still run.
 
-`--answers` measures the **answer path**, not retrieval: each golden case pins a fixed context (node ids/symbol names) and asks the production RAG prompt (temperature 0, fixed seed) a question. Metrics: citation validity (does every `[Name @ file:lines]` reference a context node?), must-cite recall, abstention recall/precision (does the model say "nicht belegt" exactly when the context doesn't cover the question?), and the uncited-paragraph rate. Writes `bench/answers-report.md` + `bench/answers-metrics.json`; `--baseline bench/answers-baseline.json` gates the four headline metrics (>5 % relative drop → exit 2). Greedy decoding on a GPU is near- but not bit-deterministic (~1 in 40 answers can flip a borderline token across runs); the 5 % gate tolerance absorbs that noise.
+`--answers` measures the **answer path**, not retrieval: each golden case pins a fixed context (node ids/symbol names) and asks the production RAG prompt (temperature 0, fixed seed) a question. Metrics: citation validity (does every `[Name @ file:lines]` reference a context node?), must-cite recall, abstention recall/precision (does the model say "This is not supported by the current graph data." exactly when the context doesn't cover the question?), and the uncited-paragraph rate. Writes `bench/answers-report.md` + `bench/answers-metrics.json`; `--baseline bench/answers-baseline.json` gates the four headline metrics (>5 % relative drop → exit 2). Greedy decoding on a GPU is near- but not bit-deterministic (~1 in 40 answers can flip a borderline token across runs); the 5 % gate tolerance absorbs that noise.
 
 **Measured run** — Shonkor's own graph (`shonkor.db`, 1.763 nodes / 4.036 edges), 2026-07-06, local Ollama `nomic-embed-text`:
 
@@ -127,11 +127,11 @@ dotnet build
 **A. Prebuilt binary (no .NET SDK needed)** — self-contained release binaries are published per OS:
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/nottherealluckybuddha/Shonkor/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/MrNedimBoztepe/Shonkor/main/scripts/install.sh | sh
 ```
 ```powershell
 # Windows
-irm https://raw.githubusercontent.com/nottherealluckybuddha/Shonkor/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/MrNedimBoztepe/Shonkor/main/scripts/install.ps1 | iex
 ```
 
 **B. .NET global tool** (needs the .NET 10 SDK):

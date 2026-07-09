@@ -134,7 +134,7 @@ public static class SearchEndpoints
                 }
 
                 var responseText = await semanticAnalyzer.GenerateRAGResponseAsync(req.Query, prep.ContextNodes, prep.Options, ct);
-                return Results.Ok(new { response = responseText });
+                return Results.Ok(new { response = responseText, context = prep.ContextMetadata() });
             }
             catch (Exception ex)
             {
@@ -172,6 +172,11 @@ public static class SearchEndpoints
             }
 
             context.Response.ContentType = "text/plain; charset=utf-8";
+            // Context metadata as response headers (TICKET-205) — available before the body streams, so the
+            // UI can show "Context: N nodes, M truncated" without polluting the text/plain answer stream.
+            context.Response.Headers["X-Context-Nodes-Used"] = prep.Plan.Nodes.Count.ToString();
+            context.Response.Headers["X-Context-Truncated"] = prep.Plan.TruncatedNodeIds.Count.ToString();
+            context.Response.Headers["X-Context-Dropped"] = prep.Plan.DroppedNodeCount.ToString();
             var streamingEnabled = config.GetValue<bool?>("Features:StreamingAnswers") ?? true;
 
             try
@@ -202,7 +207,7 @@ public static class SearchEndpoints
                 {
                     context.Response.StatusCode = StatusCodes.Status500InternalServerError;
                 }
-                await context.Response.WriteAsync("\n[Fehler beim Streamen der Antwort]", CancellationToken.None);
+                await context.Response.WriteAsync("\n[Error streaming the answer]", CancellationToken.None);
             }
         });
 

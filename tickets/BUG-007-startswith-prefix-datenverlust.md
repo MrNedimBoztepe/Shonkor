@@ -1,28 +1,28 @@
-# BUG-007 — Stale-File-Cleanup löscht per Pfad-Präfix Daten fremder Verzeichnisse
+# BUG-007 — Stale-file cleanup deletes data from unrelated directories via path prefix
 
-**Schweregrad:** Hoch · **Status:** Bestätigt · **Bereich:** Ingestion / GraphIndexScanner · **Datenverlust**
+**Severity:** High · **Status:** Confirmed · **Area:** Ingestion / GraphIndexScanner · **Data loss**
 
-## Kontext
+## Context
 
-Zwei Stellen vergleichen per `indexedFile.StartsWith(directoryPath, OrdinalIgnoreCase)` ohne Trailing-Separator-Guard ([GraphIndexScanner.cs:190](../src/Shonkor.Infrastructure/Services/GraphIndexScanner.cs) im Scan-Cleanup, [:379-380](../src/Shonkor.Infrastructure/Services/GraphIndexScanner.cs) in `DetectDriftAsync`):
+Two places compare via `indexedFile.StartsWith(directoryPath, OrdinalIgnoreCase)` without a trailing-separator guard ([GraphIndexScanner.cs:190](../src/Shonkor.Infrastructure/Services/GraphIndexScanner.cs) in scan cleanup, [:379-380](../src/Shonkor.Infrastructure/Services/GraphIndexScanner.cs) in `DetectDriftAsync`):
 
-- Scan von `C:\Repo` behandelt indizierte Dateien unter `C:\Repo2\…` als „unter diesem Verzeichnis"; da sie keine Kandidaten sind, werden sie **aus dem Graph gelöscht**.
-- Umgekehrt wird `directoryPath` nie mit `Path.GetFullPath` normalisiert (Kandidaten schon) — ein relativer/abweichend geformter Pfad lässt den Vergleich nie matchen und deaktiviert das Cleanup still (Stale-Nodes überleben jeden Re-Index).
+- A scan of `C:\Repo` treats indexed files under `C:\Repo2\…` as "under this directory"; since they are not candidates, they get **deleted from the graph**.
+- Conversely, `directoryPath` is never normalized with `Path.GetFullPath` (candidates already are) — a relative/differently-shaped path never matches the comparison and silently disables cleanup (stale nodes survive every re-index).
 
-## Reproduktion
+## Reproduction
 
-DB mit Dateien aus `C:\Repo` und `C:\Repo2` (z. B. via `reindex_file`); vollen Scan über `C:\Repo` laufen lassen → `C:\Repo2`-Knoten sind gelöscht.
+DB with files from `C:\Repo` and `C:\Repo2` (e.g. via `reindex_file`); run a full scan over `C:\Repo` → `C:\Repo2` nodes are deleted.
 
 ## Fix
 
-Gemeinsamer Helper: `directoryPath = Path.GetFullPath(directoryPath)`, dann `EnsureTrailingSeparator(…)` und erst danach `StartsWith`. Beide Stellen (Zeile 190 und 379) umstellen.
+Shared helper: `directoryPath = Path.GetFullPath(directoryPath)`, then `EnsureTrailingSeparator(…)` and only then `StartsWith`. Switch both places (line 190 and 379).
 
-## Akzeptanzkriterien
+## Acceptance Criteria
 
-- [ ] Scan eines Verzeichnisses löscht keine Knoten aus Namens-Präfix-Geschwistern (`Brain` vs. `Brainstorm`).
-- [ ] Relativer/trailing-slash `directoryPath` liefert dasselbe Cleanup-Verhalten wie der kanonische Pfad.
-- [ ] Unit-Tests für beide Randfälle (Geschwister-Präfix, nicht-normalisierter Input).
+- [ ] Scanning a directory deletes no nodes from name-prefix siblings (`Brain` vs. `Brainstorm`).
+- [ ] A relative/trailing-slash `directoryPath` yields the same cleanup behavior as the canonical path.
+- [ ] Unit tests for both edge cases (sibling prefix, non-normalized input).
 
-## DoD
+## Definition of Done
 
-- Fix + Tests gemerged.
+- Fix + tests merged.

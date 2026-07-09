@@ -4,8 +4,8 @@
 // measures the RAG ANSWER path — is the generated answer faithful to the provided context?
 //  - Citation validity: does every [Name @ file:lines] reference a node actually in the context?
 //  - Must-cite recall: does an answerable question cite the expected symbol(s)?
-//  - Abstention recall/precision: does the model say "nicht belegt" exactly when the context
-//    doesn't cover the question — and only then?
+//  - Abstention recall/precision: does the model say "not supported by the current graph data"
+//    exactly when the context doesn't cover the question — and only then?
 //  - Uncited-paragraph rate: how much prose carries no citation at all?
 // The context is FIXED per case (node ids/names from the golden set), so this isolates answer
 // faithfulness from retrieval quality; answers run through the production BuildRagPrompt pipeline
@@ -23,7 +23,7 @@ internal static class AnswersBenchmark
     private static readonly Regex CitationPattern = new(@"\[([^@\[\]]+?)\s*@\s*[^\]]+\]", RegexOptions.Compiled);
 
     // The abstention phrase the RAG prompt instructs the model to use when the context doesn't cover it.
-    private const string AbstentionMarker = "nicht belegt";
+    private const string AbstentionMarker = "not supported by the current graph data";
 
     public static async Task<AnswersResult> RunAsync(
         IGraphStorageProvider storage,

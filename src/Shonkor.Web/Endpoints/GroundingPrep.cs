@@ -18,10 +18,26 @@ public sealed record GroundingPrep(
     bool NoEvidence,
     string AbstentionText,
     IReadOnlyList<GraphNode> ContextNodes,
-    RagPromptOptions Options)
+    RagPromptOptions Options,
+    ContextPlan Plan)
 {
     // The injection detector's diagnostic code — flagged context sources are annotated in the prompt.
     private const string SuspiciousCode = "security.suspicious-instruction-in-content";
+    // Hard cap on how many node ids one ask may carry (TICKET-205), before the token budget prunes further.
+    private const int DefaultMaxContextNodes = 20;
+
+    /// <summary>Answer metadata for the UI (TICKET-205): what context actually reached the model.</summary>
+    public object ContextMetadata() => new
+    {
+        nodesUsed = Plan.Nodes.Count,
+        truncated = Plan.TruncatedNodeIds.Count,
+        dropped = Plan.DroppedNodeCount,
+        nodes = Plan.Nodes.Select(n => new { id = n.Id, name = n.Name, truncated = Plan.TruncatedNodeIds.Contains(n.Id) })
+    };
+
+    private static GroundingPrep Abstain(string text) =>
+        new(NoEvidence: true, text, Array.Empty<GraphNode>(), RagPromptOptions.Default,
+            new ContextPlan(Array.Empty<GraphNode>(), new HashSet<string>(), 0, 0));
 
     public static async Task<GroundingPrep> BuildAsync(
         AskRagRequest req,
@@ -29,8 +45,8 @@ public sealed record GroundingPrep(
         IConfiguration config,
         CancellationToken ct)
     {
-        var german = !string.Equals(req.Language, "en", StringComparison.OrdinalIgnoreCase);
-        var abstention = german ? RagPromptBuilder.AbstentionMarkerDe : RagPromptBuilder.AbstentionMarkerEn;
+        // The deterministic abstention is a FIXED marker — always English, regardless of req.Language.
+        var abstention = RagPromptBuilder.AbstentionMarkerEn;
 
         // Absolute relevance floor (default 0 = off until calibrated). When >0 and the client passed
         // per-node scores, context nodes below the floor are dropped; if none survive, we abstain here
@@ -46,11 +62,20 @@ public sealed record GroundingPrep(
             }
         }
 
+        // Cap + dedupe the requested ids (TICKET-205): a caller can't force an unbounded prompt; the token
+        // budget prunes further. Order is preserved (retrieval already ranked them), first occurrence wins.
+        var maxNodes = config.GetValue<int?>("Rag:MaxContextNodes") ?? DefaultMaxContextNodes;
+        var requestedIds = req.NodeIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .Take(Math.Max(1, maxNodes))
+            .ToList();
+
         var contextNodes = new List<GraphNode>();
         var matchStrength = new Dictionary<string, double>(StringComparer.Ordinal);
         var anyScored = scoreById.Count > 0;
         var anyAboveFloor = false;
-        foreach (var id in req.NodeIds)
+        foreach (var id in requestedIds)
         {
             var node = await storage.GetNodeByIdAsync(id, ct).ConfigureAwait(false);
             if (node is null) continue;
@@ -67,7 +92,7 @@ public sealed record GroundingPrep(
         // Abstain deterministically only when a floor is set AND scores were provided AND nothing cleared it.
         if (floor > 0 && anyScored && !anyAboveFloor)
         {
-            return new GroundingPrep(NoEvidence: true, abstention, Array.Empty<GraphNode>(), RagPromptOptions.Default);
+            return Abstain(abstention);
         }
 
         // Which of the surviving context nodes did the injection detector flag?
@@ -92,9 +117,14 @@ public sealed record GroundingPrep(
             History = history,
             MatchStrength = matchStrength.Count > 0 ? matchStrength : null,
             FlaggedNodeIds = flagged,
-            Language = req.Language
+            Language = req.Language,
+            NumCtx = config.GetValue<int?>("SemanticAnalyzer:NumCtx") ?? 8192
         };
 
-        return new GroundingPrep(NoEvidence: false, abstention, contextNodes, options);
+        // Budget the context to the window now, so the answer metadata ("N nodes, M truncated") reflects
+        // exactly what the analyzer will render (PlanContext is deterministic — both compute the same plan).
+        var plan = RagPromptBuilder.PlanContext(contextNodes, options);
+
+        return new GroundingPrep(NoEvidence: false, abstention, contextNodes, options, plan);
     }
 }
