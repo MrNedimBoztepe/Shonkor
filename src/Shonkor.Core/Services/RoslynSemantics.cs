@@ -69,16 +69,43 @@ public static class RoslynSemantics
 
         return symbol switch
         {
-            INamedTypeSymbol type => CsharpNodeId.ForType(file, type.Name),
+            INamedTypeSymbol type => CsharpNodeId.ForType(file, TypeChain(type)),
+            // Primary constructors (records / primary-ctor classes) have no ConstructorDeclarationSyntax,
+            // so the syntactic parser creates no node for them — mapping one to an id would emit a
+            // dangling edge. Skip them; explicit constructors resolve normally.
             IMethodSymbol { MethodKind: MethodKind.Constructor } ctor when ctor.ContainingType is not null
-                => CsharpNodeId.ForMethod(file, ctor.ContainingType.Name, "Constructor", ctor.Parameters.Length, OverloadSpan(ctor)),
+                => IsExplicitConstructor(ctor)
+                    ? CsharpNodeId.ForMethod(file, TypeChain(ctor.ContainingType), "Constructor", ctor.Parameters.Length, OverloadSpan(ctor))
+                    : null,
             IMethodSymbol method when method.ContainingType is not null
-                => CsharpNodeId.ForMethod(file, method.ContainingType.Name, method.Name, method.Parameters.Length, OverloadSpan(method)),
+                => CsharpNodeId.ForMethod(file, TypeChain(method.ContainingType), method.Name, method.Parameters.Length, OverloadSpan(method)),
             IPropertySymbol prop when prop.ContainingType is not null
-                => CsharpNodeId.ForMember(file, prop.ContainingType.Name, prop.Name),
+                => CsharpNodeId.ForMember(file, TypeChain(prop.ContainingType), prop.Name),
             _ => null
         };
     }
+
+    /// <summary>
+    /// The symbol-side counterpart of the parser's <c>TypeChainOf</c>: the type's full chain
+    /// (<c>{Namespace}.{Outer}+{Nested}</c>, generic arity via <see cref="ISymbol.MetadataName"/>'s
+    /// backtick suffix). Both sides derive the chain from the same declaration structure, so ids match.
+    /// </summary>
+    private static string TypeChain(INamedTypeSymbol type)
+    {
+        var segments = new List<string>();
+        for (var t = type; t is not null; t = t.ContainingType)
+        {
+            segments.Insert(0, t.MetadataName);
+        }
+        var chain = string.Join("+", segments);
+        return type.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? $"{ns.ToDisplayString()}.{chain}"
+            : chain;
+    }
+
+    /// <summary>True when the constructor symbol is declared by an explicit <c>ConstructorDeclarationSyntax</c> (not a primary constructor).</summary>
+    private static bool IsExplicitConstructor(IMethodSymbol ctor) =>
+        ctor.DeclaringSyntaxReferences.Any(r => r.GetSyntax() is Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax);
 
     /// <summary>
     /// Returns the declaration's source offset when <paramref name="method"/> has a same-kind, same-arity
@@ -87,10 +114,15 @@ public static class RoslynSemantics
     /// </summary>
     private static int? OverloadSpan(IMethodSymbol method)
     {
+        // Primary constructors are invisible to the syntactic parser (no ConstructorDeclarationSyntax),
+        // so they must not count as overload siblings either — otherwise the explicit ctor's id would
+        // gain a @span suffix the parser never emits.
         var siblings = method.ContainingType
             .GetMembers(method.Name)
             .OfType<IMethodSymbol>()
-            .Count(m => m.MethodKind == method.MethodKind && m.Parameters.Length == method.Parameters.Length);
+            .Count(m => m.MethodKind == method.MethodKind
+                        && m.Parameters.Length == method.Parameters.Length
+                        && (m.MethodKind != MethodKind.Constructor || IsExplicitConstructor(m)));
 
         if (siblings <= 1) return null;
 

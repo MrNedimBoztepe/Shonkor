@@ -25,6 +25,9 @@
     <ProjectReference Include="..\..\src\Shonkor.Core\Shonkor.Core.csproj" />
     <ProjectReference Include="..\..\src\Shonkor.Infrastructure\Shonkor.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Shonkor.Web\Shonkor.Web.csproj" />
+    <!-- Groundedness metric logic (AnswersBenchmark) is unit-tested via InternalsVisibleTo. The alias
+         keeps the bench exe's top-level Program from colliding with Shonkor.Web's (WebApplicationFactory). -->
+    <ProjectReference Include="..\..\src\Shonkor.Bench\Shonkor.Bench.csproj" Aliases="bench" />
   </ItemGroup>
 
   <ItemGroup>

@@ -45,7 +45,10 @@ public sealed class JavaScriptParser : IFileParser
         var edges = new List<GraphEdge>();
 
         var componentName = Path.GetFileNameWithoutExtension(filePath);
-        var componentNodeId = filePath.ToLowerInvariant();
+        // {file}::{name}, matching the other parsers. Node ids are case-sensitive in storage: the old
+        // lowercased id matched nothing on Windows paths (every IMPORTS edge dangled) and collided with
+        // the scanner's File node on all-lowercase paths (nondeterministically destroying its ContentHash).
+        var componentNodeId = $"{filePath}::{componentName}";
 
         var properties = new Dictionary<string, string>();
 
@@ -67,6 +70,14 @@ public sealed class JavaScriptParser : IFileParser
             Type = "JSComponent",
             FilePath = filePath,
             Properties = properties
+        });
+
+        // Connect the component to the scanner's File node (id = the file's full path).
+        edges.Add(new GraphEdge
+        {
+            SourceId = filePath,
+            TargetId = componentNodeId,
+            Relationship = "CONTAINS"
         });
 
         ParseImports(filePath, content, componentNodeId, edges);
@@ -116,7 +127,7 @@ public sealed class JavaScriptParser : IFileParser
             edges.Add(new GraphEdge
             {
                 SourceId = componentNodeId,
-                TargetId = resolvedImportPath.ToLowerInvariant(),
+                TargetId = resolvedImportPath,
                 Relationship = "IMPORTS",
                 Properties = new Dictionary<string, string>
                 {
@@ -126,9 +137,15 @@ public sealed class JavaScriptParser : IFileParser
         }
     }
 
+    /// <summary>Extensions probed when resolving an extensionless relative import (ES/TS convention).</summary>
+    private static readonly string[] ProbeExtensions = [".ts", ".tsx", ".js", ".jsx"];
+
     /// <summary>
-    /// Resolves a relative import path against the directory of the importing file.
-    /// Non-relative imports (e.g., package names) are returned as-is.
+    /// Resolves a relative import path against the directory of the importing file, probing the usual
+    /// extensionless conventions (<c>./Button</c> → <c>Button.tsx</c>, <c>./components</c> →
+    /// <c>components/index.ts</c>) so the IMPORTS edge targets the imported file's actual File node id.
+    /// Non-relative imports (package names) are returned as-is. Falls back to the extensionless full
+    /// path when nothing matches on disk (e.g. no filesystem access).
     /// </summary>
     private static string ResolveImportPath(string filePath, string importSource)
     {
@@ -138,6 +155,26 @@ public sealed class JavaScriptParser : IFileParser
         }
 
         var directory = Path.GetDirectoryName(filePath) ?? string.Empty;
-        return Path.GetFullPath(Path.Combine(directory, importSource));
+        var basePath = Path.GetFullPath(Path.Combine(directory, importSource));
+
+        try
+        {
+            if (File.Exists(basePath)) return basePath;
+            foreach (var ext in ProbeExtensions)
+            {
+                if (File.Exists(basePath + ext)) return basePath + ext;
+            }
+            foreach (var ext in ProbeExtensions)
+            {
+                var index = Path.Combine(basePath, "index" + ext);
+                if (File.Exists(index)) return index;
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Probing is best-effort; fall through to the unresolved base path.
+        }
+
+        return basePath;
     }
 }

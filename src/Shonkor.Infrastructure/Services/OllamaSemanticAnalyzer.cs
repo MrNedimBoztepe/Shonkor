@@ -204,8 +204,9 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             model = _ollamaModel,
             prompt = prompt,
             stream = false,
-            // temperature=0 → reproducible answers for the same context (TICKET-005 determinism).
-            options = new { temperature = 0 }
+            // temperature=0 + fixed seed → reproducible answers for the same context (TICKET-005
+            // determinism; the groundedness eval relies on two runs producing identical numbers).
+            options = new { temperature = 0, seed = 42 }
         };
 
         var ragEndpoint = $"{_ollamaUrl}/api/generate";
@@ -258,7 +259,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             model = _ollamaModel,
             prompt = BuildRagPrompt(query, contextNodes),
             stream = true,
-            options = new { temperature = 0 }
+            options = new { temperature = 0, seed = 42 }
         };
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_ollamaUrl}/api/generate")

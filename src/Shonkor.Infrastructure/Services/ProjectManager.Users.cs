@@ -79,7 +79,7 @@ public partial class ProjectManager
         lock (_lock)
         {
             // Never store the plaintext token — persist only its hash.
-            user.ApiToken = TokenHasher.EnsureHashed(user.ApiToken);
+            user.ApiToken = TokenHasher.HashForStorage(user.ApiToken);
             _users.Add(user);
             SaveProjects();
         }

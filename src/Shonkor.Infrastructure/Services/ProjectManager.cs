@@ -198,7 +198,7 @@ public partial class ProjectManager
                 Name = name,
                 Path = path,
                 DatabasePath = resolvedDbPath,
-                ApiKey = TokenHasher.EnsureHashed(rawKey)
+                ApiKey = TokenHasher.HashForStorage(rawKey)
             });
 
             if (string.IsNullOrEmpty(_activeProjectName))
@@ -305,21 +305,25 @@ public partial class ProjectManager
         return GetStorageProviderAsync(null, cancellationToken);
     }
 
-    /// <summary>Resolves the project for a given name, or falls back to the active project.</summary>
+    /// <summary>
+    /// Resolves the project for a given name; without a name, resolves the active project. An explicitly
+    /// requested name that doesn't resolve throws instead of falling back to the active project — the
+    /// fallback would silently answer from (and record into) another project's graph, and in a
+    /// tenant-locked session it could cross tenants when the tenant's project was deleted or renamed.
+    /// </summary>
     private Project ResolveProject(string? projectName)
     {
-        Project? project = null;
         if (!string.IsNullOrWhiteSpace(projectName))
         {
+            Project? project;
             lock (_lock)
             {
                 project = _projects.FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
             }
+            return project ?? throw new KeyNotFoundException($"No project named '{projectName}' is registered.");
         }
 
-        project ??= GetActiveProject();
-
-        return project ?? throw new InvalidOperationException("No active project configured.");
+        return GetActiveProject() ?? throw new InvalidOperationException("No active project configured.");
     }
 
     /// <summary>
@@ -534,7 +538,7 @@ public partial class ProjectManager
                             orgs.Add(defaultOrg);
                         }
 
-                        var projKeyHash = TokenHasher.EnsureHashed(proj.ApiKey);
+                        var projKeyHash = TokenHasher.MigrateStored(proj.ApiKey);
                         var defaultUser = users.FirstOrDefault(u => u.ApiToken == projKeyHash);
                         if (defaultUser == null)
                         {
@@ -552,16 +556,17 @@ public partial class ProjectManager
                         needsSave = true;
                     }
 
-                    // Self-heal: hash any tokens still stored in plaintext (older projects.json).
-                    foreach (var u in users.Where(u => !string.IsNullOrEmpty(u.ApiToken) && !TokenHasher.LooksHashed(u.ApiToken)))
+                    // Self-heal: migrate stored tokens to the self-describing sha256: format (hashes any
+                    // legacy plaintext, prefixes legacy bare-hex digests written by the earlier scheme).
+                    foreach (var u in users.Where(u => !string.IsNullOrEmpty(u.ApiToken)))
                     {
-                        u.ApiToken = TokenHasher.Hash(u.ApiToken);
-                        needsSave = true;
+                        var migrated = TokenHasher.MigrateStored(u.ApiToken);
+                        if (migrated != u.ApiToken) { u.ApiToken = migrated; needsSave = true; }
                     }
-                    foreach (var p in projects.Where(p => !string.IsNullOrEmpty(p.ApiKey) && !TokenHasher.LooksHashed(p.ApiKey)))
+                    foreach (var p in projects.Where(p => !string.IsNullOrEmpty(p.ApiKey)))
                     {
-                        p.ApiKey = TokenHasher.Hash(p.ApiKey);
-                        needsSave = true;
+                        var migrated = TokenHasher.MigrateStored(p.ApiKey);
+                        if (migrated != p.ApiKey) { p.ApiKey = migrated; needsSave = true; }
                     }
                 }
             }

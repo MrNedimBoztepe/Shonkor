@@ -114,9 +114,10 @@ public sealed class RoslynAstParser : IFileParser
         public override void VisitEnumDeclaration(EnumDeclarationSyntax node)
         {
             var typeName = node.Identifier.Text;
-            var typeNodeId = CsharpNodeId.ForType(filePath, typeName);
+            var typeNodeId = CsharpNodeId.ForType(filePath, TypeChainOf(node));
 
             var members = string.Join(", ", node.Members.Select(m => m.Identifier.Text));
+            var span = node.GetLocation().GetLineSpan();
 
             Nodes.Add(new GraphNode
             {
@@ -125,7 +126,8 @@ public sealed class RoslynAstParser : IFileParser
                 Type = "Enum",
                 Content = $"Enum Members: {members}",
                 FilePath = filePath,
-                StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
+                StartLine = span.StartLinePosition.Line + 1,
+                EndLine = span.EndLinePosition.Line + 1,
                 Properties = new Dictionary<string, string>
                 {
                     ["modifiers"] = node.Modifiers.ToString()
@@ -152,6 +154,7 @@ public sealed class RoslynAstParser : IFileParser
             var parentName = _currentTypeNodeId is not null ? _currentTypeNodeId.Split("::").Last() : "global";
             var arity = node.ParameterList.Parameters.Count;
             var methodNodeId = CsharpNodeId.ForMethod(filePath, parentName, methodName, arity, MethodOverloadSpan(node, methodName, arity));
+            var span = node.GetLocation().GetLineSpan();
 
             Nodes.Add(new GraphNode
             {
@@ -160,7 +163,8 @@ public sealed class RoslynAstParser : IFileParser
                 Type = "Method",
                 Content = GetTruncatedContent(node),
                 FilePath = filePath,
-                StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
+                StartLine = span.StartLinePosition.Line + 1,
+                EndLine = span.EndLinePosition.Line + 1,
                 Properties = new Dictionary<string, string>
                 {
                     ["returnType"] = node.ReturnType.ToString(),
@@ -188,6 +192,7 @@ public sealed class RoslynAstParser : IFileParser
             var propertyName = node.Identifier.Text;
             var parentName = _currentTypeNodeId is not null ? _currentTypeNodeId.Split("::").Last() : "global";
             var propertyNodeId = CsharpNodeId.ForMember(filePath, parentName, propertyName);
+            var span = node.GetLocation().GetLineSpan();
 
             Nodes.Add(new GraphNode
             {
@@ -195,7 +200,8 @@ public sealed class RoslynAstParser : IFileParser
                 Name = propertyName,
                 Type = "Property",
                 FilePath = filePath,
-                StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
+                StartLine = span.StartLinePosition.Line + 1,
+                EndLine = span.EndLinePosition.Line + 1,
                 Properties = new Dictionary<string, string>
                 {
                     ["returnType"] = node.Type.ToString(),
@@ -223,6 +229,7 @@ public sealed class RoslynAstParser : IFileParser
             var parentName = _currentTypeNodeId is not null ? _currentTypeNodeId.Split("::").Last() : "global";
             var ctorArity = node.ParameterList.Parameters.Count;
             var constructorNodeId = CsharpNodeId.ForMethod(filePath, parentName, "Constructor", ctorArity, ConstructorOverloadSpan(node, ctorArity));
+            var span = node.GetLocation().GetLineSpan();
 
             Nodes.Add(new GraphNode
             {
@@ -231,7 +238,8 @@ public sealed class RoslynAstParser : IFileParser
                 Type = "Constructor",
                 Content = GetTruncatedContent(node),
                 FilePath = filePath,
-                StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
+                StartLine = span.StartLinePosition.Line + 1,
+                EndLine = span.EndLinePosition.Line + 1,
                 Properties = new Dictionary<string, string>
                 {
                     ["modifiers"] = node.Modifiers.ToString(),
@@ -304,7 +312,7 @@ public sealed class RoslynAstParser : IFileParser
             SyntaxTokenList modifiers)
         {
             var typeName = identifier.Text;
-            var typeNodeId = CsharpNodeId.ForType(filePath, typeName);
+            var typeNodeId = CsharpNodeId.ForType(filePath, TypeChainOf(node));
 
             // Collect the names of all types this declaration references (field/property/parameter/
             // return/object-creation/base types). These are resolved post-scan into REFERENCES_TYPE
@@ -320,14 +328,15 @@ public sealed class RoslynAstParser : IFileParser
                 properties["referencedTypes"] = string.Join(",", referencedTypes);
             }
 
+            var span = node.GetLocation().GetLineSpan();
             Nodes.Add(new GraphNode
             {
                 Id = typeNodeId,
                 Name = typeName,
                 Type = defaultType,
                 FilePath = filePath,
-                StartLine = node.GetLocation().GetLineSpan().StartLinePosition.Line,
-                EndLine = node.GetLocation().GetLineSpan().EndLinePosition.Line,
+                StartLine = span.StartLinePosition.Line + 1,
+                EndLine = span.EndLinePosition.Line + 1,
                 Properties = properties
             });
 
@@ -475,5 +484,35 @@ public sealed class RoslynAstParser : IFileParser
         /// </summary>
         private static bool IsLikelyInterface(string typeName) =>
             typeName.Length >= 2 && typeName[0] == 'I' && char.IsUpper(typeName[1]);
+
+        /// <summary>
+        /// Builds the type's full chain within its file — <c>{Namespace}.{Outer}+{Nested}</c> with a
+        /// CLR-style backtick arity suffix on generic types — by walking the declaration's ancestors.
+        /// <see cref="RoslynSemantics"/> derives the identical chain from the resolved symbol
+        /// (<c>MetadataName</c> per segment), so syntactic and semantic node ids match.
+        /// </summary>
+        private static string TypeChainOf(BaseTypeDeclarationSyntax node)
+        {
+            var segments = new List<string>();
+            var namespaces = new List<string>();
+            for (SyntaxNode? current = node; current != null; current = current.Parent)
+            {
+                switch (current)
+                {
+                    case TypeDeclarationSyntax t:
+                        var arity = t.TypeParameterList?.Parameters.Count ?? 0;
+                        segments.Insert(0, arity > 0 ? $"{t.Identifier.Text}`{arity}" : t.Identifier.Text);
+                        break;
+                    case EnumDeclarationSyntax e:
+                        segments.Insert(0, e.Identifier.Text);
+                        break;
+                    case BaseNamespaceDeclarationSyntax ns:
+                        namespaces.Insert(0, ns.Name.ToString());
+                        break;
+                }
+            }
+            var chain = string.Join("+", segments);
+            return namespaces.Count > 0 ? $"{string.Join(".", namespaces)}.{chain}" : chain;
+        }
     }
 }

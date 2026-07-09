@@ -65,9 +65,11 @@ public static class McpEndpoints
             // lockToContextProject prevents the per-tool projectName argument from escaping the
             // authenticated tenant. Only enabled when the request was key-authenticated.
             // The embedding backend (Ollama) is wired here so search_semantic works over the HTTP relay.
+            // persistentSession: false — this handler lives for exactly one POST, so session-scoped
+            // state (set_project's override) cannot be carried; the tool refuses instead of pretending.
             var handler = new McpRequestHandler(projectManager, synthesizer, projectName,
                 lockToContextProject: isTenantLocked, embeddingService: embeddingService, fileParsers: fileParsers,
-                compilationCache: compilationCache);
+                compilationCache: compilationCache, persistentSession: false);
 
             using var reader = new StreamReader(context.Request.Body);
             var body = await reader.ReadToEndAsync();

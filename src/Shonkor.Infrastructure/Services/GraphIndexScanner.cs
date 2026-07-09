@@ -25,6 +25,10 @@ public sealed class GraphIndexScanner
     // Upper bound on the content stored on a File node (full content is still hashed).
     private const int MaxFileNodeContentLength = 100_000;
 
+    // Files above this size are never parsed/indexed; the drift detector applies the same bound so it
+    // never reports a file the scanner would refuse (which would loop forever as "New"/"Changed").
+    private const long MaxParseableFileBytes = 5 * 1024 * 1024;
+
     /// <summary>
     /// Initializes a new instance of <see cref="GraphIndexScanner"/>.
     /// </summary>
@@ -124,7 +128,7 @@ public sealed class GraphIndexScanner
             try
             {
                 var fileInfo = new FileInfo(filePath);
-                if (fileInfo.Length > 5 * 1024 * 1024) // 5 MB limit
+                if (fileInfo.Length > MaxParseableFileBytes)
                 {
                     Warn($"Skipping large file {filePath} ({fileInfo.Length} bytes)");
                     return;
@@ -185,9 +189,10 @@ public sealed class GraphIndexScanner
         // 3.5 Gather stale files (previously indexed but no longer matched / excluded / deleted)
         var indexedFiles = await _storage.GetAllIndexedFilePathsAsync(cancellationToken).ConfigureAwait(false);
         var candidateFilesSet = new HashSet<string>(candidateFiles, StringComparer.OrdinalIgnoreCase);
+        var dirPrefix = NormalizedDirPrefix(directoryPath);
         foreach (var indexedFile in indexedFiles)
         {
-            if (indexedFile.StartsWith(directoryPath, StringComparison.OrdinalIgnoreCase) && !candidateFilesSet.Contains(indexedFile))
+            if (indexedFile.StartsWith(dirPrefix, StringComparison.OrdinalIgnoreCase) && !candidateFilesSet.Contains(indexedFile))
             {
                 filesToClear.Add(indexedFile);
             }
@@ -345,20 +350,24 @@ public sealed class GraphIndexScanner
         foreach (var filePath in candidateFiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!storedHashes.TryGetValue(filePath, out var storedHash))
-            {
-                added.Add(filePath);
-                continue;
-            }
 
             // Don't read very large or binary files for hashing — they're skipped by the scanner too.
+            // This guard must cover NEW files as well: a never-indexable file reported as New would be
+            // fed to reconcile, rejected there, and reported New again every cycle — drift never clean.
             try
             {
                 var info = new FileInfo(filePath);
-                if (info.Length > 5 * 1024 * 1024 || await IsLikelyBinaryAsync(filePath, cancellationToken).ConfigureAwait(false))
+                if (info.Length > MaxParseableFileBytes || await IsLikelyBinaryAsync(filePath, cancellationToken).ConfigureAwait(false))
                 {
                     continue;
                 }
+
+                if (!storedHashes.TryGetValue(filePath, out var storedHash))
+                {
+                    added.Add(filePath);
+                    continue;
+                }
+
                 var content = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
                 if (ComputeSha256Hash(content) != storedHash)
                 {
@@ -374,9 +383,10 @@ public sealed class GraphIndexScanner
         // Indexed files under this directory that no longer match a candidate (deleted or now excluded).
         var deleted = new List<string>();
         var indexedFiles = await _storage.GetAllIndexedFilePathsAsync(cancellationToken).ConfigureAwait(false);
+        var dirPrefix = NormalizedDirPrefix(directoryPath);
         foreach (var indexedFile in indexedFiles)
         {
-            if (indexedFile.StartsWith(directoryPath, StringComparison.OrdinalIgnoreCase)
+            if (indexedFile.StartsWith(dirPrefix, StringComparison.OrdinalIgnoreCase)
                 && !candidateSet.Contains(indexedFile))
             {
                 deleted.Add(indexedFile);
@@ -403,8 +413,12 @@ public sealed class GraphIndexScanner
         var drift = await DetectDriftAsync(directoryPath, excludePatterns, cancellationToken).ConfigureAwait(false);
         if (drift.IsClean) return new IndexResult(0, 0, 0, TimeSpan.Zero);
 
+        // Deleted = indexed but no longer a candidate: gone from disk OR now matched by an exclude
+        // pattern. ScanFileAsync doesn't know the exclude patterns, so an excluded-but-present file
+        // would be RE-indexed (resurrected) instead of removed — and reported Deleted again next cycle,
+        // forever. Force-remove the Deleted set so reconcile converges.
         var paths = drift.Changed.Concat(drift.New).Concat(drift.Deleted);
-        return await ReconcilePathsAsync(directoryPath, paths, cancellationToken).ConfigureAwait(false);
+        return await ReconcilePathsAsync(directoryPath, paths, cancellationToken, forceRemovePaths: drift.Deleted).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -415,17 +429,24 @@ public sealed class GraphIndexScanner
     public async Task<IndexResult> ReconcilePathsAsync(
         string rootDirectory,
         IEnumerable<string> paths,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IEnumerable<string>? forceRemovePaths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
         ArgumentNullException.ThrowIfNull(paths);
 
         var stopwatch = Stopwatch.StartNew();
+        string Resolve(string p) => Path.IsPathRooted(p) ? Path.GetFullPath(p) : Path.GetFullPath(Path.Combine(rootDirectory, p));
         var fullPaths = paths
             .Where(p => !string.IsNullOrWhiteSpace(p))
-            .Select(p => Path.IsPathRooted(p) ? p : Path.GetFullPath(Path.Combine(rootDirectory, p)))
+            .Select(Resolve)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        // Paths that must be REMOVED from the graph even if they still exist on disk (e.g. drift-Deleted
+        // files that are now exclude-matched — re-scanning them would resurrect excluded content).
+        var removeSet = forceRemovePaths is null
+            ? null
+            : forceRemovePaths.Where(p => !string.IsNullOrWhiteSpace(p)).Select(Resolve).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         // Capture the type names the changed files define BEFORE re-indexing, so a rename/delete in semantic
         // mode can still relink the referencers of the old name (their incoming edges would otherwise dangle).
@@ -445,7 +466,9 @@ public sealed class GraphIndexScanner
         foreach (var full in fullPaths)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var r = await ScanFileAsync(full, cancellationToken).ConfigureAwait(false);
+            var r = removeSet?.Contains(full) == true
+                ? await RemoveFileAsync(full, cancellationToken).ConfigureAwait(false)
+                : await ScanFileAsync(full, cancellationToken).ConfigureAwait(false);
             filesScanned += r.FilesScanned;
             nodesCreated += r.NodesCreated;
             edgesCreated += r.EdgesCreated;
@@ -577,7 +600,7 @@ public sealed class GraphIndexScanner
         }
 
         var info = new FileInfo(fullPath);
-        if (info.Length > 5 * 1024 * 1024 || await IsLikelyBinaryAsync(fullPath, cancellationToken).ConfigureAwait(false))
+        if (info.Length > MaxParseableFileBytes || await IsLikelyBinaryAsync(fullPath, cancellationToken).ConfigureAwait(false))
         {
             await _storage.DeleteByFilePathAsync(fullPath, cancellationToken).ConfigureAwait(false);
             await MaintainReferencersAsync(oldDefNames, fullPath, cancellationToken).ConfigureAwait(false);
@@ -637,6 +660,35 @@ public sealed class GraphIndexScanner
         return new IndexResult(1, nodes.Count, edges.Count, stopwatch.Elapsed);
     }
 
+    /// <summary>
+    /// Removes a file's graph representation (nodes, edges, referencer maintenance) regardless of whether
+    /// the file still exists on disk — the counterpart of <see cref="ScanFileAsync"/>'s clear branch, used
+    /// when a still-present file must leave the graph (e.g. it is now matched by an exclude pattern).
+    /// </summary>
+    private async Task<IndexResult> RemoveFileAsync(string fullPath, CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var oldDefNames = DefinitionNames(await _storage.GetNodesByFilePathAsync(fullPath, cancellationToken).ConfigureAwait(false));
+        await _storage.DeleteByFilePathAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        await MaintainReferencersAsync(oldDefNames, fullPath, cancellationToken).ConfigureAwait(false);
+        stopwatch.Stop();
+        return new IndexResult(1, 0, 0, stopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// A directory's full path with a guaranteed trailing separator, for indexed-file prefix checks.
+    /// Without the separator, scanning <c>C:\Repo</c> would classify files under a SIBLING directory with
+    /// a shared name prefix (<c>C:\Repo2\…</c>) as "under this directory" and delete their graph data; and
+    /// a non-normalized (relative / trailing-slash) input would silently never match, disabling cleanup.
+    /// </summary>
+    private static string NormalizedDirPrefix(string directoryPath)
+    {
+        var full = Path.GetFullPath(directoryPath);
+        return full.EndsWith(Path.DirectorySeparatorChar) || full.EndsWith(Path.AltDirectorySeparatorChar)
+            ? full
+            : full + Path.DirectorySeparatorChar;
+    }
+
     /// <summary>The node types that represent a C# type definition (a rename/remove of which can dangle references).</summary>
     private static readonly HashSet<string> DefinitionTypes = new(StringComparer.Ordinal) { "Class", "Interface", "Record", "Struct", "Enum" };
 
@@ -677,7 +729,11 @@ public sealed class GraphIndexScanner
     /// provenance signal honest even if a parser forgets to tag an individual edge.
     /// </summary>
     private static GraphEdge StampProvenance(GraphEdge edge, Provenance parserDefault) =>
-        (int)parserDefault > (int)edge.Provenance ? edge with { Provenance = parserDefault } : edge;
+        // Structural containment (file → symbol) is a deterministic fact even when the parser's OTHER
+        // relationships are heuristic — a heuristic parser default must not downgrade CONTAINS.
+        edge.Relationship != "CONTAINS" && (int)parserDefault > (int)edge.Provenance
+            ? edge with { Provenance = parserDefault }
+            : edge;
 
     private static string ComputeSha256Hash(string input)
     {
