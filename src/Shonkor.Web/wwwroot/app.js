@@ -219,6 +219,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Node IDs (top search hits) used as RAG context for the whole chat session.
     let aiChatContextIds = [];
+    // Retrieval scores parallel to aiChatContextIds (null where a hit carried no score).
+    let aiChatContextScores = [];
     // Running conversation transcript so follow-up questions have prior context.
     let aiChatHistory = [];
     // Signature of the context nodes the current conversation was started with; used to detect
@@ -238,6 +240,16 @@ document.addEventListener('DOMContentLoaded', () => {
         return el;
     }
 
+    // Remove server-side answer markers before an assistant turn re-enters the transcript: the
+    // stream-truncation notice and the "unsupported sources" citation-validation footer (TICKET-206).
+    // These are UI annotations, not part of the model's grounded answer, and must not become context.
+    function stripAnswerMarkers(text) {
+        return text
+            .replace(/\n*_… \[Antwort unvollständig[^\]]*\]_\s*$/u, '')
+            .replace(/\n*> ⚠ \*\*(Unbelegte Quellen|Unsupported sources):\*\*[\s\S]*$/u, '')
+            .trim();
+    }
+
     // Render model/markdown output safely: sanitize (DOMPurify) before insertion so an answer that
     // echoes raw HTML (e.g. from indexed file content) can't inject script. Falls back to plain text.
     function renderMarkdownSafe(md, el) {
@@ -251,10 +263,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function openAiChat() {
         if (!aiChatPanel) return;
 
-        // Capture the current search hits as the context for this chat session.
-        aiChatContextIds = (lastSearchResults || []).slice(0, 10)
-            .map(res => (res.Node || res.node)?.Id)
-            .filter(Boolean);
+        // Capture the current search hits as the context for this chat session, keeping each hit's
+        // relevance score parallel to its id (drives the server's abstain-without-LLM threshold and the
+        // per-node match strength shown to the model).
+        const hits = (lastSearchResults || []).slice(0, 10)
+            .map(res => ({ id: (res.Node || res.node)?.Id, score: res.Score ?? res.score }))
+            .filter(h => h.id);
+        aiChatContextIds = hits.map(h => h.id);
+        aiChatContextScores = hits.map(h => typeof h.score === 'number' ? h.score : null);
 
         // If the context changed since the conversation started, reset the chat — otherwise a new
         // session would carry over the old messages/transcript and ask them against the new nodes.
@@ -306,14 +322,11 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Record the turn and build a transcript-aware query (last few turns) so the
-        // model can answer follow-ups in context. The endpoint is stateless, so we pass
-        // the short transcript as the query alongside the same context nodes.
+        // Send the prior transcript as a SEPARATE, data-fenced field (TICKET-206): the server keeps only
+        // this latest question in the trusted instruction slot, so an earlier assistant turn can't smuggle
+        // in instructions. The endpoint is stateless, so we pass the short transcript alongside it.
+        const priorHistory = aiChatHistory.slice(-6).map(m => ({ role: m.role, text: m.text }));
         aiChatHistory.push({ role: 'user', text: question });
-        const recent = aiChatHistory.slice(-6);
-        const composedQuery = recent.length > 1
-            ? recent.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n')
-            : question;
 
         const thinking = aiAppendMessage('assistant',
             `<div style="display:flex; align-items:center; gap:0.5rem;"><div class="spinner" style="width:16px; height:16px; border-width:2px;"></div><span>Thinking…</span></div>`, true);
@@ -326,7 +339,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     'Content-Type': 'application/json',
                     'X-Project-Name': activeProjectName.textContent
                 },
-                body: JSON.stringify({ query: composedQuery, nodeIds: aiChatContextIds })
+                body: JSON.stringify({
+                    query: question,
+                    nodeIds: aiChatContextIds,
+                    scores: aiChatContextScores,
+                    history: priorHistory,
+                    language: (navigator.language || 'en').split('-')[0]
+                })
             });
 
             if (res.ok && res.body) {
@@ -351,7 +370,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 answer += decoder.decode(); // flush any bytes buffered across the final chunk boundary
                 answer = answer.trim() || 'No answer.';
                 renderMarkdownSafe(answer, thinking);
-                aiChatHistory.push({ role: 'assistant', text: answer });
+                // Strip known server-side markers (truncation / unsupported-source footer) before the answer
+                // re-enters the transcript, so a failure marker isn't fed back as context on the next turn.
+                aiChatHistory.push({ role: 'assistant', text: stripAnswerMarkers(answer) });
             } else {
                 // Most failures here are the AI backend (Ollama) being unreachable.
                 thinking.className = 'ai-msg error';
