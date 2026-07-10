@@ -92,7 +92,7 @@ public sealed class GetSourceTool : IMcpTool
         var body = def.Content;
         if (string.IsNullOrEmpty(body) || IsLegacyTruncated(body))
         {
-            var slice = ctx.TryReadSourceSlice(def);
+            var slice = ctx.TryReadSourceSlice(def, basePath);
             if (!string.IsNullOrEmpty(slice))
             {
                 body = slice;
@@ -156,12 +156,10 @@ public sealed class OutlineTool : IMcpTool
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var basePath = ctx.GetProjectBasePath(projectName);
-        var resolved = FromHandle(rawPath, basePath);
-        if (!System.IO.Path.IsPathRooted(resolved))
+        if (!TryResolveContainedPath(rawPath, basePath, out var fileId, out var pathError))
         {
-            resolved = System.IO.Path.Combine(basePath, resolved);
+            return SendError(id, -32602, pathError!);
         }
-        var fileId = System.IO.Path.GetFullPath(resolved);
 
         var fileNode = await storage.GetNodeByIdAsync(fileId).ConfigureAwait(false);
         if (fileNode == null)

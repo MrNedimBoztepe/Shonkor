@@ -22,19 +22,25 @@ public class ApiKeyMiddleware
 
     public async Task InvokeAsync(HttpContext context, IConfiguration configuration, IHostEnvironment env, Shonkor.Infrastructure.Services.ProjectManager pm)
     {
-        // The local dashboard may skip the API key, but ONLY in Development AND only for non-SaaS
-        // endpoints. In any non-Development environment the loopback bypass is disabled, because
-        // behind a reverse proxy (nginx/IIS/ngrok) RemoteIpAddress is typically 127.0.0.1 for EVERY
-        // request, which would otherwise disable auth entirely. Operators can still opt back in via
-        // Security:AllowLocalBypass = true.
-        var allowLocalBypass = configuration.GetValue<bool?>("Security:AllowLocalBypass") ?? env.IsDevelopment();
+        // The local dashboard may skip the API key, but ONLY in Development. The loopback bypass is a
+        // hard Development-only convenience: outside Development it is force-disabled REGARDLESS of the
+        // Security:AllowLocalBypass flag, because behind a reverse proxy (nginx/IIS/ngrok)
+        // RemoteIpAddress is typically 127.0.0.1 for EVERY request, so honoring the flag in production
+        // would disable auth entirely. Within Development the flag can still turn the bypass OFF (to
+        // exercise auth locally); it defaults ON. (A flag set outside Development is logged loudly at
+        // startup — see Program.cs — and ignored here.)
+        var allowLocalBypass = env.IsDevelopment()
+                               && (configuration.GetValue<bool?>("Security:AllowLocalBypass") ?? true);
 
         var isLocal = context.Connection.RemoteIpAddress != null &&
                       IPAddress.IsLoopback(context.Connection.RemoteIpAddress);
 
-        // /api/rag endpoints are SaaS-facing and must always be authenticated, even locally,
-        // so that auth can be tested in Development and SSRF from localhost is not a free pass.
-        var isSaaSEndpoint = context.Request.Path.StartsWithSegments("/api/rag");
+        // /api/rag and /api/mcp are SaaS/agent-facing and must ALWAYS be authenticated, even locally,
+        // so that auth can be tested in Development and SSRF from localhost is not a free pass into the
+        // MCP relay (whose file tools could otherwise be driven against arbitrary paths). The local edit
+        // loop uses in-process stdio (`shonkor mcp`), not this relay, so it is unaffected.
+        var isSaaSEndpoint = context.Request.Path.StartsWithSegments("/api/rag")
+                             || context.Request.Path.StartsWithSegments("/api/mcp");
 
         if (allowLocalBypass && isLocal && !isSaaSEndpoint)
         {

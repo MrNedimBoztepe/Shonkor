@@ -180,6 +180,63 @@ public static class McpToolHelpers
     }
 
     /// <summary>
+    /// Resolves a caller-supplied file argument (absolute path, project-relative path, or an <c>@/</c>
+    /// handle) to a full path and guarantees it stays INSIDE the project root — the single containment
+    /// gate for every filesystem-touching tool. A path that normalizes outside the root (via <c>..</c>,
+    /// an absolute path elsewhere, or a different drive) is rejected with an <paramref name="error"/> that
+    /// names the allowed root, closing the traversal → index → exfiltrate chain. Returns <c>false</c> and
+    /// sets <paramref name="error"/> on rejection; on success <paramref name="fullPath"/> is the normalized,
+    /// contained absolute path.
+    /// </summary>
+    public static bool TryResolveContainedPath(string? raw, string? basePath, out string fullPath, out string? error)
+    {
+        fullPath = string.Empty;
+        error = null;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            error = "Path is required.";
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(basePath))
+        {
+            error = "No project root is configured, so no file path can be validated as contained.";
+            return false;
+        }
+
+        var resolved = FromHandle(raw, basePath);
+        if (!System.IO.Path.IsPathRooted(resolved))
+        {
+            resolved = System.IO.Path.Combine(basePath, resolved);
+        }
+
+        string full, rootFull;
+        try
+        {
+            full = System.IO.Path.GetFullPath(resolved);
+            rootFull = System.IO.Path.GetFullPath(basePath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            error = "The path is not a valid filesystem path.";
+            return false;
+        }
+
+        // GetRelativePath returns "." when equal to the root, a "..\\…" prefix when the target escapes it,
+        // and a rooted path when on another drive — all of which mean "outside", so admit only paths whose
+        // relative form neither starts with ".." nor is itself rooted.
+        var rel = System.IO.Path.GetRelativePath(rootFull, full);
+        if (rel == ".." || rel.StartsWith(".." + System.IO.Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || rel.StartsWith("../", StringComparison.Ordinal) || System.IO.Path.IsPathRooted(rel))
+        {
+            error = $"Path '{raw}' resolves outside the project root '{rootFull}' — only files within the project may be accessed.";
+            return false;
+        }
+
+        fullPath = full;
+        return true;
+    }
+
+    /// <summary>
     /// Truncates markdown to at most <paramref name="maxChars"/> characters, preferring to cut at the
     /// last Markdown heading (## ) boundary before the limit so sections stay intact. Appends a notice.
     /// </summary>

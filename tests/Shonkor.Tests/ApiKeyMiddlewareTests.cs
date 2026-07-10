@@ -81,6 +81,38 @@ public class ApiKeyMiddlewareTests
     }
 
     [Fact]
+    public async Task Development_Loopback_McpRelay_StillRequiresKey()
+    {
+        // TICKET-209 AC3: /api/mcp is agent-facing and must always be authenticated, so an SSRF that
+        // reaches the relay from localhost cannot drive the MCP file tools. The local edit loop uses
+        // in-process stdio, not this relay, so nothing legitimate breaks.
+        var (status, nextCalled, _) = await RunAsync("Development", IPAddress.Loopback, "/api/mcp/relay", apiKey: null);
+        Assert.Equal(401, status);
+        Assert.False(nextCalled);
+    }
+
+    [Fact]
+    public async Task Production_AllowLocalBypassFlag_IsIgnored_Returns401()
+    {
+        // TICKET-209 AC3 / H9: the flag must NOT re-enable the loopback bypass outside Development —
+        // behind a reverse proxy every request is loopback, so honoring it would disable auth entirely.
+        var cfg = new Dictionary<string, string?> { ["Security:AllowLocalBypass"] = "true" };
+        var (status, nextCalled, _) = await RunAsync("Production", IPAddress.Loopback, "/api/stats", apiKey: null, config: cfg);
+        Assert.Equal(401, status);
+        Assert.False(nextCalled);
+    }
+
+    [Fact]
+    public async Task Development_AllowLocalBypassFalse_DisablesBypass_Returns401()
+    {
+        // The flag can still turn the bypass OFF in Development (to exercise auth locally).
+        var cfg = new Dictionary<string, string?> { ["Security:AllowLocalBypass"] = "false" };
+        var (status, nextCalled, _) = await RunAsync("Development", IPAddress.Loopback, "/api/stats", apiKey: null, config: cfg);
+        Assert.Equal(401, status);
+        Assert.False(nextCalled);
+    }
+
+    [Fact]
     public async Task LocalDashboardAskEndpoint_IsBypassedLocally()
     {
         // /api/ask is the dashboard's own AI chat (NOT under /api/rag), so loopback dev bypasses it.
