@@ -306,10 +306,13 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
         }
     }
 
-    /// <summary>Node types worth embedding for code/doc search — the ones a query is meant to land on.</summary>
+    /// <summary>
+    /// Node types worth embedding for code/doc search — the ones a query is meant to land on. Concept nodes
+    /// are included (TICKET-211): they carry no body, so they embed from name + connected node names.
+    /// </summary>
     private static readonly string[] EmbeddableTypes =
     {
-        "Class", "Interface", "Record", "Struct", "Enum", "Method", "Constructor", "Property", "File", "MarkdownSection"
+        "Class", "Interface", "Record", "Struct", "Enum", "Method", "Constructor", "Property", "File", "MarkdownSection", "Concept"
     };
 
     /// <summary>
@@ -363,7 +366,20 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
             {
                 try
                 {
-                    var text = EmbeddingTextBuilder.Build(node, node.Summary, source);
+                    // A Concept has no body: "Concept <name>" alone embeds to almost nothing. Its meaning
+                    // comes from the nodes it links to, so fold their names into the document.
+                    string text;
+                    if (node.Type == "Concept")
+                    {
+                        var (_, neighbours) = await storage.GetIncidentEdgesAsync(node.Id);
+                        var related = neighbours.Values.Where(n => n is not null && n.Id != node.Id)
+                            .Select(n => n!.Name).Distinct(StringComparer.Ordinal).Take(25).ToList();
+                        text = EmbeddingTextBuilder.BuildConcept(node.Name, node.Summary, related);
+                    }
+                    else
+                    {
+                        text = EmbeddingTextBuilder.Build(node, node.Summary, source);
+                    }
                     if (string.IsNullOrWhiteSpace(text)) return;
                     var vector = await embeddingService.GenerateEmbeddingAsync(text, EmbeddingKind.Document, ct);
                     if (vector.Length > 0)

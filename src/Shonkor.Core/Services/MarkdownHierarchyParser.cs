@@ -13,11 +13,25 @@ namespace Shonkor.Core.Services;
 public sealed partial class MarkdownHierarchyParser : IFileParser
 {
     /// <summary>
-    /// Matches Markdown header lines (e.g., <c># Title</c>, <c>## Section</c>, <c>### Subsection</c>).
-    /// Captures the header level (number of <c>#</c> characters) and the header text.
+    /// Matches a single Markdown header LINE (e.g., <c># Title</c>, <c>## Section</c>). Captures the header
+    /// level (number of <c>#</c>) and the text. Applied per line, not across the document, so that a
+    /// <c>#</c> line inside a fenced code block can be skipped (a shell comment is not a section).
     /// </summary>
-    [GeneratedRegex(@"^(#{1,6})\s+(.+)$", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^(#{1,6})\s+(.+)$")]
     private static partial Regex HeaderPattern();
+
+    /// <summary>
+    /// A fenced-code-block delimiter: at least three backticks or tildes at the start of a line, optionally
+    /// followed by an info string. Captures the fence characters so a closing fence must match the opener.
+    /// </summary>
+    [GeneratedRegex(@"^\s{0,3}(`{3,}|~{3,})\s*(\S*)")]
+    private static partial Regex FencePattern();
+
+    /// <summary>
+    /// Above this many characters a section is split at paragraph boundaries into numbered sub-nodes, so a
+    /// single sprawling section can't dominate retrieval (and stays inside the embedding model's window).
+    /// </summary>
+    internal const int MaxSectionChars = 4000;
 
     /// <summary>
     /// Matches Markdown inline links with relative paths (e.g., <c>[text](./path/to/file.md)</c>).
@@ -59,9 +73,59 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
             (nodes.AsReadOnly(), edges.AsReadOnly()));
     }
 
+    /// <summary>A header found outside any fenced code block: its line index (0-based), level and title.</summary>
+    private readonly record struct Header(int LineIndex, int Level, string Title);
+
     /// <summary>
-    /// Splits the content by Markdown header lines and creates a <c>MarkdownSection</c> node
-    /// for each section, along with a <c>CONTAINS</c> edge from the file node to each section.
+    /// Finds the header lines that actually start a section: a <c>#</c> line inside a fenced code block
+    /// (```/~~~) is a comment, not a boundary, so fences are tracked and their contents skipped. A closing
+    /// fence must use the same character and be at least as long as the opener, and carry no info string.
+    /// </summary>
+    private static List<Header> FindHeaders(string[] lines)
+    {
+        var headers = new List<Header>();
+        var fenceChar = '\0';
+        var fenceLength = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var fence = FencePattern().Match(line);
+            if (fence.Success)
+            {
+                var delimiter = fence.Groups[1].Value;
+                if (fenceChar == '\0')
+                {
+                    fenceChar = delimiter[0];
+                    fenceLength = delimiter.Length;
+                    continue;
+                }
+                // A closing fence: same char, at least as long, and nothing after it.
+                if (delimiter[0] == fenceChar && delimiter.Length >= fenceLength && fence.Groups[2].Value.Length == 0)
+                {
+                    fenceChar = '\0';
+                    fenceLength = 0;
+                }
+                continue;
+            }
+            if (fenceChar != '\0') continue; // inside a code block — '#' is a comment, not a header
+
+            var header = HeaderPattern().Match(line);
+            if (header.Success)
+            {
+                headers.Add(new Header(i, header.Groups[1].Value.Length, header.Groups[2].Value.Trim()));
+            }
+        }
+        return headers;
+    }
+
+    /// <summary>
+    /// Creates a <c>MarkdownSection</c> node per header, carrying the section's own body (the text from its
+    /// header line up to the next header, code fences and tables intact) and its 1-based line range, so the
+    /// section — not just the whole file — is retrievable and citable. A section beyond
+    /// <see cref="MaxSectionChars"/> is split at paragraph boundaries into numbered <c>::part::N</c>
+    /// sub-nodes. Each section gets a <c>CONTAINS</c> edge from the file; each continuation part gets one
+    /// from its section.
     /// </summary>
     private static void ExtractSections(
         string filePath,
@@ -69,27 +133,21 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
         List<GraphNode> nodes,
         List<GraphEdge> edges)
     {
-        var matches = HeaderPattern().Matches(content);
+        var lines = content.Split('\n');
+        var headers = FindHeaders(lines);
 
-        for (var i = 0; i < matches.Count; i++)
+        for (var i = 0; i < headers.Count; i++)
         {
-            var match = matches[i];
-            var level = match.Groups[1].Value.Length;
-            var title = match.Groups[2].Value.Trim();
-            var sectionId = $"{filePath}::section::{i}::{title}";
-
-            nodes.Add(new GraphNode
+            var header = headers[i];
+            // The section runs to the line before the next header (at any level), or to end of file.
+            var endLineIndex = (i + 1 < headers.Count ? headers[i + 1].LineIndex : lines.Length) - 1;
+            // Exclude the blank lines that merely separate this section from the next header, so the
+            // reported StartLine..EndLine covers exactly the stored Content (citations must be exact).
+            while (endLineIndex > header.LineIndex && string.IsNullOrWhiteSpace(lines[endLineIndex]))
             {
-                Id = sectionId,
-                Name = title,
-                Type = "MarkdownSection",
-                FilePath = filePath,
-                Properties = new Dictionary<string, string>
-                {
-                    ["level"] = level.ToString(),
-                    ["index"] = i.ToString()
-                }
-            });
+                endLineIndex--;
+            }
+            var sectionId = $"{filePath}::section::{i}::{header.Title}";
 
             edges.Add(new GraphEdge
             {
@@ -97,8 +155,123 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
                 TargetId = sectionId,
                 Relationship = "CONTAINS"
             });
+
+            var chunks = SplitAtParagraphs(lines, header.LineIndex, endLineIndex);
+            for (var part = 0; part < chunks.Count; part++)
+            {
+                var (startIndex, endIndex, text) = chunks[part];
+                // Part 0 keeps the section's own id, so existing handles and edges stay valid.
+                var nodeId = part == 0 ? sectionId : $"{sectionId}::part::{part}";
+                var name = part == 0 || chunks.Count == 1
+                    ? header.Title
+                    : $"{header.Title} (part {part + 1}/{chunks.Count})";
+
+                var properties = new Dictionary<string, string>
+                {
+                    ["level"] = header.Level.ToString(),
+                    ["index"] = i.ToString()
+                };
+                if (chunks.Count > 1)
+                {
+                    properties["part"] = part.ToString();
+                    properties["parts"] = chunks.Count.ToString();
+                }
+
+                nodes.Add(new GraphNode
+                {
+                    Id = nodeId,
+                    Name = name,
+                    Type = "MarkdownSection",
+                    FilePath = filePath,
+                    Content = text,
+                    StartLine = startIndex + 1, // 1-based (scheme v4 convention)
+                    EndLine = endIndex + 1,
+                    Properties = properties
+                });
+
+                if (part > 0)
+                {
+                    edges.Add(new GraphEdge
+                    {
+                        SourceId = sectionId,
+                        TargetId = nodeId,
+                        Relationship = "CONTAINS"
+                    });
+                }
+            }
         }
     }
+
+    /// <summary>
+    /// Returns the section's line span as one chunk when it fits in <see cref="MaxSectionChars"/>, otherwise
+    /// splits it at BLANK lines (paragraph boundaries) into chunks that each stay within the budget. A single
+    /// paragraph larger than the budget is never cut mid-paragraph — it is emitted whole, because splitting a
+    /// code fence or table in half would produce two unusable fragments.
+    /// </summary>
+    private static List<(int Start, int End, string Text)> SplitAtParagraphs(string[] lines, int startIndex, int endIndex)
+    {
+        var whole = Join(lines, startIndex, endIndex);
+        if (whole.Length <= MaxSectionChars)
+        {
+            return new List<(int, int, string)> { (startIndex, endIndex, whole) };
+        }
+
+        // Paragraph starts: the header line, plus every line following a blank line.
+        var boundaries = new List<int> { startIndex };
+        for (var i = startIndex + 1; i <= endIndex; i++)
+        {
+            if (string.IsNullOrWhiteSpace(lines[i - 1]) && !string.IsNullOrWhiteSpace(lines[i]))
+            {
+                boundaries.Add(i);
+            }
+        }
+
+        var chunks = new List<(int, int, string)>();
+        var chunkStart = startIndex;
+        for (var b = 1; b <= boundaries.Count; b++)
+        {
+            var nextStart = b < boundaries.Count ? boundaries[b] : endIndex + 1;
+            var candidateEnd = nextStart - 1;
+
+            var candidate = Join(lines, chunkStart, candidateEnd);
+            var isLast = b == boundaries.Count;
+            if (candidate.Length <= MaxSectionChars && !isLast)
+            {
+                continue; // keep growing this chunk up to the budget
+            }
+
+            if (candidate.Length <= MaxSectionChars)
+            {
+                chunks.Add((chunkStart, candidateEnd, candidate));
+                chunkStart = nextStart;
+                continue;
+            }
+
+            // Over budget: close the chunk at the PREVIOUS paragraph boundary when there is one, so the
+            // paragraph that pushed it over starts the next chunk instead of being torn apart.
+            var priorEnd = boundaries[b - 1] - 1;
+            if (priorEnd >= chunkStart)
+            {
+                chunks.Add((chunkStart, priorEnd, Join(lines, chunkStart, priorEnd)));
+                chunkStart = boundaries[b - 1];
+                b--; // re-evaluate this boundary against the new chunk start
+                continue;
+            }
+
+            // A single paragraph exceeds the budget — emit it whole rather than cutting a fence/table.
+            chunks.Add((chunkStart, candidateEnd, candidate));
+            chunkStart = nextStart;
+        }
+
+        if (chunkStart <= endIndex)
+        {
+            chunks.Add((chunkStart, endIndex, Join(lines, chunkStart, endIndex)));
+        }
+        return chunks.Count > 0 ? chunks : new List<(int, int, string)> { (startIndex, endIndex, whole) };
+    }
+
+    private static string Join(string[] lines, int start, int end) =>
+        end < start ? string.Empty : string.Join("\n", lines[start..(end + 1)]).TrimEnd();
 
     /// <summary>
     /// Detects relative file links in the Markdown content and creates <c>REFERENCES</c> edges

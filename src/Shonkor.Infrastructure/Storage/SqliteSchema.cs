@@ -112,42 +112,59 @@ internal static class SqliteSchema
             cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_diagnostics_source ON Diagnostics(Source);", cancellationToken).ConfigureAwait(false);
 
+        // Migration (TICKET-211): NodesFts gained a Summary column. An FTS5 virtual table cannot be
+        // ALTERed, so a pre-existing index built without Summary is dropped and rebuilt below. The AI
+        // summary is often the only place a node's INTENT vocabulary appears, so leaving it out made
+        // keyword search blind to exactly the words a human would type.
+        var ftsSql = await ScalarStringAsync(connection,
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='NodesFts';", cancellationToken).ConfigureAwait(false);
+        var ftsNeedsMigration = ftsSql is not null && !ftsSql.Contains("Summary", StringComparison.OrdinalIgnoreCase);
+        if (ftsNeedsMigration)
+        {
+            await ExecuteAsync(connection, "DROP TABLE NodesFts;", cancellationToken).ConfigureAwait(false);
+        }
+
         await ExecuteAsync(connection,
             """
             CREATE VIRTUAL TABLE IF NOT EXISTS NodesFts USING fts5(
-                Id, Name, Content,
+                Id, Name, Content, Summary,
                 content=Nodes,
                 content_rowid=rowid
             );
             """,
             cancellationToken).ConfigureAwait(false);
 
-        // Triggers keep the FTS5 index synchronized with the Nodes table during normal operation.
+        // Triggers keep the FTS5 index synchronized with the Nodes table during normal operation. They are
+        // dropped and recreated unconditionally so their column list can never drift from the table above.
+        await ExecuteAsync(connection, "DROP TRIGGER IF EXISTS nodes_ai;", cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, "DROP TRIGGER IF EXISTS nodes_ad;", cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, "DROP TRIGGER IF EXISTS nodes_au;", cancellationToken).ConfigureAwait(false);
+
         await ExecuteAsync(connection,
             """
-            CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON Nodes BEGIN
-                INSERT INTO NodesFts(rowid, Id, Name, Content)
-                VALUES (new.rowid, new.Id, new.Name, new.Content);
+            CREATE TRIGGER nodes_ai AFTER INSERT ON Nodes BEGIN
+                INSERT INTO NodesFts(rowid, Id, Name, Content, Summary)
+                VALUES (new.rowid, new.Id, new.Name, new.Content, new.Summary);
             END;
             """,
             cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection,
             """
-            CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON Nodes BEGIN
-                INSERT INTO NodesFts(NodesFts, rowid, Id, Name, Content)
-                VALUES ('delete', old.rowid, old.Id, old.Name, old.Content);
+            CREATE TRIGGER nodes_ad AFTER DELETE ON Nodes BEGIN
+                INSERT INTO NodesFts(NodesFts, rowid, Id, Name, Content, Summary)
+                VALUES ('delete', old.rowid, old.Id, old.Name, old.Content, old.Summary);
             END;
             """,
             cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection,
             """
-            CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON Nodes BEGIN
-                INSERT INTO NodesFts(NodesFts, rowid, Id, Name, Content)
-                VALUES ('delete', old.rowid, old.Id, old.Name, old.Content);
-                INSERT INTO NodesFts(rowid, Id, Name, Content)
-                VALUES (new.rowid, new.Id, new.Name, new.Content);
+            CREATE TRIGGER nodes_au AFTER UPDATE ON Nodes BEGIN
+                INSERT INTO NodesFts(NodesFts, rowid, Id, Name, Content, Summary)
+                VALUES ('delete', old.rowid, old.Id, old.Name, old.Content, old.Summary);
+                INSERT INTO NodesFts(rowid, Id, Name, Content, Summary)
+                VALUES (new.rowid, new.Id, new.Name, new.Content, new.Summary);
             END;
             """,
             cancellationToken).ConfigureAwait(false);
@@ -156,10 +173,10 @@ internal static class SqliteSchema
         // O(N) and can take seconds on large databases, so running it unconditionally on every startup
         // is a performance regression. The triggers keep FTS in sync during normal operation; a rebuild
         // is only needed when FTS missed updates (direct DB edits, migration, or first open after the
-        // FTS table was added to a pre-existing database).
+        // FTS table was added to a pre-existing database) — including the Summary migration above.
         var nodeCount = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM Nodes;", cancellationToken).ConfigureAwait(false);
         var ftsCount = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM NodesFts;", cancellationToken).ConfigureAwait(false);
-        if (nodeCount != ftsCount)
+        if (ftsNeedsMigration || nodeCount != ftsCount)
         {
             await ExecuteAsync(connection, "INSERT INTO NodesFts(NodesFts) VALUES('rebuild');", cancellationToken).ConfigureAwait(false);
         }
@@ -194,5 +211,14 @@ internal static class SqliteSchema
         command.CommandText = sql;
         var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return result is null ? 0 : Convert.ToInt64(result);
+    }
+
+    /// <summary>Reads a single text value, or <c>null</c> when the query yields no row (or SQL NULL).</summary>
+    private static async Task<string?> ScalarStringAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result is null or DBNull ? null : Convert.ToString(result);
     }
 }

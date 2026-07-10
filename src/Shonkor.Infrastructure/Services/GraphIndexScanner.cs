@@ -25,6 +25,19 @@ public sealed class GraphIndexScanner
     // Upper bound on the content stored on a File node (full content is still hashed).
     private const int MaxFileNodeContentLength = 100_000;
 
+    /// <summary>
+    /// Appended when a File node's content is cut at <see cref="MaxFileNodeContentLength"/>. Without it a
+    /// consumer cannot tell a truncated file from a complete one, and silently reasons over a partial body.
+    /// </summary>
+    private const string FileContentTruncationMarker =
+        "\n\n… [truncated: the file exceeds 100,000 characters; only the first 100,000 are stored on the File node. Query its sections/symbols for the rest.]";
+
+    /// <summary>Stores at most <see cref="MaxFileNodeContentLength"/> characters, marking the cut explicitly.</summary>
+    private static string TruncateFileContent(string content) =>
+        content.Length > MaxFileNodeContentLength
+            ? content[..MaxFileNodeContentLength] + FileContentTruncationMarker
+            : content;
+
     // Files above this size are never parsed/indexed; the drift detector applies the same bound so it
     // never reports a file the scanner would refuse (which would loop forever as "New"/"Changed").
     private const long MaxParseableFileBytes = 5 * 1024 * 1024;
@@ -164,9 +177,7 @@ public sealed class GraphIndexScanner
                 // Create a File node to represent the scanned file itself.
                 // Cap stored content to keep the DB / FTS index from bloating on very large files;
                 // the full hash is still computed over the complete content above.
-                var storedContent = content.Length > MaxFileNodeContentLength
-                    ? content[..MaxFileNodeContentLength]
-                    : content;
+                var storedContent = TruncateFileContent(content);
 
                 var fileNode = new GraphNode
                 {
@@ -619,7 +630,7 @@ public sealed class GraphIndexScanner
             foreach (var edge in parsedEdges) edges.Add(StampProvenance(edge, parser.DefaultProvenance));
         }
 
-        var storedContent = content.Length > MaxFileNodeContentLength ? content[..MaxFileNodeContentLength] : content;
+        var storedContent = TruncateFileContent(content);
         nodes.Add(new GraphNode
         {
             Id = fullPath,

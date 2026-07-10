@@ -1586,5 +1586,57 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>How many connected node names are folded into a concept's embedding document.</summary>
+    private const int ConceptNeighbourLimit = 25;
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ConceptEmbeddingCandidate>> GetConceptsPendingEmbeddingAsync(
+        int batchSize, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        var pending = new List<(string Id, string Name, string? Summary)>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                """
+                SELECT Id, Name, Summary FROM Nodes
+                WHERE Type = 'Concept' AND Embedding IS NULL
+                LIMIT @BatchSize;
+                """;
+            command.Parameters.AddWithValue("@BatchSize", batchSize);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                pending.Add((reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2)));
+            }
+        }
+
+        var results = new List<ConceptEmbeddingCandidate>(pending.Count);
+        foreach (var (id, name, summary) in pending)
+        {
+            var neighbours = new List<string>();
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT DISTINCT n.Name
+                FROM Edges e
+                JOIN Nodes n ON n.Id = CASE WHEN e.SourceId = @Id THEN e.TargetId ELSE e.SourceId END
+                WHERE (e.SourceId = @Id OR e.TargetId = @Id) AND n.Id <> @Id
+                LIMIT @Limit;
+                """;
+            command.Parameters.AddWithValue("@Id", id);
+            command.Parameters.AddWithValue("@Limit", ConceptNeighbourLimit);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                neighbours.Add(reader.GetString(0));
+            }
+            results.Add(new ConceptEmbeddingCandidate(id, name, summary, neighbours));
+        }
+
+        return results;
+    }
+
     #endregion
 }
