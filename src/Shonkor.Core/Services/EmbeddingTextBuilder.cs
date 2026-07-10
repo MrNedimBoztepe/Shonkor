@@ -53,6 +53,29 @@ public static class EmbeddingTextBuilder
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Builds the embedding document for a <c>Concept</c> node. A concept carries no source body, so
+    /// embedding its bare name yields an almost meaningless vector. What gives it retrievable meaning is the
+    /// company it keeps: the names of the nodes linked to it (plus its summary, when one exists).
+    /// </summary>
+    public static string BuildConcept(string name, string? summary, IReadOnlyList<string>? connectedNames)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        var sb = new StringBuilder();
+        sb.Append("Concept ").Append(name).Append('\n');
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            sb.Append(summary).Append('\n');
+        }
+        var related = connectedNames?.Where(n => !string.IsNullOrWhiteSpace(n)).ToArray() ?? [];
+        if (related.Length > 0)
+        {
+            sb.Append("Related: ").Append(string.Join(", ", related));
+        }
+        return sb.ToString().TrimEnd();
+    }
+
     private const string MiddleGap = "\n… [middle truncated] …\n";
 
     /// <summary>

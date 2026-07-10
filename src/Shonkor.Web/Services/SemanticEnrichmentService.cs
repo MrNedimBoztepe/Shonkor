@@ -186,22 +186,83 @@ public class SemanticEnrichmentService : BackgroundService
             var storage = await _projectManager.GetStorageProviderAsync(project.Name, cancellationToken);
 
             var pendingNodes = await storage.GetNodesPendingSemanticAnalysisAsync(BatchSize, cancellationToken);
-            if (pendingNodes.Count == 0) continue;
+            if (pendingNodes.Count > 0)
+            {
+                _logger.LogInformation(
+                    "Found {Count} nodes pending semantic analysis in project '{Project}'.",
+                    pendingNodes.Count, project.Name);
 
-            _logger.LogInformation(
-                "Found {Count} nodes pending semantic analysis in project '{Project}'.",
-                pendingNodes.Count, project.Name);
+                var backendDown = await ProcessBatchAsync(
+                    pendingNodes, analyzer, embeddingService, storage, MaxParallelism, _logger, EmbeddingSource, EmbeddingModelName, cancellationToken)
+                    .ConfigureAwait(false);
 
-            var backendDown = await ProcessBatchAsync(
-                pendingNodes, analyzer, embeddingService, storage, MaxParallelism, _logger, EmbeddingSource, EmbeddingModelName, cancellationToken)
-                .ConfigureAwait(false);
+                if (backendDown) return true;
+                if (cancellationToken.IsCancellationRequested) return false;
 
-            if (backendDown) return true;
+                _logger.LogInformation("Finished processing batch for project '{Project}'.", project.Name);
+            }
+
+            // Concepts are excluded from semantic ANALYSIS (they have no body to summarize), which is why
+            // they never received an embedding either and stayed invisible to semantic search. Embed them
+            // here from name + connected node names. Runs even when no analysis is pending.
+            if (await EmbedPendingConceptsAsync(storage, embeddingService, _logger, EmbeddingModelName, BatchSize, cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
             if (cancellationToken.IsCancellationRequested) return false;
-
-            _logger.LogInformation("Finished processing batch for project '{Project}'.", project.Name);
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// Embeds <c>Concept</c> nodes that still have no vector, using name + connected node names as the
+    /// document (no LLM call — a concept has no body to summarize). "No embedding yet" is the pending
+    /// predicate, so the pass is self-terminating and needs no flag. Returns <c>true</c> when the embedding
+    /// backend looks unreachable. Internal for testing.
+    /// </summary>
+    internal static async Task<bool> EmbedPendingConceptsAsync(
+        ISemanticGraphStore storage,
+        IEmbeddingService embeddingService,
+        ILogger logger,
+        string embeddingModel,
+        int batchSize,
+        CancellationToken cancellationToken)
+    {
+        var concepts = await storage.GetConceptsPendingEmbeddingAsync(batchSize, cancellationToken).ConfigureAwait(false);
+        if (concepts.Count == 0) return false;
+
+        logger.LogInformation("Embedding {Count} concept node(s) with no vector yet.", concepts.Count);
+
+        foreach (var concept in concepts)
+        {
+            if (cancellationToken.IsCancellationRequested) return false;
+            try
+            {
+                var document = Shonkor.Core.Services.EmbeddingTextBuilder.BuildConcept(
+                    concept.Name, concept.Summary, concept.ConnectedNames);
+                var embedding = await embeddingService
+                    .GenerateEmbeddingAsync(document, EmbeddingKind.Document, cancellationToken).ConfigureAwait(false);
+                if (embedding.Length > 0)
+                {
+                    await storage.UpdateNodeEmbeddingAsync(concept.Id, embedding, embeddingModel, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+            catch (Exception ex) when (IsBackendUnavailable(ex))
+            {
+                logger.LogWarning(ex, "Embedding backend unavailable while embedding concepts; backing off.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // A single bad concept must not stall the whole pass; it stays pending for the next cycle.
+                logger.LogWarning(ex, "Failed to embed concept '{Concept}'.", concept.Name);
+            }
+        }
         return false;
     }
 

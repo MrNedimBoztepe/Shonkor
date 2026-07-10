@@ -29,10 +29,13 @@ public static class CsharpNodeId
     /// simple name, so same-named types in one file no longer merge into one node;
     /// v5 = JS/GraphQL node ids no longer lowercased (they matched nothing on Windows paths and collided
     /// with the File node on all-lowercase paths) — JSComponent moves to <c>{file}::{name}</c>, GraphQL
-    /// operations keep their original-case names.
+    /// operations keep their original-case names;
+    /// v6 = MarkdownSection nodes carry their body and 1-based line range; a header inside a fenced code
+    /// block no longer opens a section (which shifts the section index, hence the id), and an oversized
+    /// section splits into <c>::part::N</c> sub-nodes. A full reparse is required to populate section bodies.
     /// Unstamped legacy graphs read as 0 (&lt; current → stale).
     /// </summary>
-    public const int SchemeVersion = 5;
+    public const int SchemeVersion = 6;
 
     /// <summary>
     /// Node id for a type declaration in <paramref name="filePath"/>. <paramref name="typeChain"/> is the
