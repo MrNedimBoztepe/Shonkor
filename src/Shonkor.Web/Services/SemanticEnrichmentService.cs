@@ -144,9 +144,11 @@ public class SemanticEnrichmentService : BackgroundService
             {
                 probe = await embeddingService.GenerateEmbeddingAsync("dimension probe", cancellationToken);
             }
-            catch (Exception ex) when (IsBackendUnavailable(ex))
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsBackendUnavailable(ex))
             {
                 // Backend not reachable yet — leave _embeddingsReconciled false and retry next cycle.
+                // A caller-triggered cancellation also surfaces as TaskCanceledException, so it is excluded
+                // here explicitly: a host shutdown must propagate, not be mistaken for "Ollama is down".
             }
 
             if (probe is { Length: > 0 })

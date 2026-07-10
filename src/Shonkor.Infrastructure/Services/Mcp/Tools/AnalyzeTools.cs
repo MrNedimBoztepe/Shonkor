@@ -453,7 +453,7 @@ public sealed class FindPathTool : IMcpTool
             {
                 from = new { type = "string", description = "Start symbol (name of a class/method/etc.)." },
                 to = new { type = "string", description = "Target symbol to reach." },
-                maxHops = new { type = "integer", description = "Max path length to search (default 5)." },
+                maxHops = new { type = "integer", description = "Max path length to search (default 5, max 10)." },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "from", "to" }
@@ -470,7 +470,7 @@ public sealed class FindPathTool : IMcpTool
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var maxHops = ReadInt(args?["maxHops"], 5);
+        var maxHops = Math.Clamp(ReadInt(args?["maxHops"], 5), 1, MaxPathHops);
 
         var fromDef = await ResolveDefinitionAsync(storage, fromArg).ConfigureAwait(false);
         if (fromDef == null) return SendToolResponse(id, $"No definition found for 'from' = '{fromArg}'.");

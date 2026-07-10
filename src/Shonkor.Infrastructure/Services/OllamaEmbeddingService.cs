@@ -73,7 +73,7 @@ public class OllamaEmbeddingService : IEmbeddingService
 
                 if (embeddingNode == null || embeddingNode.Count == 0)
                 {
-                    throw new Exception("Ollama returned an empty embedding.");
+                    throw new OllamaResponseException("Ollama returned an empty embedding.");
                 }
 
                 var embedding = new float[embeddingNode.Count];
@@ -84,18 +84,20 @@ public class OllamaEmbeddingService : IEmbeddingService
 
                 return embedding;
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogWarning(ex, "Failed to generate embedding via Ollama on attempt {Attempt}.", attempt);
-                if (attempt == maxRetries)
-                {
-                    _logger.LogError("Max retries reached for embedding generation.");
-                    throw;
-                }
-                await Task.Delay(TimeSpan.FromSeconds(2 * attempt), cancellationToken);
+                // The caller cancelled (shutdown, aborted request). Never retry, never swallow.
+                throw;
+            }
+            catch (Exception ex) when (OllamaRetry.IsTransient(ex) && attempt < maxRetries)
+            {
+                _logger.LogWarning(ex, "Transient failure generating embedding via Ollama on attempt {Attempt}; retrying.", attempt);
+                await Task.Delay(OllamaRetry.Backoff(attempt), cancellationToken).ConfigureAwait(false);
             }
         }
 
-        return Array.Empty<float>();
+        // Unreachable: the final attempt either returns or lets its exception propagate (the retry filter
+        // requires attempt < maxRetries), and a non-transient failure propagates immediately.
+        throw new OllamaResponseException("Embedding generation exhausted its retries without a result.");
     }
 }

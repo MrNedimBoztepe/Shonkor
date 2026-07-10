@@ -64,7 +64,7 @@ public sealed class GetSourceTool : IMcpTool
             properties = new
             {
                 symbol = new { type = "string", description = "The type/method/symbol name to read (e.g. 'GraphNode'). 'query' is accepted as an alias." },
-                maxChars = new { type = "integer", description = "Optional cap on the returned source length." },
+                maxChars = new { type = "integer", description = "Cap on the returned source length (default 32768). Raise it to read a larger body." },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "symbol" }
@@ -109,11 +109,9 @@ public sealed class GetSourceTool : IMcpTool
         var range = def.StartLine.HasValue
             ? (def.EndLine.HasValue ? $":{def.StartLine}-{def.EndLine}" : $":{def.StartLine}")
             : "";
-        var maxChars = ReadInt(args?["maxChars"], 0); // 0 = no limit
-        if (maxChars > 0 && body.Length > maxChars)
-        {
-            body = body[..maxChars].TrimEnd() + $"\n… (truncated to {maxChars} chars; raise maxChars)";
-        }
+        // A stored body is unbounded (TICKET-204 removed the 500-char cap), so cap by DEFAULT rather than
+        // only when the caller thinks to ask — one huge type must not blow the agent's context window.
+        body = CapOutput(body, ReadOutputCap(args?["maxChars"]), "raise maxChars for the full body");
         return SendToolResponse(id, $"{def.Name} ({def.Type}) — {loc}{range}\n\n{body}" + await ctx.StaleSuffixAsync(storage, def).ConfigureAwait(false));
     }
 
@@ -211,9 +209,9 @@ public sealed class GetSubgraphTool : IMcpTool
             properties = new
             {
                 seeds = new { type = "array", items = new { type = "string" }, description = "Node ids or short '@/…' handles to expand from." },
-                hops = new { type = "integer", description = "Number of hops to traverse (default 2)" },
+                hops = new { type = "integer", description = "Number of hops to traverse (default 2, max 5)" },
                 verbose = new { type = "boolean", description = "Return full node/edge JSON instead of the compact text form (default false)." },
-                maxChars = new { type = "integer", description = "Optional cap on the compact output size in characters (~4 chars/token). Truncates beyond it." },
+                maxChars = new { type = "integer", description = "Cap on the output size in characters (~4 chars/token, default 32768). Applies to the compact AND the verbose form." },
                 projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "seeds" }
@@ -229,9 +227,9 @@ public sealed class GetSubgraphTool : IMcpTool
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var hops = ReadInt(args?["hops"], 2);
+        var hops = Math.Clamp(ReadInt(args?["hops"], 2), 1, MaxHops);
         var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
-        var maxChars = ReadInt(args?["maxChars"], 0); // 0 = no limit
+        var maxChars = ReadOutputCap(args?["maxChars"]);
         var basePath = ctx.GetProjectBasePath(projectName);
 
         // Accept either raw node ids or short "@/…" handles as seeds.
@@ -257,13 +255,7 @@ public sealed class GetSubgraphTool : IMcpTool
             sb.Append("\n\nEDGES (").Append(edges.Count).Append("):\n");
             sb.Append(string.Join("\n", edgeLines));
 
-            var output = sb.ToString();
-            if (maxChars > 0 && output.Length > maxChars)
-            {
-                output = output[..maxChars].TrimEnd()
-                    + $"\n… (truncated to {maxChars} chars; raise maxChars or reduce hops)";
-            }
-            return SendToolResponse(id, output);
+            return SendToolResponse(id, CapOutput(sb.ToString(), maxChars, "raise maxChars or reduce hops"));
         }
 
         var formatted = new
@@ -287,7 +279,10 @@ public sealed class GetSubgraphTool : IMcpTool
             })
         };
 
-        return SendToolResponse(id, JsonSerializer.Serialize(formatted));
+        // verbose JSON previously bypassed the cap entirely — it is the LARGEST output this tool can emit,
+        // so it must be capped too. (Truncated JSON is invalid, hence the explicit note.)
+        return SendToolResponse(id, CapOutput(JsonSerializer.Serialize(formatted), maxChars,
+            "raise maxChars or reduce hops — this JSON is truncated and no longer parseable"));
     }
 }
 
@@ -306,8 +301,8 @@ public sealed class GenerateCapsuleTool : IMcpTool
             properties = new
             {
                 query = new { type = "string", description = "The seed query or topic to construct the capsule around" },
-                hops = new { type = "integer", description = "Traversal hops for context expansion (default 2)" },
-                maxChars = new { type = "integer", description = "Optional hard cap on the capsule size in characters (~4 chars per token). When exceeded, the capsule is truncated at a section boundary. Use to fit a token budget." },
+                hops = new { type = "integer", description = "Traversal hops for context expansion (default 2, max 5)" },
+                maxChars = new { type = "integer", description = "Hard cap on the capsule size in characters (~4 chars per token, default 32768). When exceeded, the capsule is truncated at a section boundary. Raise it for a larger token budget." },
                 projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "query" }
@@ -323,7 +318,7 @@ public sealed class GenerateCapsuleTool : IMcpTool
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var hops = ReadInt(args?["hops"], 2);
+        var hops = Math.Clamp(ReadInt(args?["hops"], 2), 1, MaxHops);
 
         var searchResults = await storage.SearchAsync(query, 5).ConfigureAwait(false);
         var seeds = searchResults.Select(r => r.Node.Id).ToList();
@@ -336,9 +331,10 @@ public sealed class GenerateCapsuleTool : IMcpTool
         var (nodes, edges) = await storage.GetSubgraphAsync(seeds, hops).ConfigureAwait(false);
         var markdown = ctx.Synthesizer.Synthesize(nodes, edges);
 
-        // Optional token budget: cap the capsule size, truncating at a section boundary.
-        var maxChars = ReadInt(args?["maxChars"], 0); // 0 = no limit
-        if (maxChars > 0 && markdown.Length > maxChars)
+        // Token budget: capped by DEFAULT (an explicit maxChars raises it), truncating at a section
+        // boundary so the capsule's Markdown structure survives.
+        var maxChars = ReadOutputCap(args?["maxChars"]);
+        if (markdown.Length > maxChars)
         {
             markdown = TruncateAtBoundary(markdown, maxChars);
         }
