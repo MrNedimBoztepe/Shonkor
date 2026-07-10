@@ -5,6 +5,15 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner for Build & Test'
+        type: choice
+        default: ubuntu-latest
+        options:
+          - ubuntu-latest
+          - self-hosted
 
 # Cancel superseded runs on the same ref to save minutes.
 concurrency:
@@ -14,7 +23,10 @@ concurrency:
 jobs:
   build-and-test:
     name: Build & Test
-    runs-on: ubuntu-latest
+    # Manual runs take the runner from the dispatch input. Automatic runs (push/PR) honour the
+    # repository variable CI_RUNNER (set it to `self-hosted` to move CI onto the local runner),
+    # and fall back to the GitHub-hosted image when neither is set.
+    runs-on: ${{ inputs.runner || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
