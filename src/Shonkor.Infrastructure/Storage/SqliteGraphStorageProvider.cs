@@ -207,16 +207,23 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
         await using var command = connection.CreateCommand();
+        // TICKET-207: an exact resolution may UPGRADE trust — on conflict keep the MIN (best) provenance
+        // (Extracted=0 < Inferred=1 < Ambiguous=2), so a re-scan can never freeze a stale heuristic stamp
+        // over a compiler-proven one. Properties (JSON) are persisted and refreshed to the latest write.
         command.CommandText =
             """
-            INSERT OR IGNORE INTO Edges (SourceId, TargetId, RelationType, Provenance)
-            VALUES (@SourceId, @TargetId, @RelationType, @Provenance);
+            INSERT INTO Edges (SourceId, TargetId, RelationType, Provenance, Properties)
+            VALUES (@SourceId, @TargetId, @RelationType, @Provenance, @Properties)
+            ON CONFLICT(SourceId, TargetId, RelationType) DO UPDATE SET
+                Provenance = MIN(excluded.Provenance, Edges.Provenance),
+                Properties = excluded.Properties;
             """;
 
         var pSource = command.Parameters.Add("@SourceId", SqliteType.Text);
         var pTarget = command.Parameters.Add("@TargetId", SqliteType.Text);
         var pRelation = command.Parameters.Add("@RelationType", SqliteType.Text);
         var pProvenance = command.Parameters.Add("@Provenance", SqliteType.Integer);
+        var pProperties = command.Parameters.Add("@Properties", SqliteType.Text);
 
         await command.PrepareAsync(cancellationToken).ConfigureAwait(false);
 
@@ -226,6 +233,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             pTarget.Value = edge.TargetId;
             pRelation.Value = edge.Relationship;
             pProvenance.Value = (int)edge.Provenance;
+            pProperties.Value = SqliteRowMapper.SerializeMetadata(edge.Properties);
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -548,7 +556,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         {
             edgeCommand.CommandText =
                 """
-                SELECT SourceId, TargetId, RelationType, Provenance
+                SELECT SourceId, TargetId, RelationType, Provenance, Properties
                 FROM Edges
                 WHERE SourceId = @id OR TargetId = @id;
                 """;
@@ -605,7 +613,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT SourceId, TargetId, RelationType, Provenance
+            SELECT SourceId, TargetId, RelationType, Provenance, Properties
             FROM Edges
             WHERE RelationType = @rel;
             """;
@@ -625,7 +633,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     {
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT SourceId, TargetId, RelationType, Provenance FROM Edges;";
+        command.CommandText = "SELECT SourceId, TargetId, RelationType, Provenance, Properties FROM Edges;";
 
         var edges = new List<GraphEdge>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -1339,7 +1347,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var paramList = string.Join(", ", paramNames);
         command.CommandText =
             $"""
-            SELECT SourceId, TargetId, RelationType, Provenance
+            SELECT SourceId, TargetId, RelationType, Provenance, Properties
             FROM Edges
             WHERE SourceId IN ({paramList})
                OR TargetId IN ({paramList});
@@ -1399,7 +1407,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var paramList = string.Join(", ", paramNames);
         command.CommandText =
             $"""
-            SELECT SourceId, TargetId, RelationType, Provenance
+            SELECT SourceId, TargetId, RelationType, Provenance, Properties
             FROM Edges
             WHERE SourceId IN ({paramList})
               AND TargetId IN ({paramList});
@@ -1472,10 +1480,13 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
 
             await using var edgeCmd = connection.CreateCommand();
             edgeCmd.Transaction = transaction;
+            // LLM-extracted concept links are heuristic — Inferred, never Extracted (TICKET-207).
             edgeCmd.CommandText =
                 """
-                INSERT OR IGNORE INTO Edges (SourceId, TargetId, RelationType)
-                VALUES (@SourceId, @TargetId, 'RELATES_TO');
+                INSERT INTO Edges (SourceId, TargetId, RelationType, Provenance)
+                VALUES (@SourceId, @TargetId, 'RELATES_TO', 1)
+                ON CONFLICT(SourceId, TargetId, RelationType) DO UPDATE SET
+                    Provenance = MIN(excluded.Provenance, Edges.Provenance);
                 """;
             var pSourceId = edgeCmd.Parameters.Add("@SourceId", SqliteType.Text);
             var pTargetId = edgeCmd.Parameters.Add("@TargetId", SqliteType.Text);

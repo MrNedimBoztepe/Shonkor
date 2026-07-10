@@ -33,6 +33,11 @@ public sealed class SitecoreXmCloudPlugin : IFileParser
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".tsx", ".jsx", ".ts", ".js", ".json" }.ToFrozenSet();
 
+    /// <inheritdoc />
+    /// <remarks>Regex/GUID-based JSS extraction — heuristic, not proven (TICKET-207). Structural
+    /// membership edges stay Extracted via the scanner's structural-edge exemption.</remarks>
+    public Provenance DefaultProvenance => Provenance.Inferred;
+
     public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
     {
         new NodeTypeDescriptor("XmCloudComponent", "CMS", true),

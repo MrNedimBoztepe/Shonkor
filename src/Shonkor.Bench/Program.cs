@@ -77,6 +77,33 @@ if (genGoldenPath is not null)
     return 0;
 }
 
+// --provenance: audit the trust-tier distribution per relationship (TICKET-207). Prints RelationType ×
+// Provenance counts and flags any heuristic family (RELATES_TO, IMPORTS, OVERRIDES_BLOCK, BINDS_TO,
+// name-fallback) that wrongly claims Extracted. Exit 2 if any such offender exists.
+if (args.Contains("--provenance"))
+{
+    var allEdges = await provider.GetAllEdgesAsync();
+    var byRel = allEdges
+        .GroupBy(e => e.Relationship, StringComparer.Ordinal)
+        .OrderBy(g => g.Key, StringComparer.Ordinal);
+
+    var heuristicOnly = new HashSet<string>(StringComparer.Ordinal) { "RELATES_TO", "IMPORTS", "OVERRIDES_BLOCK", "BINDS_TO" };
+    Console.WriteLine("Relationship               | Extracted | Inferred | Ambiguous");
+    Console.WriteLine("---------------------------|----------:|---------:|---------:");
+    var offenders = 0;
+    foreach (var g in byRel)
+    {
+        var ex = g.Count(e => e.Provenance == Shonkor.Core.Models.Provenance.Extracted);
+        var inf = g.Count(e => e.Provenance == Shonkor.Core.Models.Provenance.Inferred);
+        var amb = g.Count(e => e.Provenance == Shonkor.Core.Models.Provenance.Ambiguous);
+        var flag = heuristicOnly.Contains(g.Key) && ex > 0 ? "  ⚠ heuristic claims Extracted" : "";
+        if (heuristicOnly.Contains(g.Key) && ex > 0) offenders += ex;
+        Console.WriteLine($"{g.Key,-27}| {ex,9} | {inf,8} | {amb,9}{flag}");
+    }
+    Console.WriteLine($"\nHeuristic-family edges wrongly Extracted: {offenders}");
+    return offenders > 0 ? 2 : 0;
+}
+
 // --check-circularity <set>: validate a retrieval golden set for CIRCULARITY (TICKET-202). For each case,
 // resolve its target node, rebuild the exact embedding document (EmbeddingTextBuilder), and flag the case
 // when the query shares more than N content words with it — i.e. the vector hit would be trivial. Use this

@@ -155,18 +155,20 @@ public sealed class McpRequestHandler
         }
         catch (Exception ex)
         {
+            // The full detail (including any file paths / SQL text) goes ONLY to the server log; the
+            // client-facing message is generic so a relay response can't exfiltrate internal paths.
+            Console.Error.WriteLine($"[MCP Internal Error] {ex.Message}\n{ex.StackTrace}");
             if (idNode != null)
             {
                 try
                 {
-                    return SendError(idNode.GetValue<JsonElement>(), -32603, $"Internal Error: {ex.Message}");
+                    return SendError(idNode.GetValue<JsonElement>(), -32603, "Internal error while processing the request (see server log for details).");
                 }
                 catch
                 {
                     // Ignore error serialization issues to prevent recursive crashes.
                 }
             }
-            Console.Error.WriteLine($"[MCP Internal Error] {ex.Message}\n{ex.StackTrace}");
             return null;
         }
     }
@@ -197,8 +199,10 @@ public sealed class McpRequestHandler
         }
         catch (Exception ex)
         {
+            // Detail (paths, SQL, stack) to the server log only; the relay response stays generic so it
+            // cannot leak internal filesystem paths to an untrusted MCP client.
             Console.Error.WriteLine($"[MCP Tool Error] {ex.Message}\n{ex.StackTrace}");
-            return SendError(id, -32603, $"Internal tool execution error: {ex.Message}");
+            return SendError(id, -32603, $"Internal error while executing tool '{toolName}' (see server log for details).");
         }
     }
 

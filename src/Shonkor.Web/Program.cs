@@ -88,6 +88,18 @@ builder.Services.AddHostedService<DriftReconciliationService>();
 
 var app = builder.Build();
 
+// Security guardrail (H9): the loopback auth bypass is Development-only. If an operator sets
+// Security:AllowLocalBypass=true in a non-Development environment (a common footgun behind a reverse
+// proxy, where every request looks like loopback), the flag is IGNORED — warn loudly so the
+// misconfiguration is visible rather than silently (in)effective.
+if (!app.Environment.IsDevelopment()
+    && app.Configuration.GetValue<bool?>("Security:AllowLocalBypass") == true)
+{
+    app.Logger.LogWarning(
+        "Security:AllowLocalBypass=true is set in the {Environment} environment but is IGNORED — the loopback authentication bypass is enabled only in Development. Remove the flag to silence this warning. Every /api request outside Development requires a valid X-API-Key.",
+        app.Environment.EnvironmentName);
+}
+
 // --- Middleware pipeline ---
 
 // ATLAS is the primary UI: redirect the bare root to it. The legacy dashboard stays reachable at

@@ -43,10 +43,9 @@ public sealed class ReindexFileTool : IMcpTool
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var basePath = ctx.GetProjectBasePath(projectName);
-        var resolved = FromHandle(rawPath, basePath);
-        if (!System.IO.Path.IsPathRooted(resolved))
+        if (!TryResolveContainedPath(rawPath, basePath, out var resolved, out var pathError))
         {
-            resolved = System.IO.Path.Combine(basePath, resolved);
+            return SendError(id, -32602, pathError!);
         }
 
         // Semantic projects route through the cached reconcile so CALLS / exact REFERENCES_TYPE refresh
@@ -103,12 +102,10 @@ public sealed class CheckEditTool : IMcpTool
         }
         var projectName = args?["projectName"]?.ToString();
         var basePath = ctx.GetProjectBasePath(projectName);
-        var resolved = FromHandle(rawPath, basePath);
-        if (!System.IO.Path.IsPathRooted(resolved))
+        if (!TryResolveContainedPath(rawPath, basePath, out var resolved, out var pathError))
         {
-            resolved = System.IO.Path.Combine(basePath, resolved);
+            return SendError(id, -32602, pathError!);
         }
-        resolved = System.IO.Path.GetFullPath(resolved);
 
         if (!resolved.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
         {
@@ -168,10 +165,9 @@ public sealed class FreshnessTool : IMcpTool
         if (!string.IsNullOrWhiteSpace(rawPath))
         {
             var fileBase = ctx.GetProjectBasePath(projectName);
-            var resolved = FromHandle(rawPath, fileBase);
-            if (!System.IO.Path.IsPathRooted(resolved))
+            if (!TryResolveContainedPath(rawPath, fileBase, out var resolved, out var pathError))
             {
-                resolved = System.IO.Path.Combine(fileBase, resolved);
+                return SendError(id, -32602, pathError!);
             }
 
             var fileScanner = new GraphIndexScanner(storage, ctx.FileParsers);
@@ -496,10 +492,17 @@ public sealed class ReviewTool : IMcpTool
             return SendError(id, -32602, "Provide the changed files via 'paths' (array) or 'path'.");
         }
 
-        var fullPaths = rawPaths
-            .Select(p => { var r = FromHandle(p!, basePath); return System.IO.Path.IsPathRooted(r) ? System.IO.Path.GetFullPath(r) : System.IO.Path.GetFullPath(System.IO.Path.Combine(basePath, r)); })
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        // Reject the whole review if ANY supplied path escapes the project root — a review that silently
+        // dropped an out-of-root path would under-report impact, and honoring it would read arbitrary files.
+        var fullPaths = new List<string>();
+        foreach (var p in rawPaths)
+        {
+            if (!TryResolveContainedPath(p, basePath, out var full, out var pathError))
+            {
+                return SendError(id, -32602, pathError!);
+            }
+            if (!fullPaths.Contains(full, StringComparer.OrdinalIgnoreCase)) fullPaths.Add(full);
+        }
         var changedFiles = new HashSet<string>(fullPaths, StringComparer.OrdinalIgnoreCase);
         var depth = Math.Clamp(ReadInt(args?["depth"], 3), 1, 6);
 

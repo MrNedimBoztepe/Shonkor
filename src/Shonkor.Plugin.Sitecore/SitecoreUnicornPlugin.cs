@@ -23,6 +23,9 @@ public sealed class SitecoreUnicornPlugin : IFileParser
     // Regex to detect Sitecore GUIDs. Handles typical curly brace format, plain format, and pipe separation.
     private static readonly Regex GuidRegex = new Regex(@"[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}", RegexOptions.Compiled);
 
+    /// <remarks>GUID-regex relationship matching over YAML — heuristic, never Extracted (TICKET-207).</remarks>
+    public Provenance DefaultProvenance => Provenance.Inferred;
+
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".yml", ".yaml" }.ToFrozenSet();
 
