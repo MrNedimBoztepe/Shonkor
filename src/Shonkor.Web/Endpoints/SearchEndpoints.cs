@@ -82,23 +82,9 @@ public static class SearchEndpoints
                 var storage = await pm.GetStorageForRequestAsync(context, ct);
                 var k = limit ?? 15;
 
-                var ftsResults = await storage.SearchAsync(q, k * 2, 0, null, ct);
-
-                IReadOnlyList<SearchResult> semResults = Array.Empty<SearchResult>();
-                try
-                {
-                    var qv = await embeddingService.GenerateEmbeddingAsync(q, EmbeddingKind.Query, ct);
-                    if (qv is { Length: > 0 })
-                    {
-                        semResults = await storage.SearchSemanticAsync(qv, k * 2, ct);
-                    }
-                }
-                catch
-                {
-                    // Embedding backend down — degrade gracefully to FTS-only fusion (no throw).
-                }
-
-                var fused = HybridFusion.ReciprocalRankFusion(ftsResults, semResults, k);
+                // Shared hybrid retrieval (#122) — the same path the MCP search_hybrid tool and capsule
+                // seeding use, so the dashboard and agents rank identically.
+                var fused = await HybridRetrieval.SearchAsync(storage, embeddingService, q, k, ct);
                 return Results.Ok(fused);
             }
             catch (Exception ex)
@@ -336,7 +322,7 @@ public static class SearchEndpoints
         });
 
         // POST /api/capsule - synthesize a token-optimized capsule for nodes matching the query.
-        app.MapPost("/api/capsule", async (CapsuleRequest request, HttpContext context, ProjectManager pm, ContextCapsuleSynthesizer synthesizer, CancellationToken ct) =>
+        app.MapPost("/api/capsule", async (CapsuleRequest request, HttpContext context, ProjectManager pm, ContextCapsuleSynthesizer synthesizer, IEmbeddingService embeddingService, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(request.Query))
             {
@@ -346,7 +332,9 @@ public static class SearchEndpoints
             try
             {
                 var storage = await pm.GetStorageForRequestAsync(context, ct);
-                var searchResults = await storage.SearchAsync(request.Query, 5, 0, null, ct);
+                // Seed with hybrid retrieval (#122), matching the MCP generate_capsule tool — the old
+                // FTS-only seed missed the intent-phrased queries the dashboard's Ask-AI capsule is built for.
+                var searchResults = await HybridRetrieval.SearchAsync(storage, embeddingService, request.Query, 5, ct);
                 if (searchResults.Count == 0)
                 {
                     return Results.NotFound("No seed nodes matched the capsule query.");
