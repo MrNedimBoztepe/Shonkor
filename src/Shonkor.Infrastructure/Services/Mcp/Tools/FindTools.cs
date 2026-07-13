@@ -160,11 +160,15 @@ public sealed class SearchSemanticTool : IMcpTool
             {
                 query = new { type = "string", description = "Natural-language description of what you're looking for." },
                 limit = new { type = "integer", description = "Max number of results (default 10, max 100)." },
+                minScore = new { type = "number", description = "Minimum cosine similarity to return (0..1, default 0.5 for nomic-embed-text). Hits below it are noise at this model's scale and are hidden. Lower it to see weaker matches; 0 keeps everything." },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "query" }
         }
     };
+
+    /// <summary>Default cosine floor for nomic-embed-text: below ~0.5, hits are noise rather than matches.</summary>
+    private const double DefaultMinScore = 0.5;
 
     public async Task<string> ExecuteAsync(JsonElement id, JsonObject? args, McpToolContext ctx)
     {
@@ -180,6 +184,7 @@ public sealed class SearchSemanticTool : IMcpTool
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var limit = Math.Clamp(ReadInt(args?["limit"], 10), 1, MaxResultLimit);
+        var minScore = Math.Clamp(ReadDouble(args?["minScore"], DefaultMinScore), 0.0, 1.0);
         var basePath = ctx.GetProjectBasePath(projectName);
 
         var embedding = await ctx.EmbeddingService.GenerateEmbeddingAsync(query, Shonkor.Core.Interfaces.EmbeddingKind.Query).ConfigureAwait(false);
@@ -188,18 +193,27 @@ public sealed class SearchSemanticTool : IMcpTool
             return SendToolResponse(id, "Could not embed the query (is the embedding backend / Ollama running?).");
         }
 
-        var results = await storage.SearchSemanticAsync(embedding, limit).ConfigureAwait(false);
+        // Pull the unfiltered top-K too, so we can honestly report how many real-but-weak hits the floor hid
+        // (rather than silently returning fewer results than the caller's limit).
+        var results = await storage.SearchSemanticAsync(embedding, limit, minScore).ConfigureAwait(false);
         if (results.Count == 0)
         {
-            return SendToolResponse(id, $"No semantically similar nodes for '{query}'. (Have nodes been embedded by the enrichment worker yet?)");
+            var anyBelow = (await storage.SearchSemanticAsync(embedding, limit).ConfigureAwait(false)).Count;
+            var hint = anyBelow > 0
+                ? $" {anyBelow} weak hit(s) below the similarity floor ({minScore:0.##}) were hidden — lower minScore to see them."
+                : " (Have nodes been embedded by the enrichment worker yet?)";
+            return SendToolResponse(id, $"No semantically similar nodes for '{query}' at or above similarity {minScore:0.##}.{hint}");
         }
 
         var lines = results.Select(r =>
         {
             var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t— {r.Node.Summary}" : "";
-            return $"{r.Node.Type}\t{r.Node.Name}\t{ToHandle(r.Node.Id, basePath)}{summary}";
+            return $"{r.Node.Type}\t{r.Node.Name}\t{ToHandle(r.Node.Id, basePath)}\tscore={r.Score:0.###}{summary}";
         });
-        return SendToolResponse(id, string.Join("\n", lines));
+        var footer = results.Count < limit
+            ? $"\n\n({results.Count} hit(s) at or above similarity {minScore:0.##}; weaker matches hidden — lower minScore to widen.)"
+            : "";
+        return SendToolResponse(id, string.Join("\n", lines) + footer);
     }
 }
 
