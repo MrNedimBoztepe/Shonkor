@@ -9,6 +9,8 @@
     "**/node_modules/**",
     "**/*.db",
     "**/*.log",
-    "**/bench/golden/**"
+    "**/bench/golden/**",
+    "**/tickets/**",
+    "**/review/**"
   ]
 }
