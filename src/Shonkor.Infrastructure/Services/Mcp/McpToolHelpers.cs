@@ -267,28 +267,6 @@ public static class McpToolHelpers
     }
 
     /// <summary>
-    /// Truncates markdown to at most <paramref name="maxChars"/> characters, preferring to cut at the
-    /// last Markdown heading (## ) boundary before the limit so sections stay intact. Appends a notice.
-    /// </summary>
-    public static string TruncateAtBoundary(string markdown, int maxChars)
-    {
-        if (markdown.Length <= maxChars) return markdown;
-
-        var slice = markdown[..maxChars];
-        var boundary = slice.LastIndexOf("\n## ", StringComparison.Ordinal);
-        if (boundary <= 0)
-        {
-            boundary = slice.LastIndexOf('\n');
-        }
-        if (boundary > 0)
-        {
-            slice = slice[..boundary];
-        }
-
-        return slice.TrimEnd() + "\n\n> [!NOTE]\n> Capsule truncated to fit the requested character budget. Increase maxChars or narrow the query for more detail.";
-    }
-
-    /// <summary>
     /// Resolves a free-text symbol to its best-matching definition node: prefers an exact-name declaration
     /// (Class/Method/…), then any exact-name node, then the first declaration, then the first hit.
     /// </summary>
