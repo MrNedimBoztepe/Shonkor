@@ -23,6 +23,13 @@ public interface IGraphSearch
     Task<IReadOnlyList<SearchResult>> SearchSemanticAsync(float[] queryEmbedding, int maxResults = 10, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// As <see cref="SearchSemanticAsync(float[], int, CancellationToken)"/>, but drops hits scoring below
+    /// <paramref name="minSimilarity"/> (cosine, 0..1) so noise matches at low similarity are not returned as
+    /// if they were relevant. A floor of 0 keeps every hit.
+    /// </summary>
+    Task<IReadOnlyList<SearchResult>> SearchSemanticAsync(float[] queryEmbedding, int maxResults, double minSimilarity, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Generates a subgraph by expanding outward from the specified seed nodes,
     /// by the given number of hops along edges in either direction.
     /// </summary>

@@ -189,7 +189,64 @@ internal static class SqliteSchema
             await ExecuteAsync(connection, $"PRAGMA user_version = {Core.Services.CsharpNodeId.SchemeVersion};", cancellationToken).ConfigureAwait(false);
         }
 
+        // A tiny key/value table for one-off migration flags that don't fit user_version (which is owned by
+        // the node-id scheme). Used below to run the embedding-normalization migration exactly once.
+        await ExecuteAsync(connection,
+            "CREATE TABLE IF NOT EXISTS Meta (Key TEXT PRIMARY KEY, Value TEXT);", cancellationToken).ConfigureAwait(false);
+
+        await NormalizeExistingEmbeddingsOnceAsync(connection, cancellationToken).ConfigureAwait(false);
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// TICKET-215 one-time migration: L2-normalizes embeddings written before normalization-on-write, so the
+    /// dot-product scoring in SearchSemanticAsync is correct for pre-existing data (an un-normalized vector
+    /// scored by dot product is off by its own magnitude). Gated by a <c>Meta</c> flag so it runs once; on a
+    /// fresh graph there are no embeddings and it is a no-op. Idempotent — already-unit vectors are skipped.
+    /// </summary>
+    private static async Task NormalizeExistingEmbeddingsOnceAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        var alreadyDone = await ScalarStringAsync(connection,
+            "SELECT Value FROM Meta WHERE Key = 'embeddingsNormalized';", cancellationToken).ConfigureAwait(false);
+        if (alreadyDone == "1") return;
+
+        // Collect ids + blobs first (can't UPDATE while a reader is open on the same connection).
+        var toFix = new List<(string Id, byte[] Blob)>();
+        await using (var read = connection.CreateCommand())
+        {
+            read.CommandText = "SELECT Id, Embedding FROM Nodes WHERE Embedding IS NOT NULL;";
+            await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (reader.GetValue(1) is byte[] { Length: > 0 } blob)
+                {
+                    var floats = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(blob);
+                    if (!Core.Services.VectorMath.IsUnitLength(floats))
+                    {
+                        toFix.Add((reader.GetString(0), blob));
+                    }
+                }
+            }
+        }
+
+        foreach (var (id, blob) in toFix)
+        {
+            var vec = new float[blob.Length / 4];
+            Buffer.BlockCopy(blob, 0, vec, 0, blob.Length);
+            Core.Services.VectorMath.NormalizeL2(vec);
+            var outBytes = new byte[blob.Length];
+            Buffer.BlockCopy(vec, 0, outBytes, 0, blob.Length);
+
+            await using var upd = connection.CreateCommand();
+            upd.CommandText = "UPDATE Nodes SET Embedding = @e WHERE Id = @id;";
+            upd.Parameters.AddWithValue("@e", outBytes);
+            upd.Parameters.AddWithValue("@id", id);
+            await upd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await ExecuteAsync(connection,
+            "INSERT OR REPLACE INTO Meta (Key, Value) VALUES ('embeddingsNormalized', '1');", cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task ExecuteAsync(SqliteConnection connection, string sql, CancellationToken cancellationToken)

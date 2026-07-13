@@ -113,12 +113,19 @@ internal static class SqliteRowMapper
     public static object SerializeMetadata(Dictionary<string, string> properties) =>
         properties.Count > 0 ? JsonSerializer.Serialize(properties) : DBNull.Value;
 
-    /// <summary>Packs a float embedding into a little-endian byte blob, or returns null when absent.</summary>
+    /// <summary>
+    /// Packs a float embedding into a little-endian byte blob, or returns null when absent. The vector is
+    /// L2-normalized first (TICKET-215): every stored embedding is unit-length, so the semantic search hot
+    /// path can score with a dot product instead of recomputing each vector's magnitude for cosine. This is
+    /// the single storage write choke point, so normalization holds regardless of which caller wrote it.
+    /// </summary>
     public static byte[]? EmbeddingToBytes(float[]? embedding)
     {
         if (embedding == null) return null;
-        var bytes = new byte[embedding.Length * 4];
-        Buffer.BlockCopy(embedding, 0, bytes, 0, bytes.Length);
+        // Normalize a COPY so a caller reusing the array (e.g. to store elsewhere) isn't mutated underneath.
+        var normalized = Shonkor.Core.Services.VectorMath.NormalizedCopy(embedding);
+        var bytes = new byte[normalized.Length * 4];
+        Buffer.BlockCopy(normalized, 0, bytes, 0, bytes.Length);
         return bytes;
     }
 }
