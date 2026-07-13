@@ -47,4 +47,14 @@ public interface ISemanticGraphStore
     /// here is simply "no embedding yet", so the pass is self-terminating and needs no pending flag.
     /// </summary>
     Task<IReadOnlyList<ConceptEmbeddingCandidate>> GetConceptsPendingEmbeddingAsync(int batchSize, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes <c>Concept</c> nodes that have no incoming <c>RELATES_TO</c> edge — concepts whose every
+    /// referencing code node was removed (a deleted/re-indexed file). Concepts carry no <c>FilePath</c>, so
+    /// the path-based reindex cleanup never touches them; without this they accumulate as orphans and, since
+    /// they are embedded, pollute semantic search. Must be called only when the project's current code is
+    /// fully enriched (nothing pending), so a concept merely mid-reindex isn't mistaken for stale. Returns
+    /// the number deleted.
+    /// </summary>
+    Task<int> PruneOrphanConceptsAsync(CancellationToken cancellationToken = default);
 }

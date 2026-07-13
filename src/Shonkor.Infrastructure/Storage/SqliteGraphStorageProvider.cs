@@ -1512,7 +1512,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
 
             foreach (var concept in result.ExtractedConcepts)
             {
-                var conceptId = $"concept_{concept.ToLowerInvariant()}";
+                var conceptId = ConceptId(concept);
 
                 pConceptId.Value = conceptId;
                 pConceptName.Value = concept;
@@ -1606,6 +1606,38 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
 
     /// <summary>How many connected node names are folded into a concept's embedding document.</summary>
     private const int ConceptNeighbourLimit = 25;
+
+    /// <summary>
+    /// Deterministic id for a <c>Concept</c> from its name. The equivalence rule (#135): lowercase and strip
+    /// everything but letters/digits, so near-duplicate LLM phrasings collapse to ONE id and dedup via
+    /// <c>INSERT OR IGNORE</c> — "Command-Line Interface", "Command Line Interface" and "CommandLineInterface"
+    /// all become <c>concept_commandlineinterface</c>. The first-seen Name is kept as the display label.
+    /// </summary>
+    public static string ConceptId(string conceptName)
+    {
+        var normalized = new string((conceptName ?? string.Empty).ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+        // Fall back to the raw lowercased name if normalization empties it (e.g. a symbol-only concept),
+        // so two genuinely different such concepts don't collide on the empty string.
+        return "concept_" + (normalized.Length > 0 ? normalized : (conceptName ?? string.Empty).ToLowerInvariant());
+    }
+
+    /// <inheritdoc />
+    public async Task<int> PruneOrphanConceptsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        // A concept is orphaned when no code node still RELATES_TO it. Deleting the node fires the FTS
+        // delete trigger; concepts have no other edge kind, so nothing dangling is left behind.
+        command.CommandText =
+            """
+            DELETE FROM Nodes
+            WHERE Type = 'Concept'
+              AND NOT EXISTS (
+                  SELECT 1 FROM Edges e WHERE e.TargetId = Nodes.Id AND e.RelationType = 'RELATES_TO'
+              );
+            """;
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<ConceptEmbeddingCandidate>> GetConceptsPendingEmbeddingAsync(
