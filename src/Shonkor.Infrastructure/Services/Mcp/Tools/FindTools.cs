@@ -22,7 +22,7 @@ public sealed class SearchGraphTool : IMcpTool
             properties = new
             {
                 query = new { type = "string", description = "The search text or terms" },
-                limit = new { type = "integer", description = "Max number of results to return (default 10)" },
+                limit = new { type = "integer", description = "Max number of results to return (default 10, max 100)" },
                 type = new { type = "string", description = "Filter results to a specific node type (e.g. 'Class', 'Method', 'Interface', 'File', 'Record', 'Property', 'MarkdownSection', 'Concept'). Omit for all types." },
                 verbose = new { type = "boolean", description = "Include each hit's graph connections and full metadata as JSON (default false). Leave false for token-efficient lookups." },
                 projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
@@ -40,7 +40,7 @@ public sealed class SearchGraphTool : IMcpTool
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var limit = ReadInt(args?["limit"], 10);
+        var limit = Math.Clamp(ReadInt(args?["limit"], 10), 1, MaxResultLimit);
         var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
         var typeFilter = args?["type"]?.ToString();
         var results = await storage.SearchAsync(query, limit, filterType: typeFilter).ConfigureAwait(false);
@@ -106,7 +106,7 @@ public sealed class LocateTool : IMcpTool
             properties = new
             {
                 query = new { type = "string", description = "The symbol name or search text" },
-                limit = new { type = "integer", description = "Max number of results to return (default 15)" },
+                limit = new { type = "integer", description = "Max number of results to return (default 15, max 100)" },
                 projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "query" }
@@ -122,7 +122,7 @@ public sealed class LocateTool : IMcpTool
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var limit = ReadInt(args?["limit"], 15);
+        var limit = Math.Clamp(ReadInt(args?["limit"], 15), 1, MaxResultLimit);
         var results = await storage.SearchAsync(query, limit).ConfigureAwait(false);
         if (results.Count == 0)
         {
@@ -159,7 +159,7 @@ public sealed class SearchSemanticTool : IMcpTool
             properties = new
             {
                 query = new { type = "string", description = "Natural-language description of what you're looking for." },
-                limit = new { type = "integer", description = "Max number of results (default 10)." },
+                limit = new { type = "integer", description = "Max number of results (default 10, max 100)." },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "query" }
@@ -179,7 +179,7 @@ public sealed class SearchSemanticTool : IMcpTool
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var limit = ReadInt(args?["limit"], 10);
+        var limit = Math.Clamp(ReadInt(args?["limit"], 10), 1, MaxResultLimit);
         var basePath = ctx.GetProjectBasePath(projectName);
 
         var embedding = await ctx.EmbeddingService.GenerateEmbeddingAsync(query, Shonkor.Core.Interfaces.EmbeddingKind.Query).ConfigureAwait(false);
@@ -224,7 +224,7 @@ public sealed class SearchHybridTool : IMcpTool
             properties = new
             {
                 query = new { type = "string", description = "The search text — identifiers and/or a natural-language intent." },
-                limit = new { type = "integer", description = "Max number of results (default 10)." },
+                limit = new { type = "integer", description = "Max number of results (default 10, max 100)." },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "query" }
@@ -241,30 +241,11 @@ public sealed class SearchHybridTool : IMcpTool
 
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var limit = ReadInt(args?["limit"], 10);
+        var limit = Math.Clamp(ReadInt(args?["limit"], 10), 1, MaxResultLimit);
         var basePath = ctx.GetProjectBasePath(projectName);
 
-        // Fetch a wider candidate set from each retriever (limit*2), then fuse and take the top `limit`.
-        var ftsResults = await storage.SearchAsync(query, limit * 2).ConfigureAwait(false);
-
-        IReadOnlyList<Shonkor.Core.Models.SearchResult> semResults = [];
-        if (ctx.EmbeddingService != null)
-        {
-            try
-            {
-                var embedding = await ctx.EmbeddingService.GenerateEmbeddingAsync(query, Shonkor.Core.Interfaces.EmbeddingKind.Query).ConfigureAwait(false);
-                if (embedding is { Length: > 0 })
-                {
-                    semResults = await storage.SearchSemanticAsync(embedding, limit * 2).ConfigureAwait(false);
-                }
-            }
-            catch
-            {
-                // Embedding backend hiccup — fall back to FTS-only fusion rather than failing the query.
-            }
-        }
-
-        var fused = HybridFusion.ReciprocalRankFusion(ftsResults, semResults, limit);
+        // Shared hybrid retrieval (FTS + optional vector, RRF-fused) — the same path capsule seeding uses.
+        var fused = await ctx.HybridSearchAsync(storage, query, limit).ConfigureAwait(false);
         if (fused.Count == 0)
         {
             return SendToolResponse(id, $"No hybrid matches for '{query}'.");

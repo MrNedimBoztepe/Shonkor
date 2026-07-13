@@ -28,6 +28,17 @@ public sealed class McpRequestHandler
     private const string DefaultProtocolVersion = "2025-06-18";
 
     /// <summary>
+    /// The protocol revisions this server actually speaks. Its surface (initialize / ping / tools/list /
+    /// tools/call) is identical across these revisions. Per the spec, a client asking for a revision that
+    /// is NOT in this set must be answered with one we do support (<see cref="DefaultProtocolVersion"/>)
+    /// rather than have its own string echoed back — echoing would claim conformance we can't guarantee.
+    /// </summary>
+    private static readonly HashSet<string> SupportedProtocolVersions = new(StringComparer.Ordinal)
+    {
+        "2025-06-18", "2025-03-26", "2024-11-05"
+    };
+
+    /// <summary>
     /// Server version reported in the <c>initialize</c> handshake, read from the running assembly's
     /// informational version (set repo-wide in Directory.Build.props) — the single source of truth.
     /// The <c>+commithash</c> suffix, if any, is trimmed.
@@ -98,15 +109,31 @@ public sealed class McpRequestHandler
         }
     }
 
+    /// <summary>
+    /// Processes one JSON-RPC message. Returns the response JSON, or <c>null</c> for a true notification
+    /// (a message with no "id" key) — the ONLY case with no response. A parse error, an invalid request or
+    /// a failing tool all produce a response, so a caller can treat <c>null</c> as "nothing to send".
+    /// </summary>
     public async Task<string?> ProcessJsonRpcMessageAsync(string json)
     {
         JsonNode? idNode = null;
         try
         {
-            var document = JsonNode.Parse(json);
+            JsonNode? document;
+            try
+            {
+                document = JsonNode.Parse(json);
+            }
+            catch (JsonException)
+            {
+                // Spec: malformed JSON → -32700 Parse error with a null id. Previously we returned nothing,
+                // leaving a client that did send an id waiting forever.
+                return SendError(NullJsonElement, -32700, "Parse error: the request is not valid JSON.");
+            }
+
             if (document is not JsonObject obj)
             {
-                return null;
+                return SendError(NullJsonElement, -32600, "Invalid Request: the payload is not a JSON-RPC object.");
             }
 
             var method = obj["method"]?.ToString();
@@ -129,15 +156,22 @@ public sealed class McpRequestHandler
             switch (method)
             {
                 case "initialize":
-                    // Echo the client's requested protocol revision (the spec's negotiation rule),
-                    // falling back to our default when the client omits it.
+                    // Negotiate: honour the client's requested revision only when we actually speak it,
+                    // otherwise answer with the revision we do support. Never echo an unknown version back.
                     var requestedProto = obj["params"]?["protocolVersion"]?.ToString();
+                    var agreedProto = !string.IsNullOrWhiteSpace(requestedProto) && SupportedProtocolVersions.Contains(requestedProto)
+                        ? requestedProto
+                        : DefaultProtocolVersion;
                     return SendResponse(id, new
                     {
-                        protocolVersion = string.IsNullOrWhiteSpace(requestedProto) ? DefaultProtocolVersion : requestedProto,
+                        protocolVersion = agreedProto,
                         capabilities = new { tools = new { } },
                         serverInfo = new { name = "Shonkor MCP Server", version = ServerVersion }
                     });
+
+                case "ping":
+                    // Spec: a server MUST respond to ping with an empty result.
+                    return SendResponse(id, new { });
 
                 case "tools/list":
                     // All schemas come from the registry, capability-filtered (e.g. search_semantic only
@@ -193,16 +227,22 @@ public sealed class McpRequestHandler
         }
         catch (KeyNotFoundException ex)
         {
-            // E.g. an explicitly requested projectName that isn't registered — an invalid argument,
-            // not an internal failure. The message tells the caller exactly what didn't resolve.
+            // E.g. an explicitly requested projectName that isn't registered — an invalid ARGUMENT, not a
+            // failed execution, so it stays a protocol error (-32602). Its message names only the project.
             return SendError(id, -32602, ex.Message);
         }
         catch (Exception ex)
         {
-            // Detail (paths, SQL, stack) to the server log only; the relay response stays generic so it
-            // cannot leak internal filesystem paths to an untrusted MCP client.
+            // Spec (2025-06-18): an error raised while EXECUTING a tool belongs in the result as
+            // isError:true, not in the JSON-RPC error channel — a protocol error is swallowed by the
+            // client, so the model never learns the call failed and cannot adapt.
+            //
+            // The text stays free of ex.Message (TICKET-209/M11: it can carry filesystem paths or SQL);
+            // the tool name and exception TYPE are safe to surface and are what the model can act on.
+            // Full detail (message + stack) goes only to the server log.
             Console.Error.WriteLine($"[MCP Tool Error] {ex.Message}\n{ex.StackTrace}");
-            return SendError(id, -32603, $"Internal error while executing tool '{toolName}' (see server log for details).");
+            return SendToolError(id,
+                $"Tool '{toolName}' failed to execute ({ex.GetType().Name}). This is a server-side failure, not a bad argument — see the server log for details. Try a different approach or a narrower query.");
         }
     }
 
@@ -211,4 +251,11 @@ public sealed class McpRequestHandler
 
     private static string SendError(JsonElement id, int code, string message) =>
         JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code, message } });
+
+    /// <summary>
+    /// A successful JSON-RPC response whose RESULT reports a failed tool execution (<c>isError: true</c>),
+    /// per the MCP spec. Unlike a JSON-RPC error this reaches the model, which can then adapt.
+    /// </summary>
+    private static string SendToolError(JsonElement id, string text) =>
+        SendResponse(id, new { content = new[] { new { type = "text", text } }, isError = true });
 }

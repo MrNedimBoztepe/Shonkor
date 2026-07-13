@@ -86,7 +86,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
                 if (string.IsNullOrWhiteSpace(responseText))
                 {
-                    throw new Exception("Ollama returned an empty response.");
+                    throw new OllamaResponseException("Ollama returned an empty response.");
                 }
 
                 // Parse the JSON returned by the model
@@ -111,7 +111,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
                 if (parsedResult == null || string.IsNullOrWhiteSpace(parsedResult.Summary))
                 {
-                    throw new Exception("Failed to deserialize Ollama JSON response or Summary was empty.");
+                    throw new OllamaResponseException("Failed to deserialize the Ollama JSON response, or the Summary was empty.");
                 }
                 
                 // Extract metrics
@@ -126,19 +126,20 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                     LatencyMs = durationNs / 1_000_000
                 };
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogWarning(ex, "Failed to analyze node {NodeId} via Ollama on attempt {Attempt}.", node.Id, attempt);
-                if (attempt == maxRetries)
-                {
-                    _logger.LogError("Max retries reached for node {NodeId}.", node.Id);
-                    throw;
-                }
-                await Task.Delay(TimeSpan.FromSeconds(2 * attempt), cancellationToken);
+                // The caller cancelled — never burn retries (and never a 2s Delay) on a shutdown.
+                throw;
+            }
+            catch (Exception ex) when (OllamaRetry.IsTransient(ex) && attempt < maxRetries)
+            {
+                _logger.LogWarning(ex, "Transient failure analyzing node {NodeId} via Ollama on attempt {Attempt}; retrying.", node.Id, attempt);
+                await Task.Delay(OllamaRetry.Backoff(attempt), cancellationToken).ConfigureAwait(false);
             }
         }
-        
-        throw new Exception("Failed to analyze node after retries.");
+
+        // Unreachable: the last attempt propagates its own exception (the retry filter needs attempt < maxRetries).
+        throw new OllamaResponseException($"Analysis of node '{node.Id}' exhausted its retries without a result.");
     }
 
     public Task<string> GenerateRAGResponseAsync(string query, IReadOnlyList<GraphNode> contextNodes, CancellationToken cancellationToken = default)
@@ -164,7 +165,11 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         var ragEndpoint = $"{_ollamaUrl}/api/generate";
         _logger.LogInformation("Generating RAG response via Ollama ({Model}) for query: {Query}", _ollamaModel, query);
 
-        const int maxRetries = 3;
+        // A RAG generation is BLOCKING and can take minutes. Retrying it three times could keep a caller
+        // waiting ~6 minutes for an answer that will not come. So: at most ONE retry, and only when the
+        // request never reached a responding backend (connection refused / DNS) — a cheap, likely-fixable
+        // failure. A timeout or a 5xx mid-generation is not retried; the caller gets the error promptly.
+        const int maxRetries = 2;
         for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
             try
@@ -183,19 +188,19 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                 var validNames = RagPromptBuilder.ValidCitationNames(plan.Nodes);
                 return CitationValidator.AnnotateInvalid(responseText, validNames, options.Language);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogWarning(ex, "Failed to generate RAG response via Ollama on attempt {Attempt}.", attempt);
-                if (attempt == maxRetries)
-                {
-                    _logger.LogError("Max retries reached for RAG response generation.");
-                    throw;
-                }
-                await Task.Delay(TimeSpan.FromSeconds(2 * attempt), cancellationToken);
+                throw; // the caller gave up — don't retry, don't swallow
+            }
+            catch (Exception ex) when (OllamaRetry.IsConnectError(ex) && attempt < maxRetries)
+            {
+                _logger.LogWarning(ex, "Ollama was not reachable for RAG generation on attempt {Attempt}; retrying once.", attempt);
+                await Task.Delay(OllamaRetry.Backoff(attempt), cancellationToken).ConfigureAwait(false);
             }
         }
 
-        return "No answer could be generated.";
+        // Unreachable: the last attempt propagates its own exception (the retry filter needs attempt < maxRetries).
+        throw new OllamaResponseException("RAG generation exhausted its retries without a result.");
     }
 
     /// <summary>

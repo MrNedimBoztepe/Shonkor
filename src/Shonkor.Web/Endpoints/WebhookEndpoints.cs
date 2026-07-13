@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Services;
@@ -202,7 +203,7 @@ public static class WebhookEndpoints
 
         // POST /api/webhooks/github/push
         // Triggered by GitHub when code is pushed.
-        app.MapPost("/api/webhooks/github/push", async (HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, SemanticCompilationCache compilationCache, ILoggerFactory loggerFactory, CancellationToken ct) =>
+        app.MapPost("/api/webhooks/github/push", async (HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, SemanticCompilationCache compilationCache, ILoggerFactory loggerFactory, IHostApplicationLifetime lifetime, CancellationToken ct) =>
         {
             try
             {
@@ -236,13 +237,18 @@ public static class WebhookEndpoints
                     return Results.Ok(new { Message = "A scan is already in progress for this project; push ignored." });
                 }
 
-                // Fire and forget the background scanning so the webhook responds quickly (GitHub timeouts)
+                // Fire and forget the background scanning so the webhook responds quickly (GitHub timeouts).
+                // The scan MUST NOT observe the request's CancellationToken: that token is aborted as soon
+                // as we return the 200 below, so the very first awaited call would cancel and the push
+                // would silently never be indexed. Tie the work to the application's lifetime instead, so
+                // it survives the response and still stops promptly on host shutdown.
                 var webhookLogger = loggerFactory.CreateLogger("Shonkor.Webhook");
+                var scanCt = lifetime.ApplicationStopping;
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        var storage = await pm.GetStorageProviderAsync(project.Name, ct);
+                        var storage = await pm.GetStorageProviderAsync(project.Name, scanCt);
 
                         // Load the workspace's ACTIVE plugins (pre-built assemblies; install is inert).
                         var activeParsers = new List<IFileParser>(parsers);
@@ -260,12 +266,12 @@ public static class WebhookEndpoints
                         if (changedFiles.Count > 0)
                         {
                             webhookLogger.LogInformation("Push names {Count} changed file(s); reconciling them for project: {Project}", changedFiles.Count, project.Name);
-                            result = await scanner.ReconcilePathsAsync(project.Path, changedFiles, CancellationToken.None);
+                            result = await scanner.ReconcilePathsAsync(project.Path, changedFiles, scanCt);
                         }
                         else
                         {
                             webhookLogger.LogInformation("Starting background incremental index for push event on project: {Project}", project.Name);
-                            result = await scanner.ScanDirectoryAsync(project.Path, projectConfig.ExcludePatterns, CancellationToken.None);
+                            result = await scanner.ScanDirectoryAsync(project.Path, projectConfig.ExcludePatterns, scanCt);
                         }
                         webhookLogger.LogInformation("Index complete: {Files} files scanned, {Nodes} nodes created/updated.", result.FilesScanned, result.NodesCreated);
                     }

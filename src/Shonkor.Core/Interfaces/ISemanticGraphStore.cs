@@ -39,4 +39,12 @@ public interface ISemanticGraphStore
     /// semantic/hybrid search without running LLM summarization. A <c>null</c>/empty vector clears the embedding.
     /// </summary>
     Task UpdateNodeEmbeddingAsync(string nodeId, float[]? embedding, string? embeddingModel = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves <c>Concept</c> nodes that still carry no embedding, each with the names of its connected
+    /// nodes. Concepts are deliberately excluded from semantic ANALYSIS (they have no body to summarize) —
+    /// which is why they also never got embedded and were invisible to semantic search. The pending predicate
+    /// here is simply "no embedding yet", so the pass is self-terminating and needs no pending flag.
+    /// </summary>
+    Task<IReadOnlyList<ConceptEmbeddingCandidate>> GetConceptsPendingEmbeddingAsync(int batchSize, CancellationToken cancellationToken = default);
 }

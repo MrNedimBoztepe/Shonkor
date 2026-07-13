@@ -83,8 +83,11 @@ public static class McpEndpoints
 
             if (string.IsNullOrWhiteSpace(responseJson))
             {
-                // This means the handler returned null (e.g. invalid JSON RPC)
-                return Results.BadRequest(new { error = "Invalid JSON-RPC request or no response generated" });
+                // The handler returns null ONLY for a true JSON-RPC notification (no "id" key). A
+                // notification is a valid, complete request that expects no response body — the spec's
+                // answer is 202 Accepted, not 400. (Malformed JSON now yields a -32700 response instead
+                // of null, so it no longer reaches this branch.)
+                return Results.Accepted();
             }
 
             return Results.Text(responseJson, "application/json");

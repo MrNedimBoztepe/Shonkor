@@ -17,6 +17,36 @@ public static class McpToolHelpers
     /// <summary>How many candidate hits the symbol-oriented tools pull before applying their selection heuristic.</summary>
     public const int SymbolSearchLimit = 8;
 
+    /// <summary>Upper bound for a caller-supplied <c>limit</c> — a search result set is never unbounded.</summary>
+    public const int MaxResultLimit = 100;
+
+    /// <summary>Upper bound for a caller-supplied <c>hops</c>: subgraph size grows super-linearly per hop.</summary>
+    public const int MaxHops = 5;
+
+    /// <summary>Upper bound for a caller-supplied <c>maxHops</c> on path finding (a chain, not a neighbourhood).</summary>
+    public const int MaxPathHops = 10;
+
+    /// <summary>
+    /// Default cap on a single tool's text output (~32 KB ≈ 8k tokens). Applied when the caller supplies no
+    /// <c>maxChars</c>, so a tool can never blow an agent's context window by default; an explicit
+    /// <c>maxChars</c> raises it deliberately.
+    /// </summary>
+    public const int DefaultOutputCapChars = 32 * 1024;
+
+    /// <summary>Reads an optional <c>maxChars</c>, defaulting (and falling back for ≤ 0) to <see cref="DefaultOutputCapChars"/>.</summary>
+    public static int ReadOutputCap(JsonNode? maxCharsArg)
+    {
+        var value = ReadInt(maxCharsArg, DefaultOutputCapChars);
+        return value > 0 ? value : DefaultOutputCapChars;
+    }
+
+    /// <summary>Truncates <paramref name="text"/> to <paramref name="maxChars"/>, appending a hint on how to get more.</summary>
+    public static string CapOutput(string text, int maxChars, string hint)
+    {
+        if (text.Length <= maxChars) return text;
+        return text[..maxChars].TrimEnd() + $"\n… (truncated to {maxChars} chars; {hint})";
+    }
+
     /// <summary>Node types that count as a "declaration" when resolving a symbol to its definition.</summary>
     public static readonly string[] DeclarationTypes =
         { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Property", "Constructor" };
@@ -234,28 +264,6 @@ public static class McpToolHelpers
 
         fullPath = full;
         return true;
-    }
-
-    /// <summary>
-    /// Truncates markdown to at most <paramref name="maxChars"/> characters, preferring to cut at the
-    /// last Markdown heading (## ) boundary before the limit so sections stay intact. Appends a notice.
-    /// </summary>
-    public static string TruncateAtBoundary(string markdown, int maxChars)
-    {
-        if (markdown.Length <= maxChars) return markdown;
-
-        var slice = markdown[..maxChars];
-        var boundary = slice.LastIndexOf("\n## ", StringComparison.Ordinal);
-        if (boundary <= 0)
-        {
-            boundary = slice.LastIndexOf('\n');
-        }
-        if (boundary > 0)
-        {
-            slice = slice[..boundary];
-        }
-
-        return slice.TrimEnd() + "\n\n> [!NOTE]\n> Capsule truncated to fit the requested character budget. Increase maxChars or narrow the query for more detail.";
     }
 
     /// <summary>
