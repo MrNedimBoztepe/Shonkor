@@ -2,7 +2,6 @@
 
 using Microsoft.Data.Sqlite;
 using Shonkor.Core.Models;
-using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Storage;
 
 namespace Shonkor.Tests;

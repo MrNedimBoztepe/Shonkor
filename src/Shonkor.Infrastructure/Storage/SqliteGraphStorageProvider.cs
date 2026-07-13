@@ -408,7 +408,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
 
         // The query is normalized once here; stored vectors were normalized on write, so a dot product IS
         // the cosine similarity for these unit vectors — but skips the magnitude work cosine repeats per row.
-        var query = Shonkor.Core.Services.VectorMath.NormalizedCopy(queryEmbedding);
+        var query = VectorMath.NormalizedCopy(queryEmbedding);
 
         // A SortedList keyed by score (ascending) is an exact min-heap of fixed capacity: once full, a new
         // row enters only if it beats the current minimum. Because the heap is EXACT, keeping exactly

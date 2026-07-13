@@ -123,7 +123,7 @@ internal static class SqliteRowMapper
     {
         if (embedding == null) return null;
         // Normalize a COPY so a caller reusing the array (e.g. to store elsewhere) isn't mutated underneath.
-        var normalized = Shonkor.Core.Services.VectorMath.NormalizedCopy(embedding);
+        var normalized = VectorMath.NormalizedCopy(embedding);
         var bytes = new byte[normalized.Length * 4];
         Buffer.BlockCopy(normalized, 0, bytes, 0, bytes.Length);
         return bytes;
