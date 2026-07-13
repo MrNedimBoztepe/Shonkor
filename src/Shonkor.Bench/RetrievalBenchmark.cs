@@ -73,7 +73,13 @@ internal static class RetrievalBenchmark
         foreach (var c in cases)
         {
             var hits = await retrieve(c);
-            var ranked = hits.Select(h => h.Node).ToList();
+            // Drop the eval's OWN ground-truth fixtures from the results before ranking. The golden JSON
+            // files (bench/golden/*.json) contain every query string verbatim, so their File node is a
+            // guaranteed false #1 hit for keyword search — a self-contamination that silently distorted the
+            // code-intent numbers (FTS P@1 0.030 vs 0.061, hybrid P@1 0.091 vs 0.485). Excluding them at
+            // index time (shonkor.json) is the primary fix; this guard makes the eval trustworthy even if a
+            // graph was built without that exclude.
+            var ranked = hits.Select(h => h.Node).Where(n => !IsGoldenFixture(n)).ToList();
             bool Match(GraphNode node) => c.Expected.Any(e =>
                 node.Id.Contains(e, StringComparison.OrdinalIgnoreCase) ||
                 node.Name.Equals(e, StringComparison.OrdinalIgnoreCase));
@@ -88,6 +94,20 @@ internal static class RetrievalBenchmark
         }
 
         return n == 0 ? new MetricSet(0, 0, 0, 0, 0) : new MetricSet(n, sumP1 / n, sumPk / n, sumRecall / n, sumRr / n);
+    }
+
+    /// <summary>
+    /// Whether a node is one of the benchmark's own ground-truth fixtures (a file under <c>bench/golden/</c>).
+    /// Those files list the query strings, so they must never count as a retrieval result — including them is
+    /// circular. Path-separator agnostic so it holds on Windows and Unix.
+    /// </summary>
+    internal static bool IsGoldenFixture(GraphNode node)
+    {
+        var path = node.FilePath;
+        if (string.IsNullOrEmpty(path)) return false;
+        var normalized = path.Replace('\\', '/');
+        return normalized.Contains("/bench/golden/", StringComparison.OrdinalIgnoreCase)
+            || normalized.StartsWith("bench/golden/", StringComparison.OrdinalIgnoreCase);
     }
 
     // One self-retrieval case per named symbol (Class/Interface/Record/Struct/Enum/Method).
