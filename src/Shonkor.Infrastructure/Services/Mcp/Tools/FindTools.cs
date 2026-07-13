@@ -244,27 +244,8 @@ public sealed class SearchHybridTool : IMcpTool
         var limit = Math.Clamp(ReadInt(args?["limit"], 10), 1, MaxResultLimit);
         var basePath = ctx.GetProjectBasePath(projectName);
 
-        // Fetch a wider candidate set from each retriever (limit*2), then fuse and take the top `limit`.
-        var ftsResults = await storage.SearchAsync(query, limit * 2).ConfigureAwait(false);
-
-        IReadOnlyList<Shonkor.Core.Models.SearchResult> semResults = [];
-        if (ctx.EmbeddingService != null)
-        {
-            try
-            {
-                var embedding = await ctx.EmbeddingService.GenerateEmbeddingAsync(query, Shonkor.Core.Interfaces.EmbeddingKind.Query).ConfigureAwait(false);
-                if (embedding is { Length: > 0 })
-                {
-                    semResults = await storage.SearchSemanticAsync(embedding, limit * 2).ConfigureAwait(false);
-                }
-            }
-            catch
-            {
-                // Embedding backend hiccup — fall back to FTS-only fusion rather than failing the query.
-            }
-        }
-
-        var fused = HybridFusion.ReciprocalRankFusion(ftsResults, semResults, limit);
+        // Shared hybrid retrieval (FTS + optional vector, RRF-fused) — the same path capsule seeding uses.
+        var fused = await ctx.HybridSearchAsync(storage, query, limit).ConfigureAwait(false);
         if (fused.Count == 0)
         {
             return SendToolResponse(id, $"No hybrid matches for '{query}'.");

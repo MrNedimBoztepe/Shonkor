@@ -302,7 +302,7 @@ public sealed class GenerateCapsuleTool : IMcpTool
             {
                 query = new { type = "string", description = "The seed query or topic to construct the capsule around" },
                 hops = new { type = "integer", description = "Traversal hops for context expansion (default 2, max 5)" },
-                maxChars = new { type = "integer", description = "Hard cap on the capsule size in characters (~4 chars per token, default 32768). When exceeded, the capsule is truncated at a section boundary. Raise it for a larger token budget." },
+                maxChars = new { type = "integer", description = "Code-body budget in characters (~4 chars/token, default 12000 ≈ 3k tokens). The seed nodes that matched your query are ALWAYS rendered in full; lower-relevance neighbours have their bodies omitted (with a notice) once this budget is spent — never silent tail truncation. Raise it for more full-body context." },
                 projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "query" }
@@ -320,8 +320,10 @@ public sealed class GenerateCapsuleTool : IMcpTool
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var hops = Math.Clamp(ReadInt(args?["hops"], 2), 1, MaxHops);
 
-        var searchResults = await storage.SearchAsync(query, 5).ConfigureAwait(false);
-        var seeds = searchResults.Select(r => r.Node.Id).ToList();
+        // Seed with the same hybrid retrieval agents get from search_hybrid (vector + FTS, FTS-only
+        // fallback) — the old FTS-only seeding missed intent-phrased queries the tool is built for.
+        var seedResults = await ctx.HybridSearchAsync(storage, query, 5).ConfigureAwait(false);
+        var seeds = seedResults.Select(r => r.Node.Id).ToList();
 
         if (seeds.Count == 0)
         {
@@ -329,15 +331,19 @@ public sealed class GenerateCapsuleTool : IMcpTool
         }
 
         var (nodes, edges) = await storage.GetSubgraphAsync(seeds, hops).ConfigureAwait(false);
-        var markdown = ctx.Synthesizer.Synthesize(nodes, edges);
 
-        // Token budget: capped by DEFAULT (an explicit maxChars raises it), truncating at a section
-        // boundary so the capsule's Markdown structure survives.
-        var maxChars = ReadOutputCap(args?["maxChars"]);
-        if (markdown.Length > maxChars)
+        // Budget-aware synthesis (TICKET-003), matching the web /api/capsule path: the seed nodes that
+        // matched the query are rendered FIRST and IN FULL, a hub 2-hop expansion is capped at 40 nodes,
+        // and lower-relevance bodies are omitted with a notice once the code budget is spent. This replaces
+        // the old blind "truncate at the last ## before maxChars", which could drop the very seeds that
+        // matched — the exact bug this tool had.
+        var maxChars = ReadInt(args?["maxChars"], 0);
+        var markdown = ctx.Synthesizer.Synthesize(nodes, edges, new Shonkor.Core.Services.CapsuleOptions
         {
-            markdown = TruncateAtBoundary(markdown, maxChars);
-        }
+            SeedIds = seeds,
+            MaxContentChars = maxChars > 0 ? maxChars : 12000,
+            MaxNodes = 40
+        });
 
         return SendToolResponse(id, markdown);
     }
