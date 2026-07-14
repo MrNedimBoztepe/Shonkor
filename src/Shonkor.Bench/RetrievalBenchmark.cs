@@ -106,6 +106,16 @@ internal static class RetrievalBenchmark
     /// doc-intent golden set is scored against <c>docs/</c> sections and must stay retrievable. Path-separator
     /// agnostic (holds on Windows and Unix). Kept in the graph for agents; only the EVAL ignores them.
     /// </summary>
+    /// <summary>
+    /// The dev-process meta DIRECTORIES the eval ignores — the <b>single source of truth</b> for that list
+    /// (#140). <see cref="IsEvalMetaNode"/> reads it, and so does the config-sync test, so the guard and
+    /// <c>shonkor.json</c>'s <c>ExcludePatterns</c> cannot drift into disagreeing about which directories are
+    /// meta. Each of these must ALSO be excluded from indexing in <c>shonkor.json</c>: otherwise the dir would
+    /// be in the graph and only this measurement-time guard would keep it out of the eval — defence in depth,
+    /// not defence by one layer.
+    /// </summary>
+    internal static readonly string[] MetaDirectories = ["bench/golden", "tickets", "review"];
+
     internal static bool IsEvalMetaNode(GraphNode node)
     {
         var path = node.FilePath;
@@ -116,8 +126,10 @@ internal static class RetrievalBenchmark
             p.Contains("/" + dir + "/", StringComparison.OrdinalIgnoreCase)
             || p.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase);
 
-        if (Under("bench/golden") || Under("tickets") || Under("review")) return true;
-        // bench measurement notes (prose) — but NOT bench source code (.cs).
+        if (MetaDirectories.Any(Under)) return true;
+        // bench measurement notes (prose) — but NOT bench source code (.cs). Deliberately GUARD-ONLY: these
+        // .md files stay indexed (agents may read them) and are excluded only from the eval, so there is no
+        // corresponding shonkor.json directory exclude. The #140 test whitelists this exception explicitly.
         return Under("bench") && p.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
     }
 

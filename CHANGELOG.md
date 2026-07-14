@@ -5,6 +5,19 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — The eval's two meta-exclusion layers can no longer drift apart (#140)
+- De-contamination (#132/#133) put the meta-doc exclusion in **two** places that must agree: `shonkor.json`
+  `ExcludePatterns` keeps `bench/golden`/`tickets`/`review` out of the graph at **index time**, and
+  `RetrievalBenchmark.IsEvalMetaNode` ignores them at **measurement time** (defence in depth). Add a new meta
+  dir to one and forget the other, and the eval quietly re-contaminates (missing from the config) or the
+  config over-excludes — silently, with no failing signal.
+- The guard's directory list is now a single named constant (`RetrievalBenchmark.MetaDirectories`), and
+  **`EvalExcludeSyncTests` bridges it to the config**: every directory the guard treats as meta must also be
+  excluded from indexing in `shonkor.json`. The test does not hardcode the list (that would be a third copy to
+  drift); it reads the constant. The intentional guard-only case (`bench/*.md` — indexed for agents, ignored
+  only by the eval) is explicitly whitelisted. **Mutation-verified:** dropping `review` from the config fails
+  the test with an actionable message.
+
 ### Fixed — get_subgraph's size cap no longer rests on an accidental row order (#170)
 - The verbose size cap (#117) drops a **tail prefix** of the node list to stay under `maxChars`, which is only
   correct if the list is ordered **nearest-first** — otherwise it silently evicts the *seeds* and keeps distant
