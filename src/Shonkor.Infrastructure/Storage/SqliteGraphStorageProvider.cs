@@ -536,9 +536,10 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
                 JOIN Subgraph s ON e.TargetId = s.Id
                 WHERE s.Depth < @hops
             )
-            SELECT DISTINCT n.*
+            SELECT n.*
             FROM Nodes n
-            JOIN (SELECT Id, MIN(Depth) AS Depth FROM Subgraph GROUP BY Id) s ON n.Id = s.Id;
+            JOIN (SELECT Id, MIN(Depth) AS Depth FROM Subgraph GROUP BY Id) s ON n.Id = s.Id
+            ORDER BY s.Depth, n.Id;
             """;
 
         command.Parameters.AddWithValue("@hops", maxHops);

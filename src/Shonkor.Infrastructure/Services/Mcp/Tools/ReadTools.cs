@@ -294,10 +294,13 @@ public sealed class GetSubgraphTool : IMcpTool
     /// Serializes the subgraph to fit <paramref name="maxChars"/> by <b>dropping whole nodes and edges</b>,
     /// never by cutting the string (#117). The result is always parseable and always reports what it left out.
     /// <para>
-    /// Nodes are dropped from the tail: <c>GetSubgraphAsync</c> returns them breadth-first from the seeds, so
-    /// the tail is the material furthest from what the caller asked about — the right thing to lose first.
-    /// Edges whose endpoints no longer survive are dropped with them, so the graph stays referentially intact
-    /// rather than carrying edges into nodes that are not there.
+    /// Nodes are dropped from the tail. That is correct because <see cref="IGraphSearch.GetSubgraphAsync"/>
+    /// has a <b>documented, tested ordering contract</b> (#170): it returns nodes nearest-first (seeds, then by
+    /// hop distance). So the tail is the material furthest from what the caller asked about — the right thing
+    /// to lose first. This used to rest on an *un-enforced* assumption about the query's row order; it now
+    /// rests on that contract (see the method's remarks and its ordering test). Edges whose endpoints no longer
+    /// survive are dropped with them, so the graph stays referentially intact rather than carrying edges into
+    /// nodes that are not there.
     /// </para>
     /// </summary>
     private static string BuildCappedSubgraphJson(
