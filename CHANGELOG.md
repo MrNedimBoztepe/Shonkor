@@ -5,6 +5,68 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — MCP security hardening (TICKET-209, #103)
+- **Path containment on every file-taking tool.** `McpToolHelpers.TryResolveContainedPath` resolves a
+  caller-supplied path against the project base with `Path.GetRelativePath` and rejects any `..` escape or
+  rooted path that leaves the workspace — so `get_source`/`outline`/`reindex_file`/`check_edit` can't be
+  aimed outside the indexed tree.
+- **Loopback bypass is opt-in and fail-loud.** The dev-only API-key bypass is now
+  `env.IsDevelopment() && (flag ?? true)` with a startup warning when active; `/api/mcp` is added to the
+  SaaS-endpoint exemption so the relay authenticates like the rest of `/api/*`.
+- **`record` hardening** and **generic relay error messages** — the HTTP relay no longer leaks
+  `ex.Message` to the caller.
+
+### Added — MCP protocol conformance & backend hygiene (TICKET-210, #108)
+- **JSON-RPC correctness**: `ping` → empty result; malformed JSON → `-32700` (id `null`); non-object
+  request → `-32600`; `protocolVersion` negotiated against `SupportedProtocolVersions`; notifications
+  return nothing. Tool-execution failures surface as `isError:true` results carrying the **tool name +
+  `ex.GetType().Name`** — never the raw `ex.Message`.
+- **Ollama retry hygiene**: `OllamaRetry` (transient/connect-error classification + jittered backoff) and a
+  typed `OllamaResponseException`, so a flaky/slow embedding or summary backend degrades instead of throwing
+  opaque errors.
+- **Output clamps**: `MaxResultLimit`/`MaxHops`/`MaxPathHops` and a `DefaultOutputCapChars` (32 KiB) cap on
+  tool output.
+
+### Added — Markdown as first-class indexed content (TICKET-211, #109)
+- **Section bodies with real line ranges.** `MarkdownHierarchyParser` now captures each section's body and
+  a 1-based line range, detects headers **fence-aware** (no false headers inside code blocks), and splits
+  sections over `MaxSectionChars` (4000) at paragraph boundaries into `::part::N` nodes.
+- **Summaries are searchable**: the node `Summary` is indexed in `NodesFts` (with matching triggers), so an
+  AI summary contributes to keyword recall.
+- **Concept embeddings**: concept nodes get an embedding document (`EmbeddingTextBuilder.BuildConcept`) so
+  they participate in vector/hybrid retrieval.
+
+### Changed — Retrieval: capsule budget, vector scaling, one shared hybrid path
+- **`generate_capsule` is budget-aware and hybrid-seeded** (TICKET-214, #121): the MCP tool seeds via
+  hybrid retrieval and renders under the same seed-first / hub-capped budget the web capsule uses.
+- **Vector scaling Stage 1** (TICKET-215, #127): embeddings are **L2-normalized on write**, scored by a
+  **zero-copy dot product** (`MemoryMarshal.Cast` + `TensorPrimitives`), with a **similarity floor**
+  (`score <= 0` excluded) and the over-scan factor removed; a one-time `Meta`-flagged migration normalizes
+  pre-existing vectors. `VectorMath` moved to `Shonkor.Infrastructure`. Stage 2 (index/ANN over >20k nodes)
+  is intentionally deferred — this graph is ~2–4k nodes.
+- **One shared hybrid-retrieval path** (#122, #146): `HybridRetrieval.SearchAsync` in `Shonkor.Core.Services`
+  is now the single implementation behind the `search_hybrid` tool, `generate_capsule` seeding, the web
+  `/api/search/hybrid` endpoint, and `/api/capsule` — which previously seeded FTS-only and so retrieved
+  worse than the tool for intent-phrased queries. Three near-duplicate copies collapsed into one.
+- **Node-id scheme is now v6** (`CsharpNodeId.SchemeVersion`), triggering a clean reindex on upgrade.
+
+### Fixed — Concept hygiene & honest benchmarking
+- **Orphaned concept nodes are pruned** (#135, #141): concept ids are normalized at creation
+  (`concept_` + lowercase-alphanumeric) and the enrichment worker deletes `Concept` nodes with no incoming
+  `RELATES_TO` after a completed cycle. 1499 all-orphaned concepts had roughly **halved** semantic P@1;
+  removing them restored it.
+- **The benchmark corpus is de-contaminated** (#132/#133, #137): the golden/tickets/review/bench-prose meta
+  files are excluded from the indexed corpus (`shonkor.json`) **and** ignored at measurement time
+  (`IsEvalMetaNode`). The earlier "#110 doc-vs-code regression" was benchmark **self-contamination** (golden
+  files containing the query strings verbatim), not a real ranking regression — documented in
+  `bench/code-intent-decontamination.md` and `bench/eval-corpus-policy.md`.
+
+### Changed — Benchmark harness unified
+- `Shonkor.Eval` and `Shonkor.Benchmarks` are consolidated into the single **`Shonkor.Bench`** harness
+  (token reduction + retrieval precision + RAG head-to-head + answer groundedness). Earlier roadmap entries
+  below that name the `Shonkor.Eval`/`shonkor-eval`/`Shonkor.Benchmarks` projects refer to this now-unified
+  harness; the commands in the README Benchmark section are the current ones.
+
 ### Changed — Honest, reproducible benchmark numbers in the docs
 - Replaced the inflated "up to 87 % / 90 % / 92 % token reduction vs. the entire codebase" claims (a
   whole-repo strawman nobody would actually send) across the **README**, **sales presentation**, and
