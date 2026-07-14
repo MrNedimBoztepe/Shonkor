@@ -32,7 +32,11 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         // Do NOT set _httpClient.BaseAddress here — mutating a shared HttpClient after construction
         // is not thread-safe and would affect any other service using the same instance.
         // Instead we build the full URL per request (see below).
-        _httpClient.Timeout = TimeSpan.FromMinutes(2); // Local LLM generation can take a bit
+        // Local LLM generation can take a bit — but "a bit" is not the same on every machine, and this was
+        // hard-coded at two minutes while also silently overwriting any timeout the caller had configured
+        // (#215). It is now SemanticAnalyzer:TimeoutSeconds, still defaulting to two minutes: a big model on
+        // slow hardware can be given longer, and someone who wants RAG to fail fast can ask for less.
+        OllamaClientFactory.ApplyTimeout(_httpClient, configuration, "SemanticAnalyzer", TimeSpan.FromMinutes(2));
     }
 
     public async Task<SemanticAnalysisResult> AnalyzeNodeAsync(GraphNode node, CancellationToken cancellationToken = default)
