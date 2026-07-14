@@ -296,9 +296,22 @@ var token = await TokenBenchmark.RunAsync(provider, synthesizer, Console.Out);
 Console.WriteLine($"  -> {token.ReductionPct:F1}% reduction over {token.Queries} queries ({token.NaiveTokens:N0} -> {token.CapsuleTokens:N0} tokens)\n");
 
 Console.WriteLine("[2/2] Retrieval precision");
-var (fts, semantic, hybrid) = await RetrievalBenchmark.RunAsync(provider, allNodes, k, Console.Out,
+var (fts, semantic, hybrid, contamination) = await RetrievalBenchmark.RunAsync(provider, allNodes, k, Console.Out,
     golden, setPath is null ? null : Path.GetFileName(setPath));
 Console.WriteLine();
+
+// #136: eval-corpus hygiene is a LOUD gate, not just a silent filter. If an index-excluded meta file
+// (bench/golden, tickets, review) surfaced in retrieval, the shonkor.json exclude has broken and the numbers
+// are re-contaminating — fail with a non-zero exit and name the offenders, like the other bench gates.
+if (contamination.Count > 0)
+{
+    Console.Error.WriteLine(
+        $"[FAIL] Eval re-contamination: {contamination.Count} index-excluded meta file(s) appeared in retrieval " +
+        "results. They must not be in the graph at all — re-check shonkor.json's ExcludePatterns and re-index. " +
+        "The measurement-time filter kept these numbers correct, but the exclude that should prevent them has regressed:");
+    foreach (var file in contamination) Console.Error.WriteLine($"  - {file}");
+    return 2;
+}
 
 var report = new StringBuilder();
 report.AppendLine("# Shonkor Bench Report");

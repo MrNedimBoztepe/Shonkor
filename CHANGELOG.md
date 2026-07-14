@@ -5,6 +5,23 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — Eval re-contamination is now a loud failure, not a silent filter (#136)
+- `IsEvalMetaNode` silently drops index-excluded meta files from the ranked results (#132). That keeps the
+  numbers correct **today**, but if the `shonkor.json` exclude regresses and those files get indexed again,
+  the filter quietly patches over it — the contamination returns invisibly, the exact failure this session
+  keeps closing.
+- The benchmark now **records** any index-excluded meta file (`bench/golden`/`tickets`/`review`) that surfaces
+  in *any* retriever's results and **exits 2**, naming the offenders — like the `--baseline` and
+  `--check-circularity` gates. On a correctly-indexed graph the set is empty (those dirs aren't in it), so the
+  gate is silent in normal operation and only fires on real re-contamination.
+- **Live-verified:** a `tickets/*.md` indexed because its exclude was forgotten surfaces in retrieval and the
+  bench exits 2 naming the file. Unit-tested end-to-end through `RetrievalBenchmark.RunAsync` plus the
+  classifier's boundary (index-excluded vs. the guard-only `bench/*.md`).
+- Noted while building it: the *acute* #110 case — a `bench/golden/*.json` fixture ranking as a circular hit —
+  is structurally **unreachable via real indexing**, because the indexer has no `.json` parser, so those files
+  never become graph nodes. The reachable re-contamination path is `tickets/`/`review/` **markdown**. The gate
+  is generic over `MetaDirectories`, so it covers both.
+
 ### Changed — The eval's two meta-exclusion layers can no longer drift apart (#140)
 - De-contamination (#132/#133) put the meta-doc exclusion in **two** places that must agree: `shonkor.json`
   `ExcludePatterns` keeps `bench/golden`/`tickets`/`review` out of the graph at **index time**, and
