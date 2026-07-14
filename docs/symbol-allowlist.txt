@@ -1,0 +1,31 @@
+# Backticked PascalCase names in the docs that are NOT Shonkor code symbols (#159).
+#
+# The guard (tests/Shonkor.Tests/DocsSymbolIntegrityTests.cs) fails on any backticked name that is
+# neither declared in src/ nor listed here. It exists because arc42 described `PluginLoader` -- a
+# DELETED class -- as compiling plugins at runtime, i.e. it advertised a removed RCE surface.
+#
+# Adding a name here asserts "this is legitimately not a Shonkor type".
+# NEVER add a name here to silence a genuinely stale doc. Fix the doc instead.
+
+# --- .NET / third-party types the docs reference by name ---
+AssemblyLoadContext      # System.Runtime.Loader - the collectible context plugins load into
+BackgroundService        # Microsoft.Extensions.Hosting - base class of the enrichment worker
+IConfiguration           # Microsoft.Extensions.Configuration
+IHttpClientFactory       # Microsoft.Extensions.Http
+AddJsonConsole           # Microsoft.Extensions.Logging extension method (structured JSON logs)
+SemanticModel            # Microsoft.CodeAnalysis (Roslyn) - exact C# symbol resolution
+CSharpCompilation        # Microsoft.CodeAnalysis.CSharp (Roslyn)
+ReplaceSyntaxTree        # Microsoft.CodeAnalysis method used by the incremental check_edit path
+
+# --- Documentation placeholders (illustrative names in examples, not real symbols) ---
+Foo                      # llm_integration.md worked example
+Bar                      # llm_integration.md worked example
+NewSpecializedParser     # setup_guide.md: "how to write your own parser" example
+
+# --- Environment / config values, not types ---
+Development              # ASP.NET environment name (the loopback-bypass gate)
+
+# --- Deliberate historical references: named BECAUSE they were removed ---
+PluginLoader             # 05_building_block_view.md states this runtime-compilation path HAS BEEN REMOVED.
+                         # It must stay documented as gone; a security reviewer needs to know the RCE
+                         # surface is not merely undocumented but absent.

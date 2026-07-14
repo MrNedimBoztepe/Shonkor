@@ -5,6 +5,59 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — The RAG head-to-head measured nothing at all (#157)
+- `--compare-rag` resolved a golden case's `Expected` entries with an **exact node-id lookup**, but the
+  hand-written sets contain **bare symbol names** (`"TokenHasher"`). The lookup therefore never matched, and
+  the coverage metric reported **0 % for both sides** — the whole comparison was vacuous, while the report
+  cheerfully printed "Shonkor covers the target +0,0 pp more often".
+- One shared `GoldenMatch` now defines "this node satisfies this case" (id substring **or** exact name), and
+  both `RetrievalBenchmark` and `RagBaselineBenchmark` use it. The rule was previously written out once,
+  correctly, in the retrieval scorer and re-implemented wrongly in the RAG baseline.
+- **The fixed metric says Shonkor loses.** At a matched token budget: chunked-RAG covers the target symbol
+  **87,9 %** of the time, Shonkor's capsule **84,8 %** — a **3,1 pp deficit**, at marginally more tokens.
+  Published in the README anyway, with the honest reading: both sides run the *same* embedding search, so
+  "is the target's text in the blob" is a low bar raw chunks clear by brute force; the capsule's value is the
+  **edges** (call graph, signatures, blast radius) that chunks cannot express at any budget. Seed survival
+  through the budget is **100 %**.
+
+### Fixed — Published numbers were not reproducible from the documented commands (#156)
+- The README's numbers (pinned in #152) were measured on a **concept-enriched** graph (3.529 nodes) that only
+  the *web enrichment worker* produces. `shonkor index . --embed` — the command the README tells you to run —
+  produces **2.071 nodes with no concepts**. The published figures were therefore **not reproducible by the
+  documented steps**, which is the same defect as being wrong.
+- All figures re-measured on the graph the documented commands actually build, and the README now states that
+  graph's size so a reader can confirm they are on the same footing. Hybrid Recall@10 **0,788** (was published
+  0,879), keyword **0,182** (0,212), token reduction **75,9 %** (96,2 %).
+- **New guard** (`ReadmeBenchmarkNumbersTests`): parses the numbers **out of `README.md`** and asserts they
+  equal `bench/metrics-*.json`. Metrics-to-metrics comparison would only catch regressions; the failure mode
+  this project keeps hitting is *documentation* drift, so the README itself is the input. It also cross-checks
+  that the quoted before/after token counts actually imply the percentage they claim.
+
+### Fixed — Docs named types that do not exist (#159)
+- **New guard** (`DocsSymbolIntegrityTests`): every backticked PascalCase name in `docs/**` and `README.md`
+  must be declared in `src/` or listed in `docs/symbol-allowlist.txt` with a reason. This is `verify_exists`,
+  Shonkor's own anti-hallucination tool, finally aimed at Shonkor's own prose.
+- It immediately caught a **fresh** error from #153: arc42 §5.3 listed `FindTools`/`ReadTools`/`AnalyzeTools`
+  as types. Those are **file names**; the types are one `IMcpTool` class per tool (`SearchGraphTool`,
+  `GetSourceTool`, …). Corrected.
+- Stated limitation: it catches **dead symbols**, not wrong semantics. It would *not* have caught the docs
+  claiming `Security:EnablePlugins` defaults to OFF when it defaults to ON (#153) — a symbol that exists,
+  described incorrectly. That still needs a human.
+
+### Changed — arc42 §1.4 and the sales presentation now carry measured numbers (#160)
+- Both published performance figures of unknown provenance. Measured on this repo (2026-07-14): indexing
+  **≈ 31 files/s** (was "> 19"), FTS seed latency **0,74 ms median / 15 ms p95** (was a flat "< 5 ms" — true
+  at the median, wrong at the tail by 3×), 2-hop traversal **2,4 ms / 10,8 ms p95**, token reduction
+  **75,9 %** (was "≈ 41 %").
+- The database footprint was published as **352 KB**, "which can easily be placed under version control". It
+  measures **20,1 MB** — **57× larger** — and `shonkor.db` is gitignored, so the advice contradicted the repo's
+  own configuration.
+- The sales presentation quoted retrieval figures (*Recall@10 0,37 → 0,97*) taken from the **circular**
+  `doc-intent` golden set — the one whose queries are the target's own doc-comment, which the project
+  explicitly disowned. Replaced with the non-circular, machine-checked set.
+- New `--search-latency` mode in `Shonkor.Bench` measures FTS and traversal latency (median/p95), so these
+  claims are regenerated rather than hand-maintained.
+
 ### Fixed — The docs described a security model we no longer have (#153)
 - **Three places claimed plugins are compiled from source at runtime** — an RCE surface that was **removed**
   when plugins became pre-built, installed assemblies. `docs/user/setup_guide.md`, `arc42/08_concepts.md` and

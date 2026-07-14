@@ -105,6 +105,6 @@ The MCP surface is a registry, not a god-class. `McpRequestHandler` keeps only t
 * `IMcpTool` — the contract (name, schema, `ExecuteAsync`).
 * `McpToolContext` — shared state handed to every tool (project manager, storage, capsule synthesizer, embedding service, hybrid search).
 * `McpToolHelpers` — shared guards, including **path containment** (`TryResolveContainedPath`: a caller-supplied path is resolved against the project base and rejected if it escapes the workspace) and the output caps (result limits, hop limits, a 32 KiB output cap).
-* `Tools/` — the tools themselves, grouped by purpose: `FindTools`, `ReadTools`, `AnalyzeTools`, `EditLoopTools`, `BlastRadiusTool`, `MemoryAndStatsTools`, `MetaTools`.
+* `Tools/` — the tools themselves: **one `IMcpTool` class per tool** (`SearchGraphTool`, `SearchHybridTool`, `GetSourceTool`, `ReferencesTool`, `GenerateCapsuleTool`, `CheckEditTool`, `BlastRadiusTool`, …), grouped into files by purpose (`FindTools.cs`, `ReadTools.cs`, `AnalyzeTools.cs`, `EditLoopTools.cs`, `MemoryAndStatsTools.cs`, `MetaTools.cs`). The file names are containers, not types.
 
 Capability gating: `search_semantic` is only *listed* when an embedding backend is actually wired, so the local stdio CLI never advertises an inert tool.

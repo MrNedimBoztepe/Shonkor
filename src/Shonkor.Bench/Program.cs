@@ -77,6 +77,61 @@ if (genGoldenPath is not null)
     return 0;
 }
 
+// --search-latency: measure FTS5/BM25 seed latency on the CURRENT graph (#160). The docs carried a "<5 ms"
+// figure of unknown provenance, published before FTS also indexed Summary (TICKET-211) and before the graph
+// roughly doubled. This makes the claim reproducible instead of hand-maintained: warm up, then time each
+// query and report median / p95 — the tail is what an agent actually feels, so a mean would flatter us.
+if (args.Contains("--search-latency"))
+{
+    var queries = golden is { Count: > 0 }
+        ? golden.Select(g => g.Query).ToList()
+        : allNodes.Where(n => n.Type is "Class" or "Interface" or "Method")
+                  .Select(n => n.Name).Distinct(StringComparer.Ordinal).Take(200).ToList();
+
+    if (queries.Count == 0) { Console.WriteLine("No queries to time."); return 1; }
+
+    foreach (var q in queries.Take(10)) await provider.SearchAsync(q, 10, 0, null); // warm the connection/page cache
+
+    var timings = new List<double>(queries.Count);
+    foreach (var q in queries)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await provider.SearchAsync(q, 10, 0, null);
+        sw.Stop();
+        timings.Add(sw.Elapsed.TotalMilliseconds);
+    }
+    timings.Sort();
+
+    double Pct(List<double> xs, double p) => xs[Math.Min(xs.Count - 1, (int)Math.Ceiling(p / 100.0 * xs.Count) - 1)];
+    Console.WriteLine($"Graph: {stats.TotalNodes:N0} nodes, {stats.TotalEdges:N0} edges — DB {new FileInfo(dbPath).Length / 1024.0 / 1024.0:F1} MB\n");
+    Console.WriteLine($"FTS5 (BM25) seed latency over {timings.Count} queries");
+    Console.WriteLine($"  median : {Pct(timings, 50):F2} ms");
+    Console.WriteLine($"  p95    : {Pct(timings, 95):F2} ms");
+    Console.WriteLine($"  max    : {timings[^1]:F2} ms");
+
+    // 2-hop subgraph traversal (the recursive CTE) — the other latency the docs published unmeasured.
+    var hopTimings = new List<double>();
+    foreach (var q in queries)
+    {
+        var seedHits = await provider.SearchAsync(q, 3, 0, null);
+        var seedIds = seedHits.Select(h => h.Node.Id).ToList();
+        if (seedIds.Count == 0) continue;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await provider.GetSubgraphAsync(seedIds, 2);
+        sw.Stop();
+        hopTimings.Add(sw.Elapsed.TotalMilliseconds);
+    }
+    if (hopTimings.Count > 0)
+    {
+        hopTimings.Sort();
+        Console.WriteLine($"\n2-hop subgraph traversal (recursive CTE) over {hopTimings.Count} seeds sets");
+        Console.WriteLine($"  median : {Pct(hopTimings, 50):F2} ms");
+        Console.WriteLine($"  p95    : {Pct(hopTimings, 95):F2} ms");
+        Console.WriteLine($"  max    : {hopTimings[^1]:F2} ms");
+    }
+    return 0;
+}
+
 // --provenance: audit the trust-tier distribution per relationship (TICKET-207). Prints RelationType ×
 // Provenance counts and flags any heuristic family (RELATES_TO, IMPORTS, OVERRIDES_BLOCK, BINDS_TO,
 // name-fallback) that wrongly claims Extracted. Exit 2 if any such offender exists.

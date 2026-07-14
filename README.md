@@ -28,16 +28,15 @@ The result: ask *"how are API tokens hashed?"* and you get `TokenHasher.cs`. Ask
 
 ## 📊 The numbers, in plain English
 
-Every figure below comes from one reproducible harness (`src/Shonkor.Bench`) run on Shonkor's own graph. Don't take our word for it — run it on yours:
+Every figure below comes from one reproducible harness (`src/Shonkor.Bench`). **Reproduce them exactly** — this is the graph the numbers are measured on, no hidden enrichment step:
 
 ```powershell
+shonkor index . --embed                                                  # → 231 files, 2.071 nodes, 5.152 edges
 dotnet run --project src/Shonkor.Bench -- shonkor.db                     # token reduction + exact-name retrieval
-dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/agent-queries.json   # plain-English queries
+dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/agent-queries.json --compare-rag
 ```
 
-It writes `bench/report.md` (for you) and `bench/metrics.json` (for CI).
-
-<sub>Measured **2026-07-14** on `shonkor.db` (3.529 nodes, 9.912 edges). Vector/hybrid rows use **Ollama `nomic-embed-text`** (768-dim) — swap the model and the numbers move. Checked in: [`bench/metrics-exactname.json`](bench/metrics-exactname.json) and [`bench/metrics-agent-queries.json`](bench/metrics-agent-queries.json) — the raw harness output these tables are read from.</sub>
+<sub>Measured **2026-07-14**, Ollama **`nomic-embed-text`** (768-dim) — swap the model and the numbers move. Raw harness output is checked in: [`metrics-exactname.json`](bench/metrics-exactname.json), [`metrics-agent-queries.json`](bench/metrics-agent-queries.json). A test asserts these tables still match those files, so they cannot silently rot.</sub>
 
 ### 1. Does it find the right thing?
 
@@ -49,33 +48,48 @@ Two metrics, both simple:
 
 | Search | Top hit correct | Found in top 10 |
 |---|--:|--:|
-| Keyword (FTS5) | 89,5 % | 98,1 % |
-| Vector only | 44,0 % | 97,6 % |
-| **Hybrid** (keyword + vector) | **93,5 %** | **98,7 %** |
+| Keyword (FTS5) | 89,0 % | 99,1 % |
+| Vector only | 90,5 % | 98,8 % |
+| **Hybrid** (keyword + vector) | **94,5 %** | **99,8 %** |
 
 **You describe what you mean** — *"where do we hash API tokens?"* *(33 hand-labeled queries)*
 
 | Search | Top hit correct | Found in top 10 |
 |---|--:|--:|
-| Keyword (FTS5) | 12,1 % | 21,2 % |
-| Vector only | 36,4 % | 81,8 % |
-| **Hybrid** (keyword + vector) | **45,5 %** | **87,9 %** |
+| Keyword (FTS5) | 9,1 % | 18,2 % |
+| Vector only | 48,5 % | 69,7 % |
+| **Hybrid** (keyword + vector) | **48,5 %** | **78,8 %** |
 
-**What this means, in one line:** keyword search is great when you know the name and **falls apart when you don't** — it finds the answer in the top ten only **1 time in 5**. Fuse it with vector similarity (Reciprocal Rank Fusion) and that becomes **9 times in 10**.
+**What this means, in one line:** keyword search is excellent when you know the name and **falls apart when you don't** — it finds the answer in the top ten less than **1 time in 5**. Fuse it with vector similarity (Reciprocal Rank Fusion) and that becomes **4 times in 5**.
 
-That's the whole product in one number: **21 % → 88 % recall** on the questions people actually ask. And hybrid doesn't trade that off — it's also **the best on exact names** (93,5 % vs. 89,5 % for keyword alone). You don't pick a mode. You just get the better one.
+**18 % → 79 % recall** on the questions people actually ask. And hybrid doesn't trade that off: it is *also* the best on exact names (**94,5 %** top-hit vs. 89,0 % for keyword alone). You never pick a mode — you get the better one.
 
 *(Both sets are machine-checked for circularity, so a query can never secretly contain its own answer — see `--check-circularity`.)*
 
 ### 2. How much context does it save?
 
-**1.999.242 → 76.058 tokens across 7 queries — 96,2 % fewer.**
+**481.539 → 115.978 tokens across 7 queries — 75,9 % fewer.**
 
 **What this means:** Shonkor finds the relevant part of your graph, then instead of dumping every file it touched, it sends a **budgeted capsule** — the direct hits in full, the surrounding context ranked by structural closeness, and hub nodes capped so one popular class can't blow up the prompt.
 
-Those 7 queries pull in **170–990 nodes** each. Dumped raw, that's ~2 M tokens you'd pay for. Budgeted, it's 76 K — and the answer is still in there.
+> **Measured honestly.** That 75,9 % is against dumping *the same retrieved subgraph* in full — **not** against your whole repo. A "we save 95 % vs. your entire codebase" claim compares against a prompt nobody would ever send, and we won't make it. Every number here is DB-dependent and will differ on your codebase — which is exactly why the harness ships with the tool instead of only the results.
 
-> **Measured honestly.** That 96,2 % is against dumping *the same retrieved subgraph* in full — **not** against your whole repo. A "we save 95 % vs. your entire codebase" claim compares against a prompt nobody would ever send, and we won't make it. Every number here is DB-dependent and will differ on your codebase — which is exactly why the harness ships with the tool instead of only the results.
+### 3. Does it beat plain vector RAG? *(Not on coverage — and we'll show you.)*
+
+Head-to-head against **chunked RAG with no graph**, at a **matched token budget** (both start from the same embedding search; the baseline then takes as many top text chunks as fit into Shonkor's token count):
+
+| At ~equal tokens | Tokens delivered | Covers the target symbol |
+|---|--:|--:|
+| chunked-RAG (no graph) | 8.683 | **87,9 %** |
+| Shonkor capsule | 8.940 | 84,8 % |
+
+**Shonkor loses this one by 3,1 pp.** We're publishing it anyway, because a benchmark you only show when it flatters you isn't a benchmark.
+
+Here's the honest reading. Both sides run the *same* embedding retrieval, so both find the target about equally often — that's expected, and "is the target's text somewhere in the blob" is a **low bar** that raw chunks clear easily by brute force. What the metric cannot see is what you get *around* the target: the capsule delivers the **call graph, exact signatures, and the edges** — and **100 % of the semantic seeds survive the budget**. Chunks deliver adjacent lines.
+
+So don't buy Shonkor to cover the target symbol slightly more often. Buy it for the question chunks *cannot answer at all*: **"what breaks if I change this?"** A chunk retriever has no edges, so it cannot tell you — at any token budget.
+
+*(This number was broken until #157: the coverage check resolved golden entries as exact node ids while the sets use bare symbol names, so it silently reported 0 % for both sides. Fixing it produced this result, not a better one.)*
 
 ---
 
