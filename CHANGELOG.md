@@ -5,6 +5,31 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — Ollama retry is Polly's job now (#116)
+- `OllamaEmbeddingService` and `OllamaSemanticAnalyzer` carried **hand-written retry loops** with their own
+  exponential backoff and jitter. That is exactly what `Microsoft.Extensions.Http.Resilience` (Polly) exists
+  to provide, is maintained, and does better. The loops and `OllamaRetry.Backoff` are gone.
+- **What stays ours is the judgement, not the mechanism.** `OllamaRetry` is now purely the *predicate* — what
+  counts as transient for **this** backend. No library can know that Ollama answers `200` with an empty
+  embedding while a model is still loading. Polly owns when to wait, how long, and how often.
+- **Two rules the old classifier enforced are now true by construction**, not by code: an
+  `OllamaResponseException` is raised *after* a successful `200`, so the retry pipeline has already returned
+  and cannot retry it; and a caller-triggered cancellation aborts the pipeline instead of having to be told
+  apart from an HttpClient timeout by inspecting the token.
+- **The ticket's proposed design does not work, and this says why.** It asked for the policy to live in the
+  typed-client registration. That would (a) have covered only `Shonkor.Web` — `Shonkor.CLI` (**the MCP stdio
+  server agents actually use**) and `Shonkor.Bench` construct `new HttpClient()` directly and would have been
+  left with **no retry at all**; and (b) is unsatisfiable anyway, because the two operations need *different*
+  policies on the *same* client: background work retries transient failures, while the blocking RAG path must
+  retry a connection failure but **never a timeout** — retrying a minutes-long generation would double a human's
+  wait. So the pipelines live in `OllamaResilience` and each call site selects the one it needs.
+- **The enrichment worker's circuit breaker is kept, deliberately.** It is a *polling-cadence* backoff, not an
+  HTTP breaker: Polly's breaker would fail each call instantly and the worker would then spin through the
+  pending queue **faster** against a dead backend. Complementary, not redundant.
+- The `Backoff` unit test is replaced by tests that drive the **real pipelines** against a fake handler —
+  including the one that matters most: *the blocking path never retries a timeout*. Verified live against a
+  running Ollama (retrieval numbers unchanged) and against a dead one (fails fast, does not hang).
+
 ### Changed — The MCP tool contract no longer lies by omission (#117, #118, #119, #120)
 Four ways the tool surface could leave an agent **confidently wrong**. Each is a different flavour of the
 same fault: the tool knew something the caller could not find out.

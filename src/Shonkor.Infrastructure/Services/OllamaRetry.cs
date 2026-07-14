@@ -21,9 +21,22 @@ public sealed class OllamaResponseException : Exception
 }
 
 /// <summary>
-/// Retry classification for the Ollama-backed services. The rule is: retry only what a retry can plausibly
-/// fix (transport failures, 5xx, 408/429, HttpClient timeouts) and never what it cannot (a deterministic 4xx,
-/// an unusable payload) — and never a cancellation the CALLER asked for.
+/// Retry <b>classification</b> for the Ollama-backed services: retry only what a retry can plausibly fix
+/// (transport failures, 5xx, 408/429, HttpClient timeouts) and never what it cannot (a deterministic 4xx, an
+/// unusable payload) — and never a cancellation the CALLER asked for.
+///
+/// <para>
+/// Since #116 this class is <b>only</b> the predicate. The <i>mechanism</i> — when to wait, how long, how
+/// many times — belongs to Polly (<see cref="OllamaResilience"/>), which is the canonical implementation of
+/// exactly that and was the only thing being hand-rolled. What is <i>not</i> canonical, and stays here, is
+/// the domain judgement: <b>what counts as transient for this particular backend.</b> A library cannot know
+/// that Ollama answers 200 with an empty embedding when a model is still loading.
+/// </para>
+///
+/// <para>
+/// Keeping the predicate separate also keeps it <b>testable without a network</b> (<c>OllamaRetryTests</c>),
+/// which was the original reason for hand-rolling and remains a good one.
+/// </para>
 /// </summary>
 public static class OllamaRetry
 {
@@ -40,8 +53,12 @@ public static class OllamaRetry
         _ => false                       // OllamaResponseException, JsonException, 4xx, … : deterministic
     };
 
-    /// <summary>A missing status means the response never arrived (connect/DNS failure) — retryable.</summary>
-    private static bool IsTransientStatus(HttpStatusCode? status) => status switch
+    /// <summary>
+    /// A missing status means the response never arrived (connect/DNS failure) — retryable. Public since #116:
+    /// Polly's <c>ShouldHandle</c> inspects the <see cref="HttpResponseMessage"/> <i>before</i> the service
+    /// turns a bad status into an exception, so the predicate needs the status-code path too.
+    /// </summary>
+    public static bool IsTransientStatus(HttpStatusCode? status) => status switch
     {
         null => true,
         HttpStatusCode.RequestTimeout => true,
@@ -64,7 +81,9 @@ public static class OllamaRetry
         return false;
     }
 
-    /// <summary>Exponential backoff with jitter, so concurrent workers don't retry in lockstep.</summary>
-    public static TimeSpan Backoff(int attempt) =>
-        TimeSpan.FromMilliseconds(Math.Pow(2, attempt - 1) * 1000 + Random.Shared.Next(0, 500));
+    // Backoff(int) lived here until #116. It computed exponential delay with jitter by hand — precisely the
+    // mechanism Polly exists to provide, and now does (OllamaResilience: DelayBackoffType.Exponential,
+    // UseJitter). Keeping a hand-rolled copy alive so an old unit test could assert on it would have been
+    // dead code preserved for the benefit of its own test; the behaviour is now asserted against the real
+    // pipeline instead, which is a stronger check than the one it replaces.
 }
