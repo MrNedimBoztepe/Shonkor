@@ -1,27 +1,27 @@
 {
-  "tokenReductionPct": 74.12752482634879,
+  "tokenReductionPct": 73.82716156976896,
   "tokenQueries": 7,
   "retrieval": {
     "graph": {
       "cases": 200,
-      "precisionAt1": 0.89,
-      "precisionAtK": 0.1875000000000006,
-      "recallAtK": 0.9908333333333332,
-      "mrr": 0.9285119047619047
+      "precisionAt1": 0.9,
+      "precisionAtK": 0.1900000000000006,
+      "recallAtK": 0.9916666666666666,
+      "mrr": 0.9375
     },
     "semantic": {
       "cases": 200,
-      "precisionAt1": 0.895,
-      "precisionAtK": 0.1170000000000002,
-      "recallAtK": 0.9883333333333333,
-      "mrr": 0.9332142857142857
+      "precisionAt1": 0.89,
+      "precisionAtK": 0.11750000000000022,
+      "recallAtK": 0.9929166666666666,
+      "mrr": 0.928922619047619
     },
     "hybrid": {
       "cases": 200,
-      "precisionAt1": 0.93,
-      "precisionAtK": 0.16650000000000056,
-      "recallAtK": 0.9983333333333333,
-      "mrr": 0.9595833333333332
+      "precisionAt1": 0.935,
+      "precisionAtK": 0.16750000000000054,
+      "recallAtK": 0.9975,
+      "mrr": 0.9641666666666667
     }
   },
   "ragBaseline": null

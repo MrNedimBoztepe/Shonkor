@@ -41,17 +41,17 @@ Today's RAG systems (Retrieval-Augmented Generation) mostly rely on probabilisti
 
 All figures below are **measured on a stated corpus with the stated command**, on Shonkor's own repository. Every earlier number in this section was of unknown provenance and turned out to be stale — some by a wide margin (see the note at the end) — so the rule now is: *a number here either names the corpus and the command that produces it, or it does not belong here.*
 
-**Corpus**: this repository, `shonkor index .` (semantic C# resolution **on**, the default) → **235 files**, **2 131 nodes**, **5 271 edges**.
+**Corpus**: this repository, `shonkor index .` (semantic C# resolution **on**, the default) → **241 files**, **2 225 nodes**, **5 546 edges**.
 
 * **Indexing throughput**: **≈ 31 files/second** (235 files, cold full index). Semantic C# resolution builds a Roslyn compilation per scan; with `SHONKOR_SEMANTIC_CSHARP=false` the scan is materially faster but the edges are name-based, not exact.
 * **Query latency** (`dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/agent-queries.json --search-latency`):
   * **FTS5/BM25 seed search**: median **0,74 ms**, **p95 15 ms**.
   * **2-hop subgraph traversal** (recursive CTE): median **2,4 ms**, **p95 10,8 ms**.
   > The tail is reported on purpose. A median-only "under 5 ms" claim hides the p95 an agent actually waits on.
-* **Token reduction**: **74,1 %** (450 328 → 116 511 tokens over 7 queries) — the budget-aware capsule versus **dumping the same retrieved subgraph in full** (the fair baseline; not the whole repo, which nobody would send).
-* **Retrieval** (`nomic-embed-text`, 768-dim): exact-name **P@1 0,890 / Recall@10 0,991** (FTS5) and **0,930 / 0,998** (hybrid); plain-English intent **0,091 / 0,182** (FTS5) → **0,485 / 0,818** (hybrid).
+* **Token reduction**: **73,8 %** (458 972 → 120 126 tokens over 7 queries) — the budget-aware capsule versus **dumping the same retrieved subgraph in full** (the fair baseline; not the whole repo, which nobody would send).
+* **Retrieval** (`nomic-embed-text`, 768-dim): exact-name **P@1 0,900 / Recall@10 0,992** (FTS5) and **0,935 / 0,998** (hybrid); plain-English intent **0,091 / 0,182** (FTS5) → **0,485 / 0,818** (hybrid).
 * **Footprint**: the SQLite database is **20,1 MB** at this graph size *with embeddings stored*. It is **not** a "commit it to Git" artifact — `shonkor.db` is gitignored, and should be.
 
 Reproduce everything: see the **README → The numbers** section, which pins the same values against checked-in harness output (`bench/metrics-*.json`) and is guarded by a test so it cannot silently drift.
 
-> **Why this section was rewritten.** It previously claimed *34 files in 1.80 s (~19 files/s)*, *search under 5 ms*, *traversal under 10 ms*, a *≈ 41 %* token reduction and a **352 KB** database "which can easily be placed under version control". Measured on the current system: throughput is ~31 files/s, p95 search latency is 15 ms (not "< 5 ms"), token reduction is 74,1 %, and the database is **20,1 MB — 57× larger** than the published figure, i.e. precisely *not* something to commit. The retrieval figures quoted here previously (*Recall@10 0,37 → 0,97*) came from the **circular** `doc-intent` golden set, whose queries are the target's own doc-comment — a set the project has since explicitly disowned.
+> **Why this section was rewritten.** It previously claimed *34 files in 1.80 s (~19 files/s)*, *search under 5 ms*, *traversal under 10 ms*, a *≈ 41 %* token reduction and a **352 KB** database "which can easily be placed under version control". Measured on the current system: throughput is ~31 files/s, p95 search latency is 15 ms (not "< 5 ms"), token reduction is 73,8 %, and the database is **20,1 MB — 57× larger** than the published figure, i.e. precisely *not* something to commit. The retrieval figures quoted here previously (*Recall@10 0,37 → 0,97*) came from the **circular** `doc-intent` golden set, whose queries are the target's own doc-comment — a set the project has since explicitly disowned.
