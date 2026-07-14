@@ -1,5 +1,5 @@
 {
-  "tokenReductionPct": 75.91513875303974,
+  "tokenReductionPct": 74.12752482634879,
   "tokenQueries": 7,
   "retrieval": {
     "graph": {
@@ -11,17 +11,17 @@
     },
     "semantic": {
       "cases": 200,
-      "precisionAt1": 0.905,
-      "precisionAtK": 0.1165000000000002,
+      "precisionAt1": 0.895,
+      "precisionAtK": 0.1170000000000002,
       "recallAtK": 0.9883333333333333,
-      "mrr": 0.93625
+      "mrr": 0.9332142857142857
     },
     "hybrid": {
       "cases": 200,
-      "precisionAt1": 0.945,
-      "precisionAtK": 0.16750000000000057,
+      "precisionAt1": 0.93,
+      "precisionAtK": 0.16650000000000056,
       "recallAtK": 0.9983333333333333,
-      "mrr": 0.9672499999999999
+      "mrr": 0.9595833333333332
     }
   },
   "ragBaseline": null

@@ -28,10 +28,18 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
     private static partial Regex FencePattern();
 
     /// <summary>
-    /// Above this many characters a section is split at paragraph boundaries into numbered sub-nodes, so a
-    /// single sprawling section can't dominate retrieval (and stays inside the embedding model's window).
+    /// Above <see cref="TokenBudget.SectionBudgetTokens"/> a section is split at paragraph boundaries into
+    /// numbered sub-nodes, so a single sprawling section can't dominate retrieval — and, more importantly,
+    /// so it stays inside the embedding model's window.
+    /// <para>
+    /// This used to be a flat <c>4000 characters</c> (#111). That is a fine proxy for English prose and a bad
+    /// one for CJK (≈ 1 token per character, so 4000 chars is ~4000 tokens — silently truncated by the
+    /// backend, with the tail of the section embedded into nothing) and for fenced code and tables, which
+    /// tokenize far denser than prose. The budget is now measured in tokens, and English prose lands where it
+    /// always did.
+    /// </para>
     /// </summary>
-    internal const int MaxSectionChars = 4000;
+    internal static int SectionBudgetTokens => TokenBudget.SectionBudgetTokens;
 
     /// <summary>
     /// Matches Markdown inline links with relative paths (e.g., <c>[text](./path/to/file.md)</c>).
@@ -123,9 +131,25 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
     /// Creates a <c>MarkdownSection</c> node per header, carrying the section's own body (the text from its
     /// header line up to the next header, code fences and tables intact) and its 1-based line range, so the
     /// section — not just the whole file — is retrievable and citable. A section beyond
-    /// <see cref="MaxSectionChars"/> is split at paragraph boundaries into numbered <c>::part::N</c>
-    /// sub-nodes. Each section gets a <c>CONTAINS</c> edge from the file; each continuation part gets one
-    /// from its section.
+    /// <see cref="SectionBudgetTokens"/> is split at paragraph boundaries into numbered <c>::part::N</c>
+    /// sub-nodes.
+    ///
+    /// <para>
+    /// <b>CONTAINS follows the heading hierarchy</b> (#112): a <c>###</c> section is a child of its enclosing
+    /// <c>##</c>, not a sibling of it. Only top-level headings hang directly off the file. So
+    /// <c>get_subgraph</c> on a chapter reaches its subsections in one hop, and <c>outline</c> renders the
+    /// real tree — where before, a query matching a child's detail could not reach the parent's framing, and
+    /// vice versa, because nothing linked them.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The tension #112 posed, and how it is resolved:</b> nesting the <i>content</i> would mean a parent
+    /// storing its children's text — duplicating it in FTS (double-counted by BM25) — or letting the parent's
+    /// line range stop matching its content, which breaks the exactness that makes citations trustworthy.
+    /// Neither is acceptable, so <b>only the edges nest</b>. A section's <c>Content</c> and
+    /// <c>StartLine</c>–<c>EndLine</c> are exactly what they were: its own body, up to the next header of any
+    /// level. Structure moves; text does not.
+    /// </para>
     /// </summary>
     private static void ExtractSections(
         string filePath,
@@ -135,6 +159,10 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
     {
         var lines = content.Split('\n');
         var headers = FindHeaders(lines);
+
+        // The chain of enclosing sections, innermost last. A header of level L is contained by the nearest
+        // preceding header of a level strictly less than L; if there is none, the file contains it directly.
+        var ancestors = new List<(int Level, string Id)>();
 
         for (var i = 0; i < headers.Count; i++)
         {
@@ -149,12 +177,22 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
             }
             var sectionId = $"{filePath}::section::{i}::{header.Title}";
 
+            // Pop every ancestor at or below this header's level — they are siblings or shallower, so they
+            // cannot enclose it. (A document that jumps ## → #### still nests correctly: the #### simply
+            // attaches to the ## it is actually under, rather than to a level-3 heading that never existed.)
+            while (ancestors.Count > 0 && ancestors[^1].Level >= header.Level)
+            {
+                ancestors.RemoveAt(ancestors.Count - 1);
+            }
+
             edges.Add(new GraphEdge
             {
-                SourceId = filePath,
+                SourceId = ancestors.Count > 0 ? ancestors[^1].Id : filePath,
                 TargetId = sectionId,
                 Relationship = "CONTAINS"
             });
+
+            ancestors.Add((header.Level, sectionId));
 
             var chunks = SplitAtParagraphs(lines, header.LineIndex, endLineIndex);
             for (var part = 0; part < chunks.Count; part++)
@@ -203,7 +241,7 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
     }
 
     /// <summary>
-    /// Returns the section's line span as one chunk when it fits in <see cref="MaxSectionChars"/>, otherwise
+    /// Returns the section's line span as one chunk when it fits in <see cref="SectionBudgetTokens"/>, otherwise
     /// splits it at BLANK lines (paragraph boundaries) into chunks that each stay within the budget. A single
     /// paragraph larger than the budget is never cut mid-paragraph — it is emitted whole, because splitting a
     /// code fence or table in half would produce two unusable fragments.
@@ -211,7 +249,7 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
     private static List<(int Start, int End, string Text)> SplitAtParagraphs(string[] lines, int startIndex, int endIndex)
     {
         var whole = Join(lines, startIndex, endIndex);
-        if (whole.Length <= MaxSectionChars)
+        if (TokenBudget.Fits(whole, TokenBudget.SectionBudgetTokens))
         {
             return new List<(int, int, string)> { (startIndex, endIndex, whole) };
         }
@@ -235,12 +273,12 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
 
             var candidate = Join(lines, chunkStart, candidateEnd);
             var isLast = b == boundaries.Count;
-            if (candidate.Length <= MaxSectionChars && !isLast)
+            if (TokenBudget.Fits(candidate, TokenBudget.SectionBudgetTokens) && !isLast)
             {
                 continue; // keep growing this chunk up to the budget
             }
 
-            if (candidate.Length <= MaxSectionChars)
+            if (TokenBudget.Fits(candidate, TokenBudget.SectionBudgetTokens))
             {
                 chunks.Add((chunkStart, candidateEnd, candidate));
                 chunkStart = nextStart;

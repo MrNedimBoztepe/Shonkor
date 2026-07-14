@@ -34,6 +34,44 @@ same fault: the tool knew something the caller could not find out.
   `backend_unavailable`, `tool_failed`. The human message is unchanged and unconstrained — the code is
   additive, not a replacement.
 
+### Fixed — Section budgets are measured in tokens, not characters (#111)
+- The parser split sections at **4000 characters** and the embedder truncated bodies at **1500 characters** —
+  two different constants standing in for the same thing: the backend's **token** window. The proxy holds for
+  English prose (~4 chars/token) and **fails silently** elsewhere. In **CJK** a character is roughly a token,
+  so a 4000-char section is ~4000 tokens — double `nomic-embed-text`'s window. It was handed over whole, the
+  backend truncated it, and the tail of the section was embedded into **nothing**. No error, no signal; the
+  section was simply half-searchable.
+- `TokenBudget` is now the single place that answers "does this fit?", and **parser and embedder share it** —
+  they can no longer disagree about the same limit. The estimate is script-aware (CJK ≈ 1 token/char,
+  alphanumeric runs ≈ 4 chars/token, punctuation ≈ 1 token each, so fenced code and tables come out heavy) and
+  deliberately **conservative**: over-counting splits a section early, which is cheap; under-counting hands the
+  backend a document it silently truncates, which is invisible.
+- **Why an estimate and not a tokenizer:** an exact tokenizer needs the vocabulary of the *actual* embedding
+  model, and the model is **user-configurable** (`EmbeddingService:OllamaModel`). Shipping one model's vocab
+  would produce a tokenizer that is exact for the **wrong** model the moment a user swaps it — and an
+  exact-*looking* wrong answer is worse than an honest approximation, because nothing signals the mismatch.
+- English prose is calibrated to land exactly where it did: `doc-sections` FTS Recall@10 stays **1,000**.
+
+### Changed — Markdown sections nest by heading level (#112)
+- `CONTAINS` followed a flat `File → section` fan-out, so a `###` was a **sibling** of the `##` it sits under.
+  A query matching a child's detail could not reach the parent's framing, and vice versa — for arc42-style
+  docs, where the meaningful unit is often the chapter, the answer was split across nodes nothing linked.
+- Sections now nest: `File → h1 → h2 → h3`. `outline` renders the real heading tree, and `get_subgraph` on a
+  chapter reaches its subsections in one hop.
+- **The tension the ticket posed, resolved explicitly:** nesting the *content* would mean a parent storing its
+  children's text (duplicated in FTS, double-counted by BM25) **or** a parent's line range no longer matching
+  its content (breaking the exactness that makes citations trustworthy). Neither is acceptable, so **only the
+  edges nest**. A section's `Content` and `StartLine`–`EndLine` are unchanged. Structure moves; text does not.
+  Node ids are index-based and unchanged, so **no scheme bump**.
+- `outline` now walks `CONTAINS` breadth-first instead of pulling a fixed 2-hop subgraph — a nested `###` sits
+  three hops from the file and was simply **missed**, and raising the hop count on a generic subgraph would
+  have dragged in the file's whole reference neighbourhood at every level.
+- **Measured:** plain-English intent Recall@10 improves **0,788 → 0,818** (hybrid) and **0,697 → 0,727**
+  (vector) — linking child detail to parent framing is what #112 predicted. `doc-sections` Recall@10 holds at
+  **1,000**. Exact-name hybrid P@1 slips **0,945 → 0,930**, inside its confidence interval (±0,035); reported
+  rather than buried. README, arc42 §1.4 and the sales deck re-pinned to the new run — the #156 guard would
+  have failed the build otherwise, which is exactly what it is for.
+
 ### Fixed — The benchmark was handicapping Shonkor against itself (#162)
 - `--compare-rag` seeded Shonkor's capsule from **vector search alone**, while every shipped path
   (`search_hybrid`, `generate_capsule`, `/api/search/hybrid`, `/api/capsule`) seeds from **`HybridRetrieval`**

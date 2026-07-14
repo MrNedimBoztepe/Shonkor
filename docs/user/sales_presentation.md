@@ -36,16 +36,16 @@ Artificial Intelligence is revolutionizing software development, but traditional
 
 Every number below is **measured, dated, and reproducible with a command we ship**. None of it is a round figure someone remembered.
 
-**Measured 2026-07-14** on Shonkor's own repository — 231 files → 2 071 nodes, 5 152 edges; embeddings via local Ollama `nomic-embed-text`.
+**Measured 2026-07-14** on Shonkor's own repository — 235 files → 2 131 nodes, 5 271 edges; embeddings via local Ollama `nomic-embed-text`.
 
 | Metric | Value | Evidence / how to reproduce |
 | :--- | :---: | :--- |
-| **Indexing throughput** | **≈ 31 files / second** | 231 files, cold full index, 7,55 s — with exact **semantic C#** resolution on (the default). `shonkor index .` |
+| **Indexing throughput** | **≈ 31 files / second** | 235 files, cold full index — with exact **semantic C#** resolution on (the default). `shonkor index .` |
 | **Search latency** (seed finding) | **0,74 ms** median · **15 ms** p95 | BM25-weighted SQLite FTS5. We publish the p95, not just the median — the tail is what an agent waits on. `--search-latency` |
 | **Traversal latency** (2-hop subgraph) | **2,4 ms** median · **10,8 ms** p95 | Recursive CTEs resolve N-hop connections in SQL. `--search-latency` |
-| **Token reduction** | **75,9 %** | Budget-aware capsule vs. dumping the *same retrieved subgraph* in full — the fair baseline, **not** your whole repo. 481 539 → 115 978 tokens over 7 queries. `Shonkor.Bench` |
-| **Retrieval — exact name** | **P@1 0,945 / Recall@10 0,998** (hybrid) | 200 self-retrieval cases. Keyword alone: 0,890 / 0,991. |
-| **Retrieval — plain-English intent** | **Recall@10 0,182 → 0,788** (keyword → hybrid) | 33 hand-labeled queries, machine-checked for circularity. Keyword search finds the answer in the top ten **less than 1 time in 5**; hybrid, **4 times in 5**. |
+| **Token reduction** |  **74,1 %** | Budget-aware capsule vs. dumping the *same retrieved subgraph* in full — the fair baseline, **not** your whole repo. 450 328 → 116 511 tokens over 7 queries. `Shonkor.Bench` |
+| **Retrieval — exact name** | **P@1 0,930 / Recall@10 0,998** (hybrid) | 200 self-retrieval cases. Keyword alone: 0,890 / 0,991. |
+| **Retrieval — plain-English intent** | **Recall@10 0,182 → 0,818** (keyword → hybrid) | 33 hand-labeled queries, machine-checked for circularity. Keyword search finds the answer in the top ten **less than 1 time in 5**; hybrid, **4 times in 5**. |
 | **vs. naive chunked RAG** | **93,9 %** vs **87,9 %** coverage | Head-to-head at a **matched token budget** against chunk retrieval with no graph. `--compare-rag` |
 | **Database footprint** | **20,1 MB** | Local SQLite, embeddings included. Sized for your machine — not for your Git history. |
 

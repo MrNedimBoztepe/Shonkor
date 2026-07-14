@@ -17,9 +17,9 @@ namespace Shonkor.Core.Services;
 public static class EmbeddingTextBuilder
 {
     /// <summary>
-    /// nomic-embed-text (the default backend) has a 2048-token window; the body is bounded so a large
-    /// class/file isn't truncated arbitrarily by the backend and the header (type/name/signature/summary)
-    /// always survives. ~1500 chars sits comfortably inside the window with the header.
+    /// The body's char cap for English prose. Retained for callers and tests that reason in characters, but
+    /// it is <b>no longer the budget</b> — see <see cref="TokenBudget.EmbeddingBodyTokens"/>. A char cap is a
+    /// proxy for the backend's token window that silently fails on CJK and code-dense text (#111).
     /// </summary>
     public const int MaxBodyChars = 1500;
 
@@ -37,7 +37,9 @@ public static class EmbeddingTextBuilder
         }
 
         var signature = node.Properties.TryGetValue("signature", out var sig) ? sig : string.Empty;
-        var body = HeadAndTail(node.Content ?? string.Empty, MaxBodyChars);
+        // Budget in TOKENS, not characters (#111) — and in the same unit the markdown parser uses to decide
+        // when to split, so parser and embedder can no longer disagree about what fits the backend window.
+        var body = HeadAndTailWithinTokens(node.Content ?? string.Empty, TokenBudget.EmbeddingBodyTokens);
 
         var sb = new StringBuilder();
         sb.Append(node.Type).Append(' ').Append(node.Name).Append('\n');
@@ -84,6 +86,29 @@ public static class EmbeddingTextBuilder
     /// so a query targeting either end can still match, instead of only the head being embedded. Cuts at
     /// line boundaries where possible. Bodies within budget are returned unchanged.
     /// </summary>
+    /// <summary>
+    /// Head-and-tail slice of <paramref name="body"/> that fits <paramref name="budgetTokens"/> (#111).
+    /// <para>
+    /// <see cref="HeadAndTail"/> measures in characters, which is the proxy that silently truncated CJK and
+    /// code-dense bodies at the backend. This binary-searches the character cap that lands inside the token
+    /// budget — so a Chinese body is cut to roughly a quarter of the characters an English one keeps, which
+    /// is exactly right, because it costs about four times as many tokens per character.
+    /// </para>
+    /// </summary>
+    public static string HeadAndTailWithinTokens(string body, int budgetTokens)
+    {
+        if (TokenBudget.Fits(body, budgetTokens)) return body;
+
+        int lo = 0, hi = body.Length, best = 0;
+        while (lo <= hi)
+        {
+            var mid = (lo + hi) / 2;
+            if (TokenBudget.Fits(HeadAndTail(body, mid), budgetTokens)) { best = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        return HeadAndTail(body, best);
+    }
+
     public static string HeadAndTail(string body, int max)
     {
         if (body.Length <= max)
