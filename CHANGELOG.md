@@ -5,6 +5,26 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — The RAG head-to-head is now a clean 2×2; the graph's contribution is isolated (#166)
+- The published win (**+6,1 pp** vs. chunked-RAG) compared **Shonkor-hybrid against baseline-vector-only** —
+  one side had a keyword arm, the other didn't. So it could not tell whether the gap was **the graph** or
+  merely **hybrid retrieval**, a technique the baseline could adopt with no graph at all.
+- `--compare-rag` now gives the baseline the **same retrieval Shonkor gets, minus the graph**: BM25 over the
+  chunk texts (an in-memory SQLite **FTS5** index — the *same* engine the product uses, not a hand-rolled
+  scorer) RRF-fused with the vector ranking. The report is a **2×2** (retrieval strategy × graph), and the
+  graph's contribution reads off the **like-for-like hybrid diagonal**.
+- **Measured, and it refutes the ticket's own fear:** the graph's isolated contribution is **+9,1 pp**
+  (93,9 % vs 84,8 %, hybrid on both sides), not the ≤0 a skeptic might have expected. But the honest caveat is
+  published next to it: adding the keyword arm to the *baseline* changed nothing (it fired on only **10 of 33**
+  queries — a raw 40-line source chunk doesn't keyword-match plain-English intent), while Shonkor's **nodes**
+  do, because they carry a **name** and an **AI summary** that read like intent. So part of the gain is the
+  graph's *indexed unit* being keyword-matchable, not pure topology — named, not hidden.
+- README §3, the sales deck and `bench/metrics-agent-queries.json` re-pinned to the 2×2. The #156 guard now
+  checks all **four** cells (including the ones where Shonkor does *not* win) plus the keyword-fired caveat, so
+  the flattering number can't be published without the confound beside it.
+- All README numbers re-measured on a freshly re-indexed graph (2.225 nodes) for consistency — exact-name and
+  intent retrieval, token reduction (73,8 %), and the 2×2 now all come from one reproducible run.
+
 ### Changed — Topology audit + safety net for nested Markdown CONTAINS (#175)
 - #112 nested Markdown sections (`File → h1 → h2 → h3`); `outline` had silently broken on it and was fixed,
   but **no test would have caught it**. This audits every other consumer of `CONTAINS` topology and
