@@ -221,7 +221,7 @@ internal static class SqliteSchema
             {
                 if (reader.GetValue(1) is byte[] { Length: > 0 } blob)
                 {
-                    var floats = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(blob);
+                    var floats = VectorMath.AsFloats(blob);
                     if (!VectorMath.IsUnitLength(floats))
                     {
                         toFix.Add((reader.GetString(0), blob));
