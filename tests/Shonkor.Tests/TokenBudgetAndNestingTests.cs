@@ -42,8 +42,11 @@ public class TokenBudgetAndNestingTests
     public void Estimate_PunctuationDenseText_CostsMoreThanProseOfTheSameLength()
     {
         // Fenced code and tables: same character count, far more tokens. A character cap treats them as equal.
-        var prose = new string('a', 400);                       // one long word → ~100 tokens
-        var table = string.Concat(Enumerable.Repeat("|x|y|", 80)); // 400 chars, punctuation-heavy
+        // The prose sample is real words, not one 400-character run: since #173 a run that long is charged per
+        // character (a digit-free blob — minified JS, base64 — is not English), so it would no longer stand in
+        // for prose at all.
+        var prose = string.Join(" ", Enumerable.Repeat("the graph links code", 20)); // 420 chars of real words
+        var table = string.Concat(Enumerable.Repeat("|x|y|", 84));                   // 420 chars, punctuation-heavy
 
         Assert.True(TokenBudget.Estimate(table) > TokenBudget.Estimate(prose),
             "punctuation-dense text must cost more tokens than prose of the same character length");
@@ -85,8 +88,11 @@ public class TokenBudgetAndNestingTests
     public void EmbeddingBody_IsTrimmedByTokens_SoCjkKeepsFewerCharsThanEnglish()
     {
         // Parser and embedder now measure in the same unit. A Chinese body costs ~4× the tokens per character,
-        // so it must survive ~4× fewer characters — which a flat 1500-char cap got exactly wrong.
-        var english = EmbeddingTextBuilder.HeadAndTailWithinTokens(new string('a', 20_000), TokenBudget.EmbeddingBodyTokens);
+        // so it must survive ~4× fewer characters — which a flat 1500-char cap got exactly wrong. The English
+        // body is real words: since #173 a single 20 000-character run is charged per character (that is a blob,
+        // not English), so it would cost the same as CJK and prove nothing.
+        var englishSource = string.Join(" ", Enumerable.Repeat("the graph links code", 1000));
+        var english = EmbeddingTextBuilder.HeadAndTailWithinTokens(englishSource, TokenBudget.EmbeddingBodyTokens);
         var chinese = EmbeddingTextBuilder.HeadAndTailWithinTokens(new string('文', 20_000), TokenBudget.EmbeddingBodyTokens);
 
         Assert.True(TokenBudget.Fits(english, TokenBudget.EmbeddingBodyTokens));
