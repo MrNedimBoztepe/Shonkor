@@ -5,6 +5,41 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — The benchmark was handicapping Shonkor against itself (#162)
+- `--compare-rag` seeded Shonkor's capsule from **vector search alone**, while every shipped path
+  (`search_hybrid`, `generate_capsule`, `/api/search/hybrid`, `/api/capsule`) seeds from **`HybridRetrieval`**
+  — which has materially better intent recall (0,788 vs 0,697). The head-to-head was therefore measuring a
+  configuration the product does not ship, and losing with it.
+- With seeding parity, at a matched token budget: **93,9 %** coverage vs the no-graph baseline's **87,9 %** —
+  **+6,1 pp**, where the old measurement said **−3,1 pp**.
+- The vector-only arm is **still reported**, because it isolates the graph's contribution and because deleting
+  the unflattering row once the flattering one appeared is exactly the behaviour these benchmarks exist to
+  prevent. A test (`RagHeadToHead_StillPublishesTheArmWeLose`) fails if it is ever removed from the README.
+- The diagnosis is **measured, not argued**: seed survival through the capsule budget is **100 %**, and in
+  **5 of 33** vector-only misses the target was **never a seed**. The budget was not dropping the answer;
+  retrieval never found it.
+- **Stated limitation:** the baseline is vector-only while Shonkor's winning row is hybrid. That is the
+  conventional "naive RAG" setup, but a fair comparison would give the chunk retriever a keyword arm too.
+  Filed as a follow-up; the README and sales deck say so rather than quietly banking the win.
+
+### Changed — The benchmark now scores vectors the way the product does (#163)
+- `RagBaselineBenchmark` computed cosine with a **hand-rolled loop accumulating in `double`**, while the
+  storage layer scores L2-normalized embeddings with a **SIMD `float` dot product** (TICKET-215/#127). Two
+  summation semantics for one similarity — the exact inconsistency #127 removed from the product — meant the
+  baseline was being ranked by arithmetic the product does not use.
+- Now normalizes once via `VectorMath` and scores with `TensorPrimitives.Dot`. Verified: baseline coverage is
+  **unchanged at 87,9 %** (ranking is scale-invariant), so this is a consistency fix, not a result change.
+
+### Changed — The docs allowlist is no longer an honour system (#164)
+- `docs/symbol-allowlist.txt` is the escape hatch for the #159 guard, and an escape hatch defended only by a
+  comment ("NEVER add a name here to silence a stale doc") is defended by nothing: appending one line was the
+  cheapest way to turn a red build green, leaving the doc stale **and** the guard reporting success.
+- Three rules are now **enforced by the build**: every entry must sit under a known `[category]`, must carry a
+  substantive `# reason`, and — for `[deliberately-removed]` entries — **the docs must still state that the
+  type was removed**. Delete that prose and the entry stops being honest, so the build fails.
+- Verified by mutation: appending a bare name fails; deleting the "has been removed" sentence about
+  `PluginLoader` fails. A guard that cannot fail is not a guard.
+
 ### Fixed — The RAG head-to-head measured nothing at all (#157)
 - `--compare-rag` resolved a golden case's `Expected` entries with an **exact node-id lookup**, but the
   hand-written sets contain **bare symbol names** (`"TokenHasher"`). The lookup therefore never matched, and

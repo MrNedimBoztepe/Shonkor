@@ -123,22 +123,42 @@ public class ReadmeBenchmarkNumbersTests
     [Fact]
     public void RagHeadToHead_MatchesCheckedInMetrics()
     {
-        // Section 3 publishes a result Shonkor LOSES. It is the single easiest number to quietly drop, so it
-        // gets the same guard as the flattering ones — that is the whole point of the guard.
+        // All three rows are guarded, deliberately — including the vector-only row, where Shonkor LOSES.
+        // That row is the single easiest number to quietly drop once the "as shipped" row started winning,
+        // so it gets exactly the same protection as the flattering one. That is the whole point of the guard.
         var section = Section(Readme(), "### 3.", "## ✨");
-        var rag = Row(section, "chunked-RAG");
-        var shonkor = Row(section, "Shonkor capsule");
-
         var m = Metrics("metrics-agent-queries.json").GetProperty("ragBaseline");
         Assert.True(m.ValueKind != JsonValueKind.Null,
             "bench/metrics-agent-queries.json has no ragBaseline — re-run the set with --compare-rag.");
 
-        var ragCov = m.GetProperty("ragCoverage").GetDouble() * 100;
-        var shCov = m.GetProperty("shonkorCoverage").GetDouble() * 100;
+        (string Label, string Key)[] rows =
+        [
+            ("chunked-RAG",                     "ragCoverage"),
+            ("Shonkor capsule — vector-only",   "shonkorCoverage"),
+            ("Shonkor capsule — as shipped",    "shonkorHybridCoverage"),
+        ];
 
-        Assert.True(Math.Abs(rag[0] - ragCov) < Tolerance,
-            $"README chunked-RAG coverage ({rag[0]:F1} %) != metrics ({ragCov:F1} %).");
-        Assert.True(Math.Abs(shonkor[0] - shCov) < Tolerance,
-            $"README Shonkor coverage ({shonkor[0]:F1} %) != metrics ({shCov:F1} %).");
+        foreach (var (label, key) in rows)
+        {
+            var published = Row(section, label)[0];
+            var measured = m.GetProperty(key).GetDouble() * 100;
+            Assert.True(Math.Abs(published - measured) < Tolerance,
+                $"README '{label}' coverage ({published:F1} %) != metrics-agent-queries.json:{key} ({measured:F1} %).");
+        }
+    }
+
+    [Fact]
+    public void RagHeadToHead_StillPublishesTheArmWeLose()
+    {
+        // Structural, not numeric: the vector-only arm must remain in the README. If a future edit deletes the
+        // row because it is unflattering, this fails — publishing only the winning configuration would make
+        // the whole head-to-head worthless, which is the failure #157 was filed to prevent.
+        var section = Section(Readme(), "### 3.", "## ✨");
+        Assert.Contains("vector-only", section);
+
+        var m = Metrics("metrics-agent-queries.json").GetProperty("ragBaseline");
+        Assert.True(m.GetProperty("shonkorCoverage").GetDouble() < m.GetProperty("ragCoverage").GetDouble(),
+            "The vector-only arm no longer loses to the baseline. Good news — but re-read the README prose in " +
+            "section 3, which explains that it does, and update the narrative to match the measurement.");
     }
 }

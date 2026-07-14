@@ -74,22 +74,25 @@ Two metrics, both simple:
 
 > **Measured honestly.** That 75,9 % is against dumping *the same retrieved subgraph* in full — **not** against your whole repo. A "we save 95 % vs. your entire codebase" claim compares against a prompt nobody would ever send, and we won't make it. Every number here is DB-dependent and will differ on your codebase — which is exactly why the harness ships with the tool instead of only the results.
 
-### 3. Does it beat plain vector RAG? *(Not on coverage — and we'll show you.)*
+### 3. Does it beat plain vector RAG?
 
-Head-to-head against **chunked RAG with no graph**, at a **matched token budget** (both start from the same embedding search; the baseline then takes as many top text chunks as fit into Shonkor's token count):
+Head-to-head against **chunked RAG with no graph**, at a **matched token budget** — the baseline takes as many top text chunks as fit into Shonkor's token count, so this compares *coverage at equal cost*:
 
 | At ~equal tokens | Tokens delivered | Covers the target symbol |
 |---|--:|--:|
-| chunked-RAG (no graph) | 8.683 | **87,9 %** |
-| Shonkor capsule | 8.940 | 84,8 % |
+| chunked-RAG (no graph) | 8.660 | 87,9 % |
+| Shonkor capsule — *vector-only seeds* | 8.940 | 84,8 % |
+| **Shonkor capsule — as shipped** | 8.940 | **93,9 %** |
 
-**Shonkor loses this one by 3,1 pp.** We're publishing it anyway, because a benchmark you only show when it flatters you isn't a benchmark.
+**+6,1 pp** over the no-graph baseline — and there's a story in the middle row worth telling.
 
-Here's the honest reading. Both sides run the *same* embedding retrieval, so both find the target about equally often — that's expected, and "is the target's text somewhere in the blob" is a **low bar** that raw chunks clear easily by brute force. What the metric cannot see is what you get *around* the target: the capsule delivers the **call graph, exact signatures, and the edges** — and **100 % of the semantic seeds survive the budget**. Chunks deliver adjacent lines.
+That row is Shonkor seeded by **vector search alone**, and it *loses* by 3,1 pp. It is in the table because it isolates the graph's contribution — both sides then start from identical retrieval. But it is **not what the product does**: the shipped path seeds from **hybrid** retrieval (the same RRF you saw in section 1). Our own benchmark had been handicapping Shonkor against itself, and it took repairing the metric to notice.
 
-So don't buy Shonkor to cover the target symbol slightly more often. Buy it for the question chunks *cannot answer at all*: **"what breaks if I change this?"** A chunk retriever has no edges, so it cannot tell you — at any token budget.
+The diagnosis is measured, not argued: **100 %** of seeds survive the capsule budget, and in **5 of 33** vector-only misses the target was **never a seed at all**. The budget wasn't dropping the answer — retrieval never found it. Better seeding fixed it.
 
-*(This number was broken until #157: the coverage check resolved golden entries as exact node ids while the sets use bare symbol names, so it silently reported 0 % for both sides. Fixing it produced this result, not a better one.)*
+> **The asymmetry we're not hiding:** the baseline is vector-only, and Shonkor's winning row is hybrid. That's the conventional "naive RAG" setup, but a fair critic would say: give the chunks a keyword arm too. They'd be right, and it's [an open ticket](https://github.com/MrNedimBoztepe/Shonkor/issues). Until it's measured, read this as *"the graph capsule beats naive chunked RAG"* — not as *"vector retrieval is beaten"*.
+
+And coverage is the *low* bar anyway — it only asks whether the target's text is somewhere in the blob. What it cannot see is what surrounds it: the capsule ships the **call graph, exact signatures, and the edges**. So the real reason isn't the 6 points. It's the question chunks **cannot answer at any budget**: *"what breaks if I change this?"* A chunk retriever has no edges. It doesn't know.
 
 ---
 

@@ -1,5 +1,6 @@
 // Licensed to Shonkor under the MIT License.
 
+using System.Numerics.Tensors;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -37,11 +38,16 @@ internal static class RagBaselineBenchmark
         public float[]? Embedding { get; set; }
     }
 
+    /// <param name="ShonkorCoverage">Coverage when seeded VECTOR-ONLY — isolates the graph+capsule, both sides from identical retrieval.</param>
+    /// <param name="ShonkorHybridCoverage">Coverage when seeded via <see cref="HybridRetrieval"/> — the path the product actually ships (#162).</param>
+    /// <param name="SeedMissedTarget">Cases the capsule missed where the target was never a seed — i.e. a retrieval miss, not a budget casualty.</param>
     public sealed record ComparisonResult(
         int Queries, int Chunks,
         double RagAvgTokens, double RagCoverage,
         double ShonkorAvgTokens, double ShonkorCoverage,
-        double ShonkorSeedSurvival)
+        double ShonkorSeedSurvival,
+        double ShonkorHybridCoverage,
+        int SeedMissedTarget)
     {
         public double TokenSavingPct => RagAvgTokens > 0 ? (1.0 - ShonkorAvgTokens / RagAvgTokens) * 100 : 0;
     }
@@ -64,14 +70,26 @@ internal static class RagBaselineBenchmark
         var embedded = chunks.Where(c => c.Embedding is { Length: > 0 }).ToList();
         if (embedded.Count == 0) { log.WriteLine("  rag baseline: no chunk embeddings — skipped"); return null; }
 
-        double ragTok = 0, ragCov = 0, shTok = 0, shCov = 0, shSeedSurv = 0;
+        // Score chunks the way the product scores nodes (#163): normalize once, then dot. The storage layer
+        // normalizes on write, so this is the same arithmetic — not a second, subtly different similarity.
+        foreach (var ch in embedded) VectorMath.NormalizeL2(ch.Embedding!);
+
+        double ragTok = 0, ragCov = 0, shTok = 0, shCov = 0, shSeedSurv = 0, shHybridCov = 0;
+        var seedMissedTarget = 0;
         var n = 0;
         foreach (var c in cases)
         {
             var qv = await emb.GenerateEmbeddingAsync(c.Query, EmbeddingKind.Query);
+            var qn = VectorMath.NormalizedCopy(qv);
 
-            // Shonkor first: same embedding → semantic seeds → 2-hop subgraph → budgeted capsule. Its token
-            // count sets the budget for a FAIR baseline comparison (equal tokens, then compare coverage).
+            // Shonkor: same embedding → semantic seeds → 2-hop subgraph → budgeted capsule. Its token count
+            // sets the budget for a FAIR baseline comparison (equal tokens, then compare coverage).
+            //
+            // NOTE (#162): seeding VECTOR-ONLY here is what ISOLATES the graph+capsule contribution — both
+            // sides start from the identical retrieval. But it is NOT what the product does: the shipped path
+            // is HybridRetrieval (RRF of FTS + vector), which has materially better intent recall. So this arm
+            // understates Shonkor-as-shipped. The hybrid arm below measures that, and both are reported —
+            // picking whichever flatters us would be exactly the sin this benchmark exists to prevent.
             var hits = await provider.SearchSemanticAsync(qv, TopK);
             var seeds = hits.Select(h => h.Node.Id).ToList();
             var (subNodes, subEdges) = seeds.Count > 0
@@ -95,9 +113,29 @@ internal static class RagBaselineBenchmark
             if (seeds.Count > 0)
                 shSeedSurv += (double)seeds.Count(id => CapsuleMentions(capsule, byId.GetValueOrDefault(id))) / seeds.Count;
 
-            // Baseline: take top chunks by cosine up to the SAME token budget, then compare coverage.
+            // #162 diagnostic: when the capsule misses the target, was the target ever a SEED to begin with?
+            // Seed survival is ~100 %, so a miss cannot be the budget dropping it — it means retrieval never
+            // nominated it. This counts exactly that, so the conclusion is measured rather than argued.
+            var expectedIds = expectedNodes.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
+            if (!expectedNodes.Any(node => CapsuleMentions(capsule, node)) && !seeds.Any(expectedIds.Contains))
+                seedMissedTarget++;
+
+            // The SHIPPED path (#162): HybridRetrieval — RRF of FTS + vector — is what search_hybrid,
+            // generate_capsule, /api/search/hybrid and /api/capsule all use. Same budget, same capsule; only
+            // the seeds differ. If this beats the vector-only arm, the benchmark was handicapping the product
+            // against itself.
+            var hybridSeeds = (await HybridRetrieval.SearchAsync(provider, emb, c.Query, TopK))
+                .Select(h => h.Node.Id).ToList();
+            var (hNodes, hEdges) = hybridSeeds.Count > 0
+                ? await provider.GetSubgraphAsync(hybridSeeds, Hops)
+                : (new List<GraphNode>(), new List<GraphEdge>());
+            var hybridCapsule = synth.Synthesize(hNodes, hEdges,
+                new CapsuleOptions { SeedIds = hybridSeeds, MaxContentChars = BudgetChars, MaxNodes = 40 });
+            shHybridCov += expectedNodes.Any(node => CapsuleMentions(hybridCapsule, node)) ? 1 : 0;
+
+            // Baseline: take top chunks by similarity up to the SAME token budget, then compare coverage.
             var ranked = embedded
-                .Select(ch => (ch, sim: Cosine(qv, ch.Embedding!)))
+                .Select(ch => (ch, sim: Score(qn, ch.Embedding!)))
                 .OrderByDescending(x => x.sim);
             double used = 0;
             var picked = new List<Chunk>();
@@ -114,7 +152,10 @@ internal static class RagBaselineBenchmark
             n++;
         }
 
-        return n == 0 ? null : new ComparisonResult(n, embedded.Count, ragTok / n, ragCov / n, shTok / n, shCov / n, shSeedSurv / n);
+        return n == 0
+            ? null
+            : new ComparisonResult(n, embedded.Count, ragTok / n, ragCov / n, shTok / n, shCov / n, shSeedSurv / n,
+                shHybridCov / n, seedMissedTarget);
     }
 
     /// <summary>True when <paramref name="node"/>'s name appears as a whole word in the capsule text.</summary>
@@ -206,13 +247,20 @@ internal static class RagBaselineBenchmark
         return false;
     }
 
-    private static double Cosine(float[] a, float[] b)
-    {
-        if (a.Length != b.Length) return 0;
-        double dot = 0, na = 0, nb = 0;
-        for (var i = 0; i < a.Length; i++) { dot += (double)a[i] * b[i]; na += (double)a[i] * a[i]; nb += (double)b[i] * b[i]; }
-        return na == 0 || nb == 0 ? 0 : dot / (Math.Sqrt(na) * Math.Sqrt(nb));
-    }
+    /// <summary>
+    /// Scores a query against a chunk <b>exactly the way the product scores a node</b> (#163): both vectors are
+    /// L2-normalized (<see cref="VectorMath"/>, on <c>TensorPrimitives</c>), so a dot product <i>is</i> the
+    /// cosine — the identical arithmetic <c>SqliteGraphStorageProvider.SearchSemanticAsync</c> uses after
+    /// normalize-on-write (TICKET-215).
+    /// <para>
+    /// This replaced a hand-rolled loop that accumulated in <c>double</c> while the storage path accumulates in
+    /// SIMD <c>float</c>. Two summation semantics for one similarity is the exact inconsistency #127 removed
+    /// from the product — having it back in the component whose whole job is trustworthy numbers meant the
+    /// baseline was ranked by arithmetic the product does not use.
+    /// </para>
+    /// </summary>
+    private static float Score(ReadOnlySpan<float> normalizedQuery, ReadOnlySpan<float> normalizedChunk) =>
+        normalizedQuery.Length != normalizedChunk.Length ? 0f : TensorPrimitives.Dot(normalizedQuery, normalizedChunk);
 
     private static string Sha(string s) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
 }

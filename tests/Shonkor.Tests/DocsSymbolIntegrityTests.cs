@@ -110,15 +110,35 @@ public class DocsSymbolIntegrityTests
         return declared;
     }
 
+    /// <summary>One allowlist entry: the name, the category it was filed under, and its stated reason.</summary>
+    private sealed record AllowEntry(string Name, string Category, string Reason, int Line);
+
     /// <summary>
-    /// Identifiers the docs legitimately name that are NOT Shonkor types: BCL/third-party types, config keys,
-    /// product/tool names, and — deliberately — removed types the docs mention *because* they were removed.
+    /// Parses <c>docs/symbol-allowlist.txt</c>. Entries are grouped under <c>[category]</c> headers and each
+    /// carries a <c>#</c> reason — both are <b>enforced</b> by <see cref="Allowlist_IsNotAnHonourSystem"/>
+    /// (#164), because the escape hatch is the one thing that can quietly defeat this whole guard.
     /// </summary>
-    private static HashSet<string> Allowlist() => new(
-        File.ReadAllLines(RepoPaths.File("docs", "symbol-allowlist.txt"))
-            .Select(l => l.Split('#')[0].Trim())
-            .Where(l => l.Length > 0),
-        StringComparer.Ordinal);
+    private static List<AllowEntry> AllowEntries()
+    {
+        var entries = new List<AllowEntry>();
+        var category = "";
+        var lines = File.ReadAllLines(RepoPaths.File("docs", "symbol-allowlist.txt"));
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+            if (line.StartsWith('[') && line.EndsWith(']')) { category = line[1..^1]; continue; }
+
+            var hash = line.IndexOf('#');
+            var name = (hash < 0 ? line : line[..hash]).Trim();
+            var reason = hash < 0 ? "" : line[(hash + 1)..].Trim();
+            if (name.Length > 0) entries.Add(new AllowEntry(name, category, reason, i + 1));
+        }
+        return entries;
+    }
+
+    private static HashSet<string> Allowlist() =>
+        new(AllowEntries().Select(e => e.Name), StringComparer.Ordinal);
 
     [Fact]
     public void Docs_DoNotNameTypesThatDoNotExist()
@@ -151,6 +171,55 @@ public class DocsSymbolIntegrityTests
             "RCE surface as live). Either fix the doc, or — if the name is an external type or a deliberate " +
             "historical reference — add it to docs/symbol-allowlist.txt with a reason:\n  " +
             string.Join("\n  ", dead.Distinct()));
+    }
+
+    /// <summary>
+    /// #164: the allowlist is the escape hatch, and an escape hatch guarded only by a comment is guarded by
+    /// nothing. The cheapest way to turn this build green is to append a name — and that leaves the doc stale
+    /// AND the guard reporting success, which is strictly worse than the original bug. So the hatch itself is
+    /// checked: category, reason, and — for removed types — that the docs still say they are removed.
+    /// </summary>
+    [Fact]
+    public void Allowlist_IsNotAnHonourSystem()
+    {
+        var entries = AllowEntries();
+        var known = new[] { "external-types", "placeholders", "config-values", "deliberately-removed" };
+        var problems = new List<string>();
+
+        foreach (var e in entries)
+        {
+            if (e.Category.Length == 0)
+                problems.Add($"line {e.Line}: '{e.Name}' sits outside any [category] header.");
+            else if (!known.Contains(e.Category))
+                problems.Add($"line {e.Line}: '{e.Name}' is under unknown category [{e.Category}] (known: {string.Join(", ", known)}).");
+
+            if (e.Reason.Length < 10)
+                problems.Add($"line {e.Line}: '{e.Name}' has no meaningful '# reason'. Say why it is not a Shonkor type.");
+        }
+
+        // Rule 3: a name may only be parked under [deliberately-removed] while the docs still SAY it is gone.
+        // Otherwise the entry silently degrades into "a dead symbol we agreed to stop noticing".
+        var docsText = string.Join("\n",
+            Directory.EnumerateFiles(RepoPaths.File("docs"), "*.md", SearchOption.AllDirectories)
+                .Append(RepoPaths.File("README.md"))
+                .Select(File.ReadAllText));
+
+        foreach (var e in entries.Where(x => x.Category == "deliberately-removed"))
+        {
+            var stillSaysRemoved = Regex.IsMatch(
+                docsText,
+                $@"{Regex.Escape(e.Name)}[^\n]{{0,200}}(removed|deleted|no longer|has been)|(removed|deleted|no longer|has been)[^\n]{{0,200}}{Regex.Escape(e.Name)}",
+                RegexOptions.IgnoreCase);
+
+            if (!stillSaysRemoved)
+                problems.Add(
+                    $"line {e.Line}: '{e.Name}' is allowlisted as [deliberately-removed], but no doc still states " +
+                    "that it was removed. Either restore that prose, or drop the allowlist entry — as it stands " +
+                    "the docs name a type that does not exist and nothing explains why.");
+        }
+
+        Assert.True(problems.Count == 0,
+            "docs/symbol-allowlist.txt violates its own enforced rules (#164):\n  " + string.Join("\n  ", problems));
     }
 
     [Fact]
