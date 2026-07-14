@@ -5,6 +5,25 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — The streaming path's no-retry rule is pinned, and its stated reason was wrong (#224)
+- The last of the three "safe by construction" claims in the resilience code to be checked. The other two:
+  #215/#218 (the retry classifiers) were **broken**; #222 (deterministic failures are never retried) **held**,
+  but was protected twice over rather than once. This one is a third outcome again — **the claim is true, and
+  the stated reason is not why.**
+- The comment said: *"a stream can't be safely restarted once bytes are on the wire"*. That sentence is true and
+  it protects nothing. `StreamRAGResponseAsync` sends with `HttpCompletionOption.ResponseHeadersRead`, so a
+  retry pipeline placed around that send could only ever see failures from **before the headers arrived** —
+  where nothing has been yielded and a restart would be perfectly safe. A failure *after* bytes are flowing
+  happens once the send has already returned, and is unretriable **by construction**, exactly like #222's
+  deterministic failures and #221's mid-body deaths. **The absence of a pipeline is not the safety mechanism;
+  the completion option is.**
+- So the tests pin the property that is actually load-bearing — **a token is never emitted twice, and the
+  backend is never asked to generate the same answer again** — rather than the incidental "there is no pipeline
+  here". A guard tied to the absence of a pipeline would fail the moment someone added a *safe* pre-connection
+  retry, which is a change worth allowing rather than forbidding.
+- **Mutation-verified:** wrapping the stream in `OllamaResilience.Background` — the "make it consistent with the
+  other two paths" tidy-up the ticket warned about — takes a 5xx from **1 request to 3**, and the guard fails.
+
 ### Fixed — The exact-citation invariant was false on Windows, and the same file hashed differently per OS (#239)
 - The repo has no `.gitattributes`, `.editorconfig` says `end_of_line = crlf`, and `core.autocrlf` is on — so the
   same source file is **CRLF on Windows and LF on Linux**, on disk. Everything downstream read the raw text and
