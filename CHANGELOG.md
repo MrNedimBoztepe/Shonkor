@@ -5,6 +5,22 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — The zero-copy vector read's endianness assumption is now explicit and guarded (#129)
+- The semantic-search hot path reinterprets each stored embedding blob AS `float[]` in place via
+  `MemoryMarshal.Cast<byte, float>` — zero-copy, no per-row allocation. The blob is packed **native-endian**
+  (`SqliteRowMapper.EmbeddingToBytes` via `Buffer.BlockCopy`) and read back native-endian, so a write→read
+  round-trip on a single host is always self-consistent. But the on-disk format is **not** a fixed
+  little-endian wire format: a `.db` moved between hosts of opposite endianness would reinterpret every float
+  with swapped bytes and return silently-wrong similarity scores — no crash, just garbage.
+- Both reinterpret sites (the search hot path and the one-time normalization migration) now route through a
+  single choke point, `VectorMath.AsFloats`, which pins the assumption in one place. On a big-endian host it
+  throws a `PlatformNotSupportedException` naming the cause instead of returning wrong scores. The check is
+  free on the little-endian hot path: `BitConverter.IsLittleEndian` is a JIT intrinsic that folds to a
+  constant, so the guard branch is eliminated entirely on the platforms Shonkor targets (x64, ARM64).
+- Tested through a seam that exposes the endianness as a parameter (the runtime intrinsic can't be flipped),
+  so the big-endian failure branch is exercised and mutation-verified on a little-endian test host, alongside
+  the little-endian round-trip and the end-to-end `EmbeddingToBytes`→`AsFloats` format agreement.
+
 ### Added — Eval re-contamination is now a loud failure, not a silent filter (#136)
 - `IsEvalMetaNode` silently drops index-excluded meta files from the ranked results (#132). That keeps the
   numbers correct **today**, but if the `shonkor.json` exclude regresses and those files get indexed again,

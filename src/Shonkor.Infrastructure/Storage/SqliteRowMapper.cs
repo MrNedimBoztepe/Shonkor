@@ -114,10 +114,16 @@ internal static class SqliteRowMapper
         properties.Count > 0 ? JsonSerializer.Serialize(properties) : DBNull.Value;
 
     /// <summary>
-    /// Packs a float embedding into a little-endian byte blob, or returns null when absent. The vector is
+    /// Packs a float embedding into a native-endian byte blob, or returns null when absent. The vector is
     /// L2-normalized first (TICKET-215): every stored embedding is unit-length, so the semantic search hot
     /// path can score with a dot product instead of recomputing each vector's magnitude for cosine. This is
     /// the single storage write choke point, so normalization holds regardless of which caller wrote it.
+    /// <para>
+    /// <see cref="Buffer.BlockCopy(Array,int,Array,int,int)"/> writes the float bytes in the host's native
+    /// order — the read side (<see cref="VectorMath.AsFloats"/>) reinterprets them the same way, so a
+    /// round-trip is self-consistent on any single host but the on-disk blob is NOT portable across hosts of
+    /// opposite endianness. Shonkor supports little-endian platforms only; see #129 for the read-side guard.
+    /// </para>
     /// </summary>
     public static byte[]? EmbeddingToBytes(float[]? embedding)
     {

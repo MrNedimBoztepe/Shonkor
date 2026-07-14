@@ -19,4 +19,10 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Storage-format internals (e.g. the endianness guard in VectorMath.AsFloats, #129) are contract-tested
+         directly rather than only through the public search surface. -->
+    <InternalsVisibleTo Include="Shonkor.Tests" />
+  </ItemGroup>
+
 </Project>

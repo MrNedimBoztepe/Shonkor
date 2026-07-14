@@ -50,6 +50,58 @@ public class VectorScalingTests
         Assert.False(VectorMath.IsUnitLength(v));
     }
 
+    // ---- Zero-copy read: endianness guard (#129) ----------------------------------------------------
+
+    [Fact]
+    public void AsFloats_ReinterpretsTheBlob_AsTheSameFloatsThatWerePacked()
+    {
+        // The read side must be the exact inverse of the BlockCopy packing (SqliteRowMapper.EmbeddingToBytes)
+        // on this (little-endian) host — that is the contract the zero-copy semantic-search read depends on.
+        var vector = new[] { 1f, -2.5f, 3.25f, 0f };
+        var blob = new byte[vector.Length * 4];
+        Buffer.BlockCopy(vector, 0, blob, 0, blob.Length);
+
+        var readBack = VectorMath.AsFloats(blob).ToArray();
+
+        Assert.Equal(vector, readBack);
+    }
+
+    [Fact]
+    public void AsFloats_OnABigEndianHost_FailsLoud_RatherThanReturningSilentlyWrongScores()
+    {
+        // The stored blob is native-endian; a big-endian host reading it would reinterpret every float with
+        // swapped bytes and return garbage similarities with no crash. The guard turns that silent-wrong into
+        // a loud PlatformNotSupportedException. The endianness is a parameter here only so this branch is
+        // reachable on a little-endian test host — the production call passes BitConverter.IsLittleEndian.
+        var blob = new byte[8];
+
+        var ex = Assert.Throws<PlatformNotSupportedException>(() =>
+        {
+            _ = VectorMath.AsFloats(blob, littleEndian: false);
+        });
+        Assert.Contains("little-endian", ex.Message);
+
+        // ...and the same blob is read without throwing when the platform IS little-endian.
+        var readOk = Record.Exception(() =>
+        {
+            _ = VectorMath.AsFloats(blob, littleEndian: true).Length;
+        });
+        Assert.Null(readOk);
+    }
+
+    [Fact]
+    public void EmbeddingToBytes_ThenAsFloats_RoundTripsTheNormalizedVector()
+    {
+        // End-to-end write→read: the packing normalizes, so the bytes read back must be the UNIT vector, and
+        // AsFloats must recover it exactly — pinning that the two halves of the storage format agree.
+        var expected = VectorMath.NormalizedCopy(new[] { 3f, 4f, 0f }); // -> {0.6, 0.8, 0}
+
+        var blob = SqliteRowMapper.EmbeddingToBytes(new[] { 3f, 4f, 0f })!;
+        var readBack = VectorMath.AsFloats(blob).ToArray();
+
+        Assert.Equal(expected, readBack);
+    }
+
     // ---- Scoring: dot == cosine, exactness preserved ------------------------------------------------
 
     [Fact]
