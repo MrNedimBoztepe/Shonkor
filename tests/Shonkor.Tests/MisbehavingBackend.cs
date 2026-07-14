@@ -68,9 +68,30 @@ internal sealed class MisbehavingBackend : IDisposable
                         .ConfigureAwait(false);
                     await stream.WriteAsync("{\"a\":"u8.ToArray()).ConfigureAwait(false);
                     await stream.FlushAsync().ConfigureAwait(false);
+
+                    // GRACEFUL close (FIN), NOT a reset. This matters, and getting it wrong made the fixture
+                    // model the opposite of what it claimed:
+                    //
+                    // An RST (LingerState(true, 0)) tells the kernel to DISCARD whatever is still in the socket
+                    // buffers — including the 200 OK we just wrote. On Windows the bytes happened to reach the
+                    // client before the reset landed, so it looked like "the backend answered, then died
+                    // mid-body". On Linux the reset won, the client saw NO response at all, and the failure was
+                    // a plain connection reset — which the blocking RAG path is SUPPOSED to retry once.
+                    //
+                    // So the Linux CI failure this fixture produced was the test lying, not the product
+                    // breaking. Half-closing the send side delivers the headers and the partial body, and then
+                    // the client hits EOF part-way through the promised Content-Length: a generation that
+                    // really did start and really did get cut off.
+                    client.Client.Shutdown(SocketShutdown.Send);
+                    await Task.Delay(50).ConfigureAwait(false); // let the FIN and the buffered bytes land
+                }
+                else
+                {
+                    // ResetBeforeResponding: an RST is exactly right here — nothing was ever answered, and
+                    // discarding the (empty) buffer is the point.
+                    client.LingerState = new LingerOption(true, 0);
                 }
 
-                client.LingerState = new LingerOption(true, 0); // RST, not a graceful close
                 client.Close();
             }
             catch { /* the client may already be gone */ }
