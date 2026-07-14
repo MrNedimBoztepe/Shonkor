@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Shonkor.Core.Interfaces;
+using Shonkor.Core.Models;
 using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Services;
 
@@ -40,51 +41,6 @@ namespace Shonkor.Tests;
 /// </summary>
 public class OllamaResiliencePolicyPlacementTests
 {
-    /// <summary>A stand-in Ollama that always fails transiently (503) and counts what reached it.</summary>
-    private sealed class FailingBackend : IDisposable
-    {
-        private readonly HttpListener _listener = new();
-        private int _requests;
-
-        public string Url { get; }
-        public int Requests => Volatile.Read(ref _requests);
-
-        public FailingBackend()
-        {
-            var port = FreePort();
-            Url = $"http://127.0.0.1:{port}";
-            _listener.Prefixes.Add($"{Url}/");
-            _listener.Start();
-            _ = Task.Run(Serve);
-        }
-
-        private async Task Serve()
-        {
-            while (_listener.IsListening)
-            {
-                HttpListenerContext ctx;
-                try { ctx = await _listener.GetContextAsync(); }
-                catch { return; } // listener stopped
-                Interlocked.Increment(ref _requests);
-                // 503 is transient by OllamaRetry's rules, so the call-site pipeline WILL retry it — which is
-                // exactly what makes the attempt count a readable signal.
-                ctx.Response.StatusCode = (int)HttpStatusCode.ServiceUnavailable;
-                ctx.Response.Close();
-            }
-        }
-
-        private static int FreePort()
-        {
-            var probe = new TcpListener(IPAddress.Loopback, 0);
-            probe.Start();
-            var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-            probe.Stop();
-            return port;
-        }
-
-        public void Dispose() { _listener.Close(); }
-    }
-
     /// <summary>The real web host — the registration under test — pointed at <paramref name="ollamaUrl"/>.</summary>
     private sealed class AppFactory(string ollamaUrl, string workspace) : WebApplicationFactory<Program>
     {
@@ -92,7 +48,9 @@ public class OllamaResiliencePolicyPlacementTests
         {
             Directory.CreateDirectory(workspace);
             builder.UseEnvironment("Production");
+            // Both typed clients carry the same trap, so both are pointed at the failing backend.
             builder.UseSetting("EmbeddingService:OllamaUrl", ollamaUrl);
+            builder.UseSetting("SemanticAnalyzer:OllamaUrl", ollamaUrl);
 
             builder.ConfigureServices(services =>
             {
@@ -112,7 +70,7 @@ public class OllamaResiliencePolicyPlacementTests
     [Fact]
     public async Task TheWebHost_MakesExactlyTheCallSitePolicysAttempts_SoNoSecondPolicyIsNestedOnTheHttpClient()
     {
-        using var backend = new FailingBackend();
+        using var backend = new FakeOllamaBackend(HttpStatusCode.ServiceUnavailable);
         var workspace = Path.Combine(Path.GetTempPath(), $"shonkor_resil_{Guid.NewGuid():N}");
         await using var factory = new AppFactory(backend.Url, workspace);
 
@@ -122,6 +80,28 @@ public class OllamaResiliencePolicyPlacementTests
         // The backend always 503s, so this exhausts the retry policy and then throws. The THROW is not the
         // point; the number of attempts it took to get there is.
         await Assert.ThrowsAnyAsync<Exception>(() => embedding.GenerateEmbeddingAsync("hello"));
+
+        Assert.Equal(OllamaResilience.BackgroundAttempts, backend.Requests);
+    }
+
+    /// <summary>
+    /// The <b>other</b> typed client, which carries exactly the same trap and which #179's guard did not cover
+    /// (#213). <c>AddHttpClient&lt;ISemanticAnalyzer, OllamaSemanticAnalyzer&gt;()</c> sits on the very next
+    /// line, so a handler policy added "to the Ollama clients" would land on both — and only one was watched.
+    /// </summary>
+    [Fact]
+    public async Task TheWebHosts_SemanticAnalyzerClient_IsAlsoFreeOfANestedPolicy()
+    {
+        using var backend = new FakeOllamaBackend(HttpStatusCode.ServiceUnavailable);
+        var workspace = Path.Combine(Path.GetTempPath(), $"shonkor_resil_{Guid.NewGuid():N}");
+        await using var factory = new AppFactory(backend.Url, workspace);
+
+        var analyzer = factory.Services.GetRequiredService<ISemanticAnalyzer>();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => analyzer.AnalyzeNodeAsync(new GraphNode
+        {
+            Id = "A", Name = "A", Type = "Class", Content = "class A {}", FilePath = "src/A.cs"
+        }));
 
         Assert.Equal(OllamaResilience.BackgroundAttempts, backend.Requests);
     }
