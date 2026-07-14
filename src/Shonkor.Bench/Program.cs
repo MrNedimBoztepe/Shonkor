@@ -348,14 +348,19 @@ if (compareRag)
         report.AppendLine("| Retriever | Avg tokens delivered | Coverage of the target symbol |");
         report.AppendLine("|-----------|---------------------:|------------------------------:|");
         report.AppendLine($"| chunked-RAG (no graph) | {rag.RagAvgTokens:N0} | {rag.RagCoverage:P1} |");
-        report.AppendLine($"| Shonkor capsule | {rag.ShonkorAvgTokens:N0} | {rag.ShonkorCoverage:P1} |");
+        report.AppendLine($"| Shonkor capsule — vector-only seeds (isolates the graph) | {rag.ShonkorAvgTokens:N0} | {rag.ShonkorCoverage:P1} |");
+        report.AppendLine($"| **Shonkor capsule — hybrid seeds (as shipped)** | {rag.ShonkorAvgTokens:N0} | **{rag.ShonkorHybridCoverage:P1}** |");
         report.AppendLine();
         report.AppendLine($"Seed survival (fraction of semantic seed nodes still present in the delivered capsule after budgeting): **{rag.ShonkorSeedSurvival:P1}**.");
         report.AppendLine();
-        var covDelta = (rag.ShonkorCoverage - rag.RagCoverage) * 100;
+        report.AppendLine($"Vector-only misses where the target was **never a seed** (a retrieval miss, not a budget casualty): **{rag.SeedMissedTarget}** of {rag.Queries}.");
+        report.AppendLine();
+        // The verdict is read off the SHIPPED path (hybrid seeds). The vector-only arm stays in the table
+        // because it isolates the graph's contribution, but it is not what a user runs (#162).
+        var covDelta = (rag.ShonkorHybridCoverage - rag.RagCoverage) * 100;
         report.AppendLine(covDelta >= 0
-            ? $"→ At ~equal tokens, Shonkor covers the target **+{covDelta:F1} pp** more often ({rag.ShonkorCoverage:P0} vs {rag.RagCoverage:P0}) — and delivers it as a structured capsule (call graph + signatures), not raw chunks."
-            : $"→ At ~equal tokens, chunked-RAG covers **{-covDelta:F1} pp** more ({rag.RagCoverage:P0} vs {rag.ShonkorCoverage:P0}); Shonkor's edge here is structure (call graph + signatures), not raw recall.");
+            ? $"→ At ~equal tokens, Shonkor (as shipped, hybrid seeds) covers the target **+{covDelta:F1} pp** more often ({rag.ShonkorHybridCoverage:P0} vs {rag.RagCoverage:P0}) — and delivers it as a structured capsule (call graph + signatures), not raw chunks."
+            : $"→ At ~equal tokens, chunked-RAG covers **{-covDelta:F1} pp** more ({rag.RagCoverage:P0} vs {rag.ShonkorHybridCoverage:P0}); Shonkor's edge here is structure (call graph + signatures), not raw recall.");
     }
     report.AppendLine();
 }

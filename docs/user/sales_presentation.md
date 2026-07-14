@@ -46,9 +46,16 @@ Every number below is **measured, dated, and reproducible with a command we ship
 | **Token reduction** | **75,9 %** | Budget-aware capsule vs. dumping the *same retrieved subgraph* in full — the fair baseline, **not** your whole repo. 481 539 → 115 978 tokens over 7 queries. `Shonkor.Bench` |
 | **Retrieval — exact name** | **P@1 0,945 / Recall@10 0,998** (hybrid) | 200 self-retrieval cases. Keyword alone: 0,890 / 0,991. |
 | **Retrieval — plain-English intent** | **Recall@10 0,182 → 0,788** (keyword → hybrid) | 33 hand-labeled queries, machine-checked for circularity. Keyword search finds the answer in the top ten **less than 1 time in 5**; hybrid, **4 times in 5**. |
+| **vs. naive chunked RAG** | **93,9 %** vs **87,9 %** coverage | Head-to-head at a **matched token budget** against chunk retrieval with no graph. `--compare-rag` |
 | **Database footprint** | **20,1 MB** | Local SQLite, embeddings included. Sized for your machine — not for your Git history. |
 
-> **What we do not claim.** At a *matched token budget*, naive chunked RAG covers the target symbol **slightly more often** than Shonkor's capsule (87,9 % vs 84,8 %) — both run the same embedding search, and "is the text in the blob" is a low bar that raw chunks clear by brute force. We publish that number in the README because a benchmark you only show when it flatters you is not a benchmark. Shonkor's advantage is not covering the target more often; it is the **edges** — the call graph, the exact signatures, the blast radius. *"What breaks if I change this?"* is a question a chunk retriever cannot answer **at any budget**, because it has no edges.
+> **How we read our own head-to-head.** Two caveats we publish rather than bury.
+>
+> **One:** seeded by *vector search alone*, Shonkor's capsule scores **84,8 %** — it **loses** to the baseline. That configuration isolates the graph's contribution, and it is in the README. It is not what ships: the product seeds from **hybrid** retrieval, which is where the 93,9 % comes from. Our own benchmark had been handicapping us against ourselves.
+>
+> **Two:** the baseline is vector-only and our winning row is hybrid. That is the conventional "naive RAG" setup, but a fair critic would want the chunks to get a keyword arm too. That comparison is an open ticket, not a settled result.
+>
+> And coverage is the *low* bar regardless: it only asks whether the target's text is somewhere in the blob. The reason to buy Shonkor is not six percentage points — it is the **edges**. *"What breaks if I change this?"* is a question a chunk retriever cannot answer **at any budget**, because it has none.
 
 ---
 

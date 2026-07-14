@@ -4,10 +4,17 @@
 # neither declared in src/ nor listed here. It exists because arc42 described `PluginLoader` -- a
 # DELETED class -- as compiling plugins at runtime, i.e. it advertised a removed RCE surface.
 #
-# Adding a name here asserts "this is legitimately not a Shonkor type".
-# NEVER add a name here to silence a genuinely stale doc. Fix the doc instead.
+# ENFORCED RULES (#164). These are checked by the build, not left to your good intentions:
+#   1. Every entry MUST sit under a [category] header. An entry outside a category fails.
+#   2. Every entry MUST carry a "# reason" comment. A bare name fails.
+#   3. A [deliberately-removed] entry MUST still be described as removed somewhere in the docs --
+#      the guard requires the name to appear near "removed"/"deleted"/"no longer"/"has been".
+#      Delete that prose and the entry stops being honest, so the build breaks.
+#
+# The point: you cannot turn a red build green by appending a name. Fix the doc instead.
 
-# --- .NET / third-party types the docs reference by name ---
+[external-types]
+# .NET / third-party types the docs reference by name. Not ours, so they cannot be declared in src/.
 AssemblyLoadContext      # System.Runtime.Loader - the collectible context plugins load into
 BackgroundService        # Microsoft.Extensions.Hosting - base class of the enrichment worker
 IConfiguration           # Microsoft.Extensions.Configuration
@@ -17,15 +24,18 @@ SemanticModel            # Microsoft.CodeAnalysis (Roslyn) - exact C# symbol res
 CSharpCompilation        # Microsoft.CodeAnalysis.CSharp (Roslyn)
 ReplaceSyntaxTree        # Microsoft.CodeAnalysis method used by the incremental check_edit path
 
-# --- Documentation placeholders (illustrative names in examples, not real symbols) ---
+[placeholders]
+# Illustrative names in worked examples. They are supposed not to exist.
 Foo                      # llm_integration.md worked example
 Bar                      # llm_integration.md worked example
 NewSpecializedParser     # setup_guide.md: "how to write your own parser" example
 
-# --- Environment / config values, not types ---
+[config-values]
+# Environment / configuration values that look like a type but are not.
 Development              # ASP.NET environment name (the loopback-bypass gate)
 
-# --- Deliberate historical references: named BECAUSE they were removed ---
-PluginLoader             # 05_building_block_view.md states this runtime-compilation path HAS BEEN REMOVED.
-                         # It must stay documented as gone; a security reviewer needs to know the RCE
-                         # surface is not merely undocumented but absent.
+[deliberately-removed]
+# Named BECAUSE they are gone. Rule 3 verifies the docs still SAY so -- if that prose is ever
+# deleted, this entry is no longer legitimate and the build fails.
+PluginLoader             # the runtime C#-source-compilation plugin path, an RCE surface. A security
+                         # reviewer must be able to learn it is absent, not merely undocumented.
