@@ -79,16 +79,49 @@ public class OllamaFailureShapeTests
         Assert.True(OllamaRetry.IsTransient(ex));
     }
 
+    /// <summary>
+    /// The #215 bug, pinned against a real socket rather than a hand-built exception.
+    ///
+    /// <para>
+    /// <b>The first assertion below can pass for the wrong reason (#240), so the fixture is checked first.</b>
+    /// #215's whole point was that a real <c>HttpClient</c> timeout <i>buries a <see cref="SocketException"/></i>
+    /// at the bottom of the chain, which the old chain-scan then mistook for a connection failure. Whether that
+    /// <c>SocketException</c> is actually there depends on how the platform tears the socket down on
+    /// cancellation. If a platform produced a bare <c>TaskCanceledException</c> with no socket error inside,
+    /// <c>IsConnectError</c> would return <c>false</c> <b>without ever reaching the code path #215 broke</b> —
+    /// a green guard, guarding nothing.
+    /// </para>
+    /// <para>
+    /// So we assert that the provoked exception still has the #215 <i>shape</i> before asserting the verdict on
+    /// it. If a future runtime stops burying the socket error, this fails loudly and says so, instead of
+    /// quietly becoming decorative.
+    /// </para>
+    /// </summary>
     [Fact]
     public async Task ATimeout_IsNotAConnectError_ButIsStillTransient()
     {
-        // The #215 bug, pinned against a real socket rather than a hand-built exception.
         using var hung = FakeOllamaBackend.ThatNeverResponds();
 
         var ex = await Provoke(hung.Url, TimeSpan.FromSeconds(2));
 
+        // The fixture must still reproduce the shape the bug lived in, or the assertions below prove nothing.
+        var hasBuriedSocketError = false;
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is SocketException) { hasBuriedSocketError = true; break; }
+        }
+        Assert.True(hasBuriedSocketError,
+            $"a real HttpClient timeout is supposed to bury a SocketException in its chain — that is the whole " +
+            $"trap #215 fell into. This one did not ({string.Join(" -> ", Chain(ex))}), so the assertions below " +
+            $"would pass without exercising the classifier at all. The guard has lost its teeth: re-derive it.");
+
         Assert.False(OllamaRetry.IsConnectError(ex), "we DID reach the backend — it just never answered");
         Assert.True(OllamaRetry.IsTransient(ex), "background work should still retry a timeout");
+    }
+
+    private static IEnumerable<string> Chain(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException) yield return e.GetType().Name;
     }
 
     /// <summary>
