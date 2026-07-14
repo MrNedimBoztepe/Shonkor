@@ -92,7 +92,7 @@ Since the Web dashboard serves requests in parallel, `SqliteGraphStorageProvider
 
 Shonkor is primarily local but supports a multi-tenant/SaaS mode:
 * **API keys / user tokens** are stored **SHA-256 hashed** (`TokenHasher`), never in plaintext; `projects.json` holds only the hash. Presented keys are hashed and compared in constant time (`CryptographicOperations.FixedTimeEquals`). Legacy plaintext is migrated to a hash on load (self-healing), and a new user's token is returned only **once** at creation. The loopback bypass is only active in `Development` (otherwise, authentication behind a proxy collapses).
-* **Plugins** are an RCE vector: runtime compilation is opt-in (`Security:EnablePlugins`) and loads into an unloadable `AssemblyLoadContext`.
+* **Plugins** are **pre-built assemblies**, not compiled source. `PluginRegistry` validates the `plugin.json` manifest + host-API version and extracts the ZIP (zip-slip guarded); `AssemblyPluginLoader` loads **only Active** plugins into a collectible `AssemblyLoadContext`. Installing a plugin **runs nothing** — per-plugin **activation** is the trust gate, and it is equivalent to executing that plugin's code. The former runtime C#-source-compilation path (the actual RCE vector) **has been removed**. `Security:EnablePlugins` is a global kill switch that **defaults to ON** (`=false` hard-disables all plugin loading); it is *not* the opt-in gate it used to be.
 * **Webhooks** verify `X-Hub-Signature-256` (HMAC) and sanitize repository names against path traversal.
 * Error responses disclose **no** internal details/paths; details are logged exclusively in the server log.
 

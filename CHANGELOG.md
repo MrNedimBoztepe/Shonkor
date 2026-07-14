@@ -5,6 +5,24 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — The docs described a security model we no longer have (#153)
+- **Three places claimed plugins are compiled from source at runtime** — an RCE surface that was **removed**
+  when plugins became pre-built, installed assemblies. `docs/user/setup_guide.md`, `arc42/08_concepts.md` and
+  `arc42/05_building_block_view.md` all still described `PluginLoader` / Roslyn runtime compilation.
+- Worse, two of them described **`Security:EnablePlugins` as an opt-in that defaults to OFF** ("disabled by
+  default; only activate consciously"). It is in fact a **kill switch that defaults to ON**
+  (`EndpointHelpers.PluginsEnabled` → `GetValue("Security:EnablePlugins", true)`). A reader following the old
+  docs would believe plugin loading was disabled on their machine when it was enabled. Corrected everywhere,
+  and the *real* trust gate is now named explicitly: **per-plugin activation** — installing runs nothing,
+  activating is equivalent to executing that plugin's code.
+- **`arc42/05_building_block_view.md` rewritten** against the current code. It also gained the building block
+  the chapter was missing: **`Core.Services.HybridRetrieval`**, the single retrieval entry point that the
+  `search_hybrid` tool, `generate_capsule` seeding, `/api/search/hybrid` and `/api/capsule` all delegate to —
+  written down as an invariant, because these four sites previously held three drifting copies and a fifth
+  copy would be a defect. Also corrected: the MCP surface is an `IMcpTool` registry (not a monolithic
+  `McpServer`), `VectorMath` lives in Infrastructure, `StandardPlugins/` no longer exists, and
+  `Shonkor.Bench` supersedes `Shonkor.Eval`/`Shonkor.Benchmarks`.
+
 ### Fixed — The README's benchmark numbers were stale (#152)
 - The vector/hybrid retrieval rows said *"nightly gate"* instead of a figure: the README argued that keyword
   search fails on plain-English intent and that hybrid retrieval is the fix — then never showed the number

@@ -178,7 +178,7 @@ Shonkor is primarily a **local** tool. For proxy/SaaS operation, please note:
   SaaS__TenantRoot=C:\Projects\SaaS   # optional
   ```
 * **Loopback Bypass**: The local dashboard is only allowed to bypass the API key in `Development`. In production (behind a proxy), a valid key is always required. Override: `Security:AllowLocalBypass`.
-* **Dynamic Plugins (RCE Risk)**: The runtime compilation of C# plugins is **disabled by default**. Only activate consciously via `Security:EnablePlugins=true`; the plugin wizard endpoint is additionally restricted to local/Development access.
+* **Plugins**: A plugin is a **pre-built assembly** installed from a ZIP, and it is **inert until you explicitly activate it** — installing one runs nothing. There is **no runtime compilation of plugin source** (that path, an arbitrary-code-execution surface, has been removed). The trust gate is **per-plugin activation** (`shonkor plugin activate <id>`), so treat activating a plugin like running its code — because you are. `Security:EnablePlugins` is a **kill switch that defaults to ON**: set `Security:EnablePlugins=false` to hard-disable loading *every* plugin regardless of its activation state. Plugin state changes over the web API are loopback-only.
 * **File System Browser**: `/api/browse` is only accessible locally/in Development (`Security:AllowFilesystemBrowse`).
 * **Webhooks**: `/api/webhooks/github/*` verify `X-Hub-Signature-256` (HMAC-SHA256) against `GitHub:WebhookSecret` and fail without a secret (fail-closed).
 
