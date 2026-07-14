@@ -5,6 +5,21 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — The README's benchmark numbers were stale (#152)
+- The vector/hybrid retrieval rows said *"nightly gate"* instead of a figure: the README argued that keyword
+  search fails on plain-English intent and that hybrid retrieval is the fix — then never showed the number
+  proving it. **Now measured and pinned** (2026-07-14, `nomic-embed-text`, 3.529 nodes): on 33 hand-labeled
+  English queries, Recall@10 goes **0,212 (keyword) → 0,879 (hybrid)** and Precision@1 **0,121 → 0,455**.
+  Hybrid is also the best on exact names (P@1 **0,935** vs 0,895 for keyword alone), so it is not a trade-off.
+- **Two published numbers were simply wrong** on the current graph and are corrected:
+  - Plain-English keyword retrieval was published as **0 % P@1 / 12 % Recall@10**; it actually measures
+    **12,1 % / 21,2 %**. The "keyword search is *useless* at intent" framing overstated the case.
+  - Token reduction was published as **85,7 %** (931.030 → 133.423); on the current graph it measures
+    **96,2 %** (1.999.242 → 76.058 over 7 queries).
+- Both runs are checked in as `bench/metrics-exactname.json` and `bench/metrics-agent-queries.json`, so the
+  tables are traceable to raw harness output rather than an ad-hoc local run (`bench/metrics.json` and
+  `bench/report.md` are per-run scratch output and remain gitignored).
+
 ### Added — MCP security hardening (TICKET-209, #103)
 - **Path containment on every file-taking tool.** `McpToolHelpers.TryResolveContainedPath` resolves a
   caller-supplied path against the project base with `Path.GetRelativePath` and rejects any `..` escape or
