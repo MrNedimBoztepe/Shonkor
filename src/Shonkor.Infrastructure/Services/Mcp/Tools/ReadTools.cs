@@ -167,13 +167,30 @@ public sealed class OutlineTool : IMcpTool
             throw McpToolException.FileNotIndexed(ToHandle(fileId, basePath));
         }
 
-        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { fileId }, 2).ConfigureAwait(false);
-        var byId = nodes.ToDictionary(n => n.Id);
-        var children = new Dictionary<string, List<string>>();
-        foreach (var e in edges.Where(e => e.Relationship == "CONTAINS"))
+        // Walk CONTAINS specifically, breadth-first from the file, rather than pulling a generic n-hop
+        // subgraph. Two reasons, both introduced by the markdown nesting (#112):
+        //   - Depth: a `###` is now file → h1 → h2 → h3, so a fixed 2-hop fetch simply MISSED it. The tree can
+        //     be six levels deep, and raising the hop count on a generic subgraph would drag in the file's
+        //     whole reference neighbourhood at every level — expensive, and none of it is outline material.
+        //   - Precision: outline only ever renders CONTAINS. Fetching other edge types was always waste.
+        // The walk is bounded by the containment tree itself, which is exactly what we are rendering.
+        var byId = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
+        var children = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal) { fileId };
+        var frontier = new Queue<string>();
+        frontier.Enqueue(fileId);
+
+        while (frontier.Count > 0)
         {
-            if (!children.TryGetValue(e.SourceId, out var list)) children[e.SourceId] = list = new();
-            list.Add(e.TargetId);
+            var current = frontier.Dequeue();
+            var (incident, neighbours) = await storage.GetIncidentEdgesAsync(current).ConfigureAwait(false);
+            foreach (var e in incident.Where(e => e.Relationship == "CONTAINS" && e.SourceId == current))
+            {
+                if (neighbours.TryGetValue(e.TargetId, out var child)) byId[e.TargetId] = child;
+                if (!children.TryGetValue(current, out var list)) children[current] = list = new();
+                list.Add(e.TargetId);
+                if (seen.Add(e.TargetId)) frontier.Enqueue(e.TargetId);
+            }
         }
 
         var sb = new System.Text.StringBuilder();

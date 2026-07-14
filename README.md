@@ -31,7 +31,7 @@ The result: ask *"how are API tokens hashed?"* and you get `TokenHasher.cs`. Ask
 Every figure below comes from one reproducible harness (`src/Shonkor.Bench`). **Reproduce them exactly** — this is the graph the numbers are measured on, no hidden enrichment step:
 
 ```powershell
-shonkor index . --embed                                                  # → 231 files, 2.071 nodes, 5.152 edges
+shonkor index . --embed                                                  # → 235 files, 2.131 nodes, 5.271 edges
 dotnet run --project src/Shonkor.Bench -- shonkor.db                     # token reduction + exact-name retrieval
 dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/agent-queries.json --compare-rag
 ```
@@ -49,30 +49,30 @@ Two metrics, both simple:
 | Search | Top hit correct | Found in top 10 |
 |---|--:|--:|
 | Keyword (FTS5) | 89,0 % | 99,1 % |
-| Vector only | 90,5 % | 98,8 % |
-| **Hybrid** (keyword + vector) | **94,5 %** | **99,8 %** |
+| Vector only | 89,5 % | 98,8 % |
+| **Hybrid** (keyword + vector) | **93,0 %** | **99,8 %** |
 
 **You describe what you mean** — *"where do we hash API tokens?"* *(33 hand-labeled queries)*
 
 | Search | Top hit correct | Found in top 10 |
 |---|--:|--:|
 | Keyword (FTS5) | 9,1 % | 18,2 % |
-| Vector only | 48,5 % | 69,7 % |
-| **Hybrid** (keyword + vector) | **48,5 %** | **78,8 %** |
+| Vector only | 48,5 % | 72,7 % |
+| **Hybrid** (keyword + vector) | **48,5 %** | **81,8 %** |
 
 **What this means, in one line:** keyword search is excellent when you know the name and **falls apart when you don't** — it finds the answer in the top ten less than **1 time in 5**. Fuse it with vector similarity (Reciprocal Rank Fusion) and that becomes **4 times in 5**.
 
-**18 % → 79 % recall** on the questions people actually ask. And hybrid doesn't trade that off: it is *also* the best on exact names (**94,5 %** top-hit vs. 89,0 % for keyword alone). You never pick a mode — you get the better one.
+**18 % → 82 % recall** on the questions people actually ask. And hybrid doesn't trade that off: it is *also* the best on exact names (**93,0 %** top-hit vs. 89,0 % for keyword alone). You never pick a mode — you get the better one.
 
 *(Both sets are machine-checked for circularity, so a query can never secretly contain its own answer — see `--check-circularity`.)*
 
 ### 2. How much context does it save?
 
-**481.539 → 115.978 tokens across 7 queries — 75,9 % fewer.**
+**450.328 → 116.511 tokens across 7 queries — 74,1 % fewer.**
 
 **What this means:** Shonkor finds the relevant part of your graph, then instead of dumping every file it touched, it sends a **budgeted capsule** — the direct hits in full, the surrounding context ranked by structural closeness, and hub nodes capped so one popular class can't blow up the prompt.
 
-> **Measured honestly.** That 75,9 % is against dumping *the same retrieved subgraph* in full — **not** against your whole repo. A "we save 95 % vs. your entire codebase" claim compares against a prompt nobody would ever send, and we won't make it. Every number here is DB-dependent and will differ on your codebase — which is exactly why the harness ships with the tool instead of only the results.
+> **Measured honestly.** That 74,1 % is against dumping *the same retrieved subgraph* in full — **not** against your whole repo. A "we save 95 % vs. your entire codebase" claim compares against a prompt nobody would ever send, and we won't make it. Every number here is DB-dependent and will differ on your codebase — which is exactly why the harness ships with the tool instead of only the results.
 
 ### 3. Does it beat plain vector RAG?
 
@@ -80,9 +80,9 @@ Head-to-head against **chunked RAG with no graph**, at a **matched token budget*
 
 | At ~equal tokens | Tokens delivered | Covers the target symbol |
 |---|--:|--:|
-| chunked-RAG (no graph) | 8.660 | 87,9 % |
-| Shonkor capsule — *vector-only seeds* | 8.940 | 84,8 % |
-| **Shonkor capsule — as shipped** | 8.940 | **93,9 %** |
+| chunked-RAG (no graph) | 9.065 | 87,9 % |
+| Shonkor capsule — *vector-only seeds* | 9.296 | 84,8 % |
+| **Shonkor capsule — as shipped** | 9.296 | **93,9 %** |
 
 **+6,1 pp** over the no-graph baseline — and there's a story in the middle row worth telling.
 
