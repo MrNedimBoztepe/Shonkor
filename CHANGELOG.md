@@ -5,32 +5,25 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
-### Fixed — `TokenBudget.Estimate` silently under-counted hashes, base64 and GUIDs by up to 2,75× (#173)
-- `Estimate` gates when a Markdown section splits and how much of a body gets embedded, and its whole safety
-  argument was that it is **conservative** — it over-counts, so a section splits early rather than being handed
-  to the backend and silently truncated. That claim was never measured. Checked against the real
-  `bert-base-uncased` WordPiece tokenizer (the one `nomic-embed-text` actually uses) it turned out to be
-  **false for whole input classes**.
-- The `4 chars ≈ 1 token` rule assumes text compresses like English words. Out-of-vocabulary alphanumeric runs
-  do not — a real tokenizer shreds them to ~1,5 chars/token. Measured under-counts: **base64 2,75×**, **GUIDs
-  2,2×**, **hex digests 2,0×**. A section of base64 therefore passed a 1000-token budget check while really
-  costing ~2750 tokens — over the 2048-token window, and silently truncated. Exactly the bug #111 was written
-  to remove, still live for these classes.
-- **The fix:** a run containing a digit (or longer than 40 chars — a backstop for digit-free blobs like minified
-  JS) is charged **one token per character**, the WordPiece worst case, so it can never be optimistic. Prose and
-  code costs are deliberately left untouched: a paired re-index proves the graph is **bit-for-bit identical**
-  (2264 nodes / 5634 edges before and after), so section splitting — and the pinned retrieval numbers — do not
-  move.
-- **The invariant is now stated, not assumed.** A strict "never under-counts" bound is unachievable at a usable
-  price: an out-of-vocabulary identifier costs ~2 chars/token (`Rrf` → 2 real tokens, `Ollama` → 3) while real
-  words cost ~4, so charging every run at the worst case would over-count English prose ~2,5× and over-split it,
-  diluting retrieval — a worse bug than the one being fixed. What the design actually relies on is a **bounded**
-  under-count (`UnderCountSafetyFactor = 2`) plus budgets sized to absorb it (`SectionBudgetTokens × 2 ≤
-  ModelWindowTokens`). Both halves are now explicit constants and both are pinned by tests.
-- Validated against **two** real tokenizers — the vendored `bert-base-uncased` vocab and cl100k — over a corpus
-  of prose, CJK, fenced code, tables, hex, base64, GUIDs, URLs and whole real source files, so the result does
-  not hinge on one vocabulary's quirks. Mutation-verified: reverting the digit rule fails exactly the classes it
-  was added for.
+### Changed — The file-symlink escape test no longer passes green while exercising nothing (#182)
+- #104's **file**-symlink containment test cannot build its attack on an unprivileged Windows box (a file
+  symlink needs Developer Mode/admin there; junctions are directory-only). #180 handled that with a bare
+  `return` — so on Windows the test **passed green having checked nothing**, which for a *security* test reads
+  as an all-clear. The same failure mode #180 was careful to avoid for the directory case, reintroduced for the
+  file case by the back door.
+- **Confirmed the coverage actually exists** before trusting it: no `CI_RUNNER` variable is set and the last CI
+  run really did execute on `ubuntu-latest`, where `File.CreateSymbolicLink` needs no privilege. So the escape
+  *is* verified — but only on Linux, and only by assumption.
+- That assumption is now a **test**. `CiWorkflowContractTests` pins that `ci.yml`'s default runner stays a Linux
+  image, that the job actually runs the test project, and that it does so **unfiltered**. Flip the default to a
+  Windows image — or add a `--filter` — and the build fails saying the #104 escape has become untested
+  everywhere. **Mutation-verified** on both.
+- The test itself is now honest about where it does and doesn't run: on Linux/macOS a symlink it cannot create
+  is a **hard failure** (the case must run for real there), and on unprivileged Windows it reports a genuine
+  **skip**, so the gap appears in the test count instead of hiding inside a pass.
+- Correcting #180 on the way: it blamed the plain `return` on `xunit.assert` predating 2.8. Wrong diagnosis —
+  the pinned `xunit.assert` **is** 2.9.3 and still has no `Assert.Skip`, because dynamic skip is a xunit **v3**
+  feature. On v2 it needs `Xunit.SkippableFact`, now a test-only dependency.
 
 ### Changed — The zero-copy vector read's endianness assumption is now explicit and guarded (#129)
 - The semantic-search hot path reinterprets each stored embedding blob AS `float[]` in place via
