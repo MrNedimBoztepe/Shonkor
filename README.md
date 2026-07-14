@@ -37,32 +37,45 @@ dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/agent-qu
 
 It writes `bench/report.md` (for you) and `bench/metrics.json` (for CI).
 
+<sub>Measured **2026-07-14** on `shonkor.db` (3.529 nodes, 9.912 edges). Vector/hybrid rows use **Ollama `nomic-embed-text`** (768-dim) — swap the model and the numbers move. Checked in: [`bench/metrics-exactname.json`](bench/metrics-exactname.json) and [`bench/metrics-agent-queries.json`](bench/metrics-agent-queries.json) — the raw harness output these tables are read from.</sub>
+
 ### 1. Does it find the right thing?
 
 Two metrics, both simple:
 * **Top hit correct** = how often the *very first* result is the one you wanted. *(Precision@1)*
 * **Found in top 10** = how often the right answer is *somewhere* in the first ten. *(Recall@10)*
 
-| You search by… | Top hit correct | Found in top 10 |
+**You already know the name** — `SqliteGraphStorageProvider` *(200 cases)*
+
+| Search | Top hit correct | Found in top 10 |
 |---|--:|--:|
-| **Exact symbol name** (`SqliteGraphStorageProvider`) — keyword search | **90 %** | **99 %** |
-| **Plain-English intent** ("where do we hash tokens?") — keyword search alone | **0 %** | 12 % |
+| Keyword (FTS5) | 89,5 % | 98,1 % |
+| Vector only | 44,0 % | 97,6 % |
+| **Hybrid** (keyword + vector) | **93,5 %** | **98,7 %** |
 
-**What this means:** if you already know the name, plain keyword search nails it 9 times out of 10. If you describe what you *mean*, keyword search is **useless** — 0 % top-hit.
+**You describe what you mean** — *"where do we hash API tokens?"* *(33 hand-labeled queries)*
 
-That gap is exactly why Shonkor doesn't stop at keywords. It fuses keyword + **vector similarity** (Reciprocal Rank Fusion) so intent-phrased questions land on the right symbol. Those rows need a local embedding backend and are measured in a nightly CI gate, so we don't pin a flattering number here we can't reproduce on your machine.
+| Search | Top hit correct | Found in top 10 |
+|---|--:|--:|
+| Keyword (FTS5) | 12,1 % | 21,2 % |
+| Vector only | 36,4 % | 81,8 % |
+| **Hybrid** (keyword + vector) | **45,5 %** | **87,9 %** |
 
-*(200 auto-generated exact-name cases + 33 hand-labeled English queries, machine-checked for circularity so a query can never secretly contain its own answer.)*
+**What this means, in one line:** keyword search is great when you know the name and **falls apart when you don't** — it finds the answer in the top ten only **1 time in 5**. Fuse it with vector similarity (Reciprocal Rank Fusion) and that becomes **9 times in 10**.
+
+That's the whole product in one number: **21 % → 88 % recall** on the questions people actually ask. And hybrid doesn't trade that off — it's also **the best on exact names** (93,5 % vs. 89,5 % for keyword alone). You don't pick a mode. You just get the better one.
+
+*(Both sets are machine-checked for circularity, so a query can never secretly contain its own answer — see `--check-circularity`.)*
 
 ### 2. How much context does it save?
 
-**931.030 → 133.423 tokens across 7 queries — 85,7 % fewer.**
+**1.999.242 → 76.058 tokens across 7 queries — 96,2 % fewer.**
 
 **What this means:** Shonkor finds the relevant part of your graph, then instead of dumping every file it touched, it sends a **budgeted capsule** — the direct hits in full, the surrounding context ranked by structural closeness, and hub nodes capped so one popular class can't blow up the prompt.
 
-Same question answered, roughly **one seventh** of the tokens.
+Those 7 queries pull in **170–990 nodes** each. Dumped raw, that's ~2 M tokens you'd pay for. Budgeted, it's 76 K — and the answer is still in there.
 
-> **Measured honestly.** That 85,7 % is against dumping *the same retrieved subgraph* in full — **not** against your whole repo. A "we save 95 % vs. your entire codebase" claim compares against a prompt nobody would ever send. We don't do that. Every number is DB-dependent — it will differ on your codebase, which is why the harness ships with the tool.
+> **Measured honestly.** That 96,2 % is against dumping *the same retrieved subgraph* in full — **not** against your whole repo. A "we save 95 % vs. your entire codebase" claim compares against a prompt nobody would ever send, and we won't make it. Every number here is DB-dependent and will differ on your codebase — which is exactly why the harness ships with the tool instead of only the results.
 
 ---
 
