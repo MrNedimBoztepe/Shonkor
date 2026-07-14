@@ -223,6 +223,12 @@ public sealed class McpRequestHandler
             {
                 return SendError(id, -32601, $"Tool not found: '{toolName}'");
             }
+
+            // #105: containment is enforced HERE, once, before the tool runs — not by each tool remembering
+            // to call the guard. Every declared path argument is resolved (symlinks included, #104) and
+            // checked against the project root; an escape aborts the call and the tool never executes.
+            ContainPathArguments(tool, args);
+
             return await tool.ExecuteAsync(id, args, _ctx).ConfigureAwait(false);
         }
         catch (McpToolException ex)
@@ -254,6 +260,52 @@ public sealed class McpRequestHandler
             return SendToolError(id,
                 $"Tool '{toolName}' failed to execute ({ex.GetType().Name}). This is a server-side failure, not a bad argument — see the server log for details. Try a different approach or a narrower query.",
                 McpErrorCode.ToolFailed);
+        }
+    }
+
+    /// <summary>
+    /// Resolves and contains every path argument the tool declares (#105), rewriting each in place with its
+    /// vetted absolute form. Throws <see cref="McpToolException"/> (<c>path_outside_root</c>, a -32602
+    /// argument error) the moment one escapes the project root — so the tool is never entered at all.
+    /// <para>
+    /// Rewriting matters as much as checking: the tool must open <b>the path this gate approved</b>. Handing
+    /// back the caller's original string and trusting the tool to re-resolve it identically is how the check
+    /// and the open drift apart.
+    /// </para>
+    /// </summary>
+    private void ContainPathArguments(IMcpTool tool, JsonObject? args)
+    {
+        if (args is null || tool.PathArguments.Count == 0) return;
+
+        var basePath = _ctx.GetProjectBasePath(args["projectName"]?.ToString());
+
+        foreach (var name in tool.PathArguments)
+        {
+            if (args[name] is not { } node) continue;
+
+            if (node is JsonArray array)
+            {
+                for (var i = 0; i < array.Count; i++)
+                {
+                    if (array[i]?.ToString() is { Length: > 0 } item)
+                    {
+                        array[i] = Contain(item, basePath);
+                    }
+                }
+            }
+            else if (node.ToString() is { Length: > 0 } single)
+            {
+                args[name] = Contain(single, basePath);
+            }
+        }
+
+        static string Contain(string raw, string? basePath)
+        {
+            if (!McpToolHelpers.TryResolveContainedPath(raw, basePath, out var resolved, out var error))
+            {
+                throw new McpToolException(McpErrorCode.PathOutsideRoot, error!, isArgumentError: true);
+            }
+            return resolved;
         }
     }
 

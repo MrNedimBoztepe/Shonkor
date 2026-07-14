@@ -292,19 +292,81 @@ public static class McpToolHelpers
             return false;
         }
 
+        // #104: GetFullPath normalizes LEXICALLY — it collapses "..", but it does not follow symlinks. A link
+        // inside the tree pointing outside it is therefore lexically contained, passes this gate, and is then
+        // read straight through. Resolve both sides to their real locations BEFORE comparing, or the guard is
+        // decorative.
+        var realFull = ResolveSymlinks(full);
+        var realRoot = ResolveSymlinks(rootFull);
+
         // GetRelativePath returns "." when equal to the root, a "..\\…" prefix when the target escapes it,
         // and a rooted path when on another drive — all of which mean "outside", so admit only paths whose
         // relative form neither starts with ".." nor is itself rooted.
-        var rel = System.IO.Path.GetRelativePath(rootFull, full);
+        var rel = System.IO.Path.GetRelativePath(realRoot, realFull);
         if (rel == ".." || rel.StartsWith(".." + System.IO.Path.DirectorySeparatorChar, StringComparison.Ordinal)
             || rel.StartsWith("../", StringComparison.Ordinal) || System.IO.Path.IsPathRooted(rel))
         {
+            // Name the CONFIGURED root, not the symlink-resolved one: the caller needs to know what IS
+            // allowed (TICKET-209 chose this deliberately — a bare "denied" just makes an agent guess again),
+            // and it is the configured root they reason about. Leaking the root's own link target would tell
+            // them something they did not ask for and cannot use.
             error = $"Path '{raw}' resolves outside the project root '{rootFull}' — only files within the project may be accessed.";
             return false;
         }
 
-        fullPath = full;
+        // Hand back the REAL path, not the lexical one: a caller that then opens it must open the same file
+        // this gate approved. Returning the pre-resolution path would re-open the very gap just closed.
+        fullPath = realFull;
         return true;
+    }
+
+    /// <summary>
+    /// Returns <paramref name="full"/> with every symlink on the way resolved to its real target (#104).
+    ///
+    /// <para>
+    /// Resolution is <b>component by component</b>, and that is the whole point. Resolving only the leaf is
+    /// not enough: if <c>&lt;root&gt;/docs</c> is a link to <c>/etc</c>, then <c>&lt;root&gt;/docs/passwd</c>
+    /// is a perfectly ordinary file — <b>it</b> is not a link, so a leaf-only check finds nothing to resolve
+    /// and happily reports the path as contained. The escape hides in the <i>directory</i>, not the file.
+    /// </para>
+    ///
+    /// <para>
+    /// Components that do not exist yet are left as-is: there is no link to follow, and a tool may legitimately
+    /// name a file it is about to create. A component we cannot stat (permissions) is also left lexical —
+    /// failing closed on an unreadable directory would break ordinary use, and the containment check that
+    /// follows still runs on whatever we did resolve.
+    /// </para>
+    /// </summary>
+    public static string ResolveSymlinks(string full)
+    {
+        if (string.IsNullOrEmpty(full)) return full;
+
+        var root = System.IO.Path.GetPathRoot(full) ?? string.Empty;
+        var rest = full[root.Length..]
+            .Split(new[] { System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar },
+                   StringSplitOptions.RemoveEmptyEntries);
+
+        var current = root.Length > 0 ? root : System.IO.Path.DirectorySeparatorChar.ToString();
+
+        foreach (var part in rest)
+        {
+            current = System.IO.Path.Combine(current, part);
+            try
+            {
+                FileSystemInfo? info = Directory.Exists(current) ? new DirectoryInfo(current)
+                                     : File.Exists(current) ? new FileInfo(current)
+                                     : null;
+                if (info?.ResolveLinkTarget(returnFinalTarget: true) is { } target)
+                {
+                    current = target.FullName;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                // Cannot stat it — keep the lexical form and let the containment check below judge that.
+            }
+        }
+        return current;
     }
 
     /// <summary>

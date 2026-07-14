@@ -128,6 +128,12 @@ public sealed class OutlineTool : IMcpTool
 {
     public string Name => "outline";
 
+    /// <summary>
+    /// #105. Note <c>file</c>: this tool accepts it as an alias of <c>path</c>, so it must be declared too —
+    /// an undeclared alias is exactly the hole the central guard exists to close.
+    /// </summary>
+    public IReadOnlyList<string> PathArguments => ["path", "file"];
+
     public object GetSchema() => new
     {
         name = "outline",
@@ -154,10 +160,8 @@ public sealed class OutlineTool : IMcpTool
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var basePath = ctx.GetProjectBasePath(projectName);
-        if (!TryResolveContainedPath(rawPath, basePath, out var fileId, out var pathError))
-        {
-            throw new McpToolException(McpErrorCode.PathOutsideRoot, pathError!, isArgumentError: true);
-        }
+        // #105: `path`/`file` arrived resolved and contained — the dispatcher aborted the call otherwise.
+        var fileId = rawPath!;
 
         var fileNode = await storage.GetNodeByIdAsync(fileId).ConfigureAwait(false);
         if (fileNode == null)
