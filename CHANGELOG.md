@@ -5,6 +5,28 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — The blocking RAG path's "never retry a timeout" rule is now pinned (#213)
+- `OllamaResilience.Blocking` exists for exactly one counter-intuitive rule: a **timeout must not be retried**.
+  A timeout is "transient" in every ordinary sense — and the *background* pipeline does retry it — but a RAG
+  generation can legitimately run for minutes with a human watching, so retrying a timeout there **doubles an
+  already minutes-long wait** for an answer that probably is not coming. A connection failure is different:
+  cheap, likely fixable, so it gets exactly one retry.
+- That rule had **no test**. Nothing would have caught a well-meaning edit that made the blocking path retry
+  like the background one — and #179's placement guard would have stayed green, because it only ever measured
+  the background path.
+- Pinned on both levels: at the pipeline (a real `TaskCanceledException` — the shape `HttpClient` actually
+  raises on timeout — produces **1** attempt on `Blocking` and `BackgroundAttempts` on `Background`), and
+  **end to end** (a backend that 503s gets **1** request from `GenerateRAGResponseAsync` but 3 from
+  `AnalyzeNodeAsync` — the *same* service, the *same* `HttpClient`, opposite decisions).
+- That asymmetry is the load-bearing justification for the whole call-site placement (#176/#179): one handler
+  can carry only one policy, so two paths that want different things cannot share one. A test now asserts the
+  two pipelines **actually differ** — if they ever converge, the justification evaporates and we find out.
+- Also closes the gap #213 named: the placement guard now covers **both** typed clients. `ISemanticAnalyzer`'s
+  registration sits on the very next line as `IEmbeddingService`'s, so a handler policy added "to the Ollama
+  clients" would land on both — and only one was being watched.
+- **Mutation-verified:** flipping `Blocking` to retry transient failures fails the timeout guard *and* the
+  end-to-end RAG guard.
+
 ### Changed — The "add a resilience handler here" booby-trap in the Web DI registration is now enforced shut (#179)
 - After #176 the Ollama retry policy lives at the **call site** (`OllamaResilience.Background` / `.Blocking`),
   because it has to cover the CLI and bench too — they build their own `HttpClient`, so a DI-only policy would
