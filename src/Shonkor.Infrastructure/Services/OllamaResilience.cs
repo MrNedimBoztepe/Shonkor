@@ -43,7 +43,14 @@ namespace Shonkor.Infrastructure.Services;
 /// <list type="bullet">
 ///   <item>An <see cref="OllamaResponseException"/> (a 200 OK carrying an unusable payload) is raised by the
 ///   <i>service</i>, after the handler has already returned. The retry pipeline never sees it, so it cannot
-///   retry it — no rule required.</item>
+///   retry it — no rule required.
+///   <para>
+///   That was written as if placement were the <i>only</i> thing holding it up. It is not (#222): the payload
+///   check could be moved inside the pipeline and an unusable payload would <b>still</b> not be retried,
+///   because <see cref="OllamaRetry.IsTransient"/> classifies it as deterministic. Two independent mechanisms,
+///   either sufficient — each verified by mutating it while the other stood. Worth knowing before someone
+///   "simplifies" one of them away on the grounds that the other is doing the work.
+///   </para></item>
 ///   <item>A caller-triggered cancellation propagates out of the pipeline rather than being classified as a
 ///   failure. The old code had to distinguish "the caller cancelled" from "HttpClient timed out" by
 ///   inspecting the token, because both surface as <see cref="TaskCanceledException"/>.</item>
