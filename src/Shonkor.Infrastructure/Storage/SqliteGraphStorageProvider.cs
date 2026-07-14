@@ -387,24 +387,34 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         return results;
     }
 
-    public async Task<IReadOnlyList<SearchResult>> SearchSemanticAsync(float[] queryEmbedding, int maxResults = 10, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<SearchResult>> SearchSemanticAsync(
+        float[] queryEmbedding, int maxResults = 10, CancellationToken cancellationToken = default)
+        => await SearchSemanticAsync(queryEmbedding, maxResults, 0.0, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Ranks embedded nodes by similarity to <paramref name="queryEmbedding"/>. Stored vectors are unit-length
+    /// (TICKET-215: normalized on write), so the query is normalized once and each row is scored by a plain
+    /// DOT PRODUCT — equal to cosine for unit vectors, without recomputing per-row magnitudes. Blobs are read
+    /// zero-copy (<see cref="System.Runtime.InteropServices.MemoryMarshal"/>) rather than copied into a fresh
+    /// <c>float[]</c> per row. Hits scoring below <paramref name="minSimilarity"/> are dropped.
+    /// </summary>
+    public async Task<IReadOnlyList<SearchResult>> SearchSemanticAsync(
+        float[] queryEmbedding, int maxResults, double minSimilarity, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(queryEmbedding);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxResults);
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
-        // Maintain a bounded max-heap of the top-K hits so we never keep more than
-        // maxResults * OVERSCAN embeddings in memory at once, rather than loading every
-        // embedding in the database before sorting.
-        // For a 768-float embedding (nomic-embed-text) each blob is ~3 KB; with an
-        // overscan factor of 4 we keep at most 4*maxResults scores in the heap at any time
-        // instead of potentially thousands of full blobs.
-        const int overscanFactor = 4;
-        var capacity = maxResults * overscanFactor;
+        // The query is normalized once here; stored vectors were normalized on write, so a dot product IS
+        // the cosine similarity for these unit vectors — but skips the magnitude work cosine repeats per row.
+        var query = VectorMath.NormalizedCopy(queryEmbedding);
 
-        // SortedList keyed by score (ascending) acts as a min-heap of fixed capacity.
-        // When full, new items only enter if their score beats the current minimum.
+        // A SortedList keyed by score (ascending) is an exact min-heap of fixed capacity: once full, a new
+        // row enters only if it beats the current minimum. Because the heap is EXACT, keeping exactly
+        // maxResults is enough — the old ×4 "overscan" bought nothing (it kept more candidates but the final
+        // Take(maxResults) was already exact).
+        var capacity = maxResults;
         var heap = new SortedList<double, string>(capacity + 1, Comparer<double>.Default);
 
         await using var command = connection.CreateCommand();
@@ -417,24 +427,21 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             var blob = reader.GetValue(1) as byte[];
 
             if (blob == null || blob.Length == 0) continue;
+            if (blob.Length / 4 != query.Length) continue; // dimension mismatch — skip
 
-            var floatCount = blob.Length / 4;
-            if (floatCount != queryEmbedding.Length) continue; // dimension mismatch — skip
+            // Reinterpret the little-endian blob AS floats in place — no per-row allocation. (Correct on the
+            // little-endian platforms Shonkor runs on, matching how EmbeddingToBytes packs the bytes.)
+            var nodeVector = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(blob);
+            var score = (double)System.Numerics.Tensors.TensorPrimitives.Dot(query, nodeVector);
 
-            var nodeEmbedding = new float[floatCount];
-            Buffer.BlockCopy(blob, 0, nodeEmbedding, 0, blob.Length);
+            // Skip anything with non-positive similarity: NaN (shouldn't occur with dot, defensive), and a
+            // score ≤ 0, which means "orthogonal or opposite" — never a real match for code search. This also
+            // excludes a degenerate all-zero stored vector (it dots to exactly 0), matching the old NaN skip.
+            if (double.IsNaN(score) || score <= 0 || score < minSimilarity) continue;
 
-            var score = (double)System.Numerics.Tensors.TensorPrimitives.CosineSimilarity(queryEmbedding, nodeEmbedding);
-
-            // A zero-magnitude vector (corrupted blob, degenerate embedding) yields NaN (0/0). NaN sorts
-            // below every real score, so once in the heap it can never be evicted and rejects all further
-            // candidates; a second NaN loops forever in the BitIncrement tie-breaker below.
-            if (double.IsNaN(score)) continue;
-
-            // Only keep if it beats the current worst in the heap, or heap is not yet full.
             if (heap.Count < capacity || score > heap.Keys[0])
             {
-                // SortedList requires unique keys; add a tiny tie-breaking suffix to the score.
+                // SortedList requires unique keys; nudge ties by one ULP.
                 var key = score;
                 while (heap.ContainsKey(key)) key = Math.BitIncrement(key);
                 heap.Add(key, id);
@@ -508,14 +515,25 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
 
         // Use MIN(Depth) aggregation so each node is expanded from its *shortest* path,
         // which makes the hop-limit deterministic regardless of edge iteration order.
+        //
+        // The traversal is UNDIRECTED (a neighbour is reachable via an incoming OR an outgoing edge). The
+        // two directions are split into TWO UNION branches instead of one `e.SourceId = s.Id OR e.TargetId
+        // = s.Id` join (TICKET-215): a single OR across two columns can't use an index, forcing a full
+        // Edges scan per recursion step, whereas each single-column branch uses idx_edges_source /
+        // idx_edges_target. The result set is identical — both branches together cover both directions.
         command.CommandText =
             $"""
             WITH RECURSIVE Subgraph(Id, Depth) AS (
                 SELECT Id, 0 FROM Nodes WHERE Id IN ({seedList})
                 UNION
-                SELECT CASE WHEN e.SourceId = s.Id THEN e.TargetId ELSE e.SourceId END, s.Depth + 1
+                SELECT e.TargetId, s.Depth + 1
                 FROM Edges e
-                JOIN Subgraph s ON (e.SourceId = s.Id OR e.TargetId = s.Id)
+                JOIN Subgraph s ON e.SourceId = s.Id
+                WHERE s.Depth < @hops
+                UNION
+                SELECT e.SourceId, s.Depth + 1
+                FROM Edges e
+                JOIN Subgraph s ON e.TargetId = s.Id
                 WHERE s.Depth < @hops
             )
             SELECT DISTINCT n.*
@@ -1494,7 +1512,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
 
             foreach (var concept in result.ExtractedConcepts)
             {
-                var conceptId = $"concept_{concept.ToLowerInvariant()}";
+                var conceptId = ConceptId(concept);
 
                 pConceptId.Value = conceptId;
                 pConceptName.Value = concept;
@@ -1588,6 +1606,38 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
 
     /// <summary>How many connected node names are folded into a concept's embedding document.</summary>
     private const int ConceptNeighbourLimit = 25;
+
+    /// <summary>
+    /// Deterministic id for a <c>Concept</c> from its name. The equivalence rule (#135): lowercase and strip
+    /// everything but letters/digits, so near-duplicate LLM phrasings collapse to ONE id and dedup via
+    /// <c>INSERT OR IGNORE</c> — "Command-Line Interface", "Command Line Interface" and "CommandLineInterface"
+    /// all become <c>concept_commandlineinterface</c>. The first-seen Name is kept as the display label.
+    /// </summary>
+    public static string ConceptId(string conceptName)
+    {
+        var normalized = new string((conceptName ?? string.Empty).ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+        // Fall back to the raw lowercased name if normalization empties it (e.g. a symbol-only concept),
+        // so two genuinely different such concepts don't collide on the empty string.
+        return "concept_" + (normalized.Length > 0 ? normalized : (conceptName ?? string.Empty).ToLowerInvariant());
+    }
+
+    /// <inheritdoc />
+    public async Task<int> PruneOrphanConceptsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        // A concept is orphaned when no code node still RELATES_TO it. Deleting the node fires the FTS
+        // delete trigger; concepts have no other edge kind, so nothing dangling is left behind.
+        command.CommandText =
+            """
+            DELETE FROM Nodes
+            WHERE Type = 'Concept'
+              AND NOT EXISTS (
+                  SELECT 1 FROM Edges e WHERE e.TargetId = Nodes.Id AND e.RelationType = 'RELATES_TO'
+              );
+            """;
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<ConceptEmbeddingCandidate>> GetConceptsPendingEmbeddingAsync(

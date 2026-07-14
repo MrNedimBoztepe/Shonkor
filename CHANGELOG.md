@@ -5,6 +5,189 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — The benchmark was handicapping Shonkor against itself (#162)
+- `--compare-rag` seeded Shonkor's capsule from **vector search alone**, while every shipped path
+  (`search_hybrid`, `generate_capsule`, `/api/search/hybrid`, `/api/capsule`) seeds from **`HybridRetrieval`**
+  — which has materially better intent recall (0,788 vs 0,697). The head-to-head was therefore measuring a
+  configuration the product does not ship, and losing with it.
+- With seeding parity, at a matched token budget: **93,9 %** coverage vs the no-graph baseline's **87,9 %** —
+  **+6,1 pp**, where the old measurement said **−3,1 pp**.
+- The vector-only arm is **still reported**, because it isolates the graph's contribution and because deleting
+  the unflattering row once the flattering one appeared is exactly the behaviour these benchmarks exist to
+  prevent. A test (`RagHeadToHead_StillPublishesTheArmWeLose`) fails if it is ever removed from the README.
+- The diagnosis is **measured, not argued**: seed survival through the capsule budget is **100 %**, and in
+  **5 of 33** vector-only misses the target was **never a seed**. The budget was not dropping the answer;
+  retrieval never found it.
+- **Stated limitation:** the baseline is vector-only while Shonkor's winning row is hybrid. That is the
+  conventional "naive RAG" setup, but a fair comparison would give the chunk retriever a keyword arm too.
+  Filed as a follow-up; the README and sales deck say so rather than quietly banking the win.
+
+### Changed — The benchmark now scores vectors the way the product does (#163)
+- `RagBaselineBenchmark` computed cosine with a **hand-rolled loop accumulating in `double`**, while the
+  storage layer scores L2-normalized embeddings with a **SIMD `float` dot product** (TICKET-215/#127). Two
+  summation semantics for one similarity — the exact inconsistency #127 removed from the product — meant the
+  baseline was being ranked by arithmetic the product does not use.
+- Now normalizes once via `VectorMath` and scores with `TensorPrimitives.Dot`. Verified: baseline coverage is
+  **unchanged at 87,9 %** (ranking is scale-invariant), so this is a consistency fix, not a result change.
+
+### Changed — The docs allowlist is no longer an honour system (#164)
+- `docs/symbol-allowlist.txt` is the escape hatch for the #159 guard, and an escape hatch defended only by a
+  comment ("NEVER add a name here to silence a stale doc") is defended by nothing: appending one line was the
+  cheapest way to turn a red build green, leaving the doc stale **and** the guard reporting success.
+- Three rules are now **enforced by the build**: every entry must sit under a known `[category]`, must carry a
+  substantive `# reason`, and — for `[deliberately-removed]` entries — **the docs must still state that the
+  type was removed**. Delete that prose and the entry stops being honest, so the build fails.
+- Verified by mutation: appending a bare name fails; deleting the "has been removed" sentence about
+  `PluginLoader` fails. A guard that cannot fail is not a guard.
+
+### Fixed — The RAG head-to-head measured nothing at all (#157)
+- `--compare-rag` resolved a golden case's `Expected` entries with an **exact node-id lookup**, but the
+  hand-written sets contain **bare symbol names** (`"TokenHasher"`). The lookup therefore never matched, and
+  the coverage metric reported **0 % for both sides** — the whole comparison was vacuous, while the report
+  cheerfully printed "Shonkor covers the target +0,0 pp more often".
+- One shared `GoldenMatch` now defines "this node satisfies this case" (id substring **or** exact name), and
+  both `RetrievalBenchmark` and `RagBaselineBenchmark` use it. The rule was previously written out once,
+  correctly, in the retrieval scorer and re-implemented wrongly in the RAG baseline.
+- **The fixed metric says Shonkor loses.** At a matched token budget: chunked-RAG covers the target symbol
+  **87,9 %** of the time, Shonkor's capsule **84,8 %** — a **3,1 pp deficit**, at marginally more tokens.
+  Published in the README anyway, with the honest reading: both sides run the *same* embedding search, so
+  "is the target's text in the blob" is a low bar raw chunks clear by brute force; the capsule's value is the
+  **edges** (call graph, signatures, blast radius) that chunks cannot express at any budget. Seed survival
+  through the budget is **100 %**.
+
+### Fixed — Published numbers were not reproducible from the documented commands (#156)
+- The README's numbers (pinned in #152) were measured on a **concept-enriched** graph (3.529 nodes) that only
+  the *web enrichment worker* produces. `shonkor index . --embed` — the command the README tells you to run —
+  produces **2.071 nodes with no concepts**. The published figures were therefore **not reproducible by the
+  documented steps**, which is the same defect as being wrong.
+- All figures re-measured on the graph the documented commands actually build, and the README now states that
+  graph's size so a reader can confirm they are on the same footing. Hybrid Recall@10 **0,788** (was published
+  0,879), keyword **0,182** (0,212), token reduction **75,9 %** (96,2 %).
+- **New guard** (`ReadmeBenchmarkNumbersTests`): parses the numbers **out of `README.md`** and asserts they
+  equal `bench/metrics-*.json`. Metrics-to-metrics comparison would only catch regressions; the failure mode
+  this project keeps hitting is *documentation* drift, so the README itself is the input. It also cross-checks
+  that the quoted before/after token counts actually imply the percentage they claim.
+
+### Fixed — Docs named types that do not exist (#159)
+- **New guard** (`DocsSymbolIntegrityTests`): every backticked PascalCase name in `docs/**` and `README.md`
+  must be declared in `src/` or listed in `docs/symbol-allowlist.txt` with a reason. This is `verify_exists`,
+  Shonkor's own anti-hallucination tool, finally aimed at Shonkor's own prose.
+- It immediately caught a **fresh** error from #153: arc42 §5.3 listed `FindTools`/`ReadTools`/`AnalyzeTools`
+  as types. Those are **file names**; the types are one `IMcpTool` class per tool (`SearchGraphTool`,
+  `GetSourceTool`, …). Corrected.
+- Stated limitation: it catches **dead symbols**, not wrong semantics. It would *not* have caught the docs
+  claiming `Security:EnablePlugins` defaults to OFF when it defaults to ON (#153) — a symbol that exists,
+  described incorrectly. That still needs a human.
+
+### Changed — arc42 §1.4 and the sales presentation now carry measured numbers (#160)
+- Both published performance figures of unknown provenance. Measured on this repo (2026-07-14): indexing
+  **≈ 31 files/s** (was "> 19"), FTS seed latency **0,74 ms median / 15 ms p95** (was a flat "< 5 ms" — true
+  at the median, wrong at the tail by 3×), 2-hop traversal **2,4 ms / 10,8 ms p95**, token reduction
+  **75,9 %** (was "≈ 41 %").
+- The database footprint was published as **352 KB**, "which can easily be placed under version control". It
+  measures **20,1 MB** — **57× larger** — and `shonkor.db` is gitignored, so the advice contradicted the repo's
+  own configuration.
+- The sales presentation quoted retrieval figures (*Recall@10 0,37 → 0,97*) taken from the **circular**
+  `doc-intent` golden set — the one whose queries are the target's own doc-comment, which the project
+  explicitly disowned. Replaced with the non-circular, machine-checked set.
+- New `--search-latency` mode in `Shonkor.Bench` measures FTS and traversal latency (median/p95), so these
+  claims are regenerated rather than hand-maintained.
+
+### Fixed — The docs described a security model we no longer have (#153)
+- **Three places claimed plugins are compiled from source at runtime** — an RCE surface that was **removed**
+  when plugins became pre-built, installed assemblies. `docs/user/setup_guide.md`, `arc42/08_concepts.md` and
+  `arc42/05_building_block_view.md` all still described `PluginLoader` / Roslyn runtime compilation.
+- Worse, two of them described **`Security:EnablePlugins` as an opt-in that defaults to OFF** ("disabled by
+  default; only activate consciously"). It is in fact a **kill switch that defaults to ON**
+  (`EndpointHelpers.PluginsEnabled` → `GetValue("Security:EnablePlugins", true)`). A reader following the old
+  docs would believe plugin loading was disabled on their machine when it was enabled. Corrected everywhere,
+  and the *real* trust gate is now named explicitly: **per-plugin activation** — installing runs nothing,
+  activating is equivalent to executing that plugin's code.
+- **`arc42/05_building_block_view.md` rewritten** against the current code. It also gained the building block
+  the chapter was missing: **`Core.Services.HybridRetrieval`**, the single retrieval entry point that the
+  `search_hybrid` tool, `generate_capsule` seeding, `/api/search/hybrid` and `/api/capsule` all delegate to —
+  written down as an invariant, because these four sites previously held three drifting copies and a fifth
+  copy would be a defect. Also corrected: the MCP surface is an `IMcpTool` registry (not a monolithic
+  `McpServer`), `VectorMath` lives in Infrastructure, `StandardPlugins/` no longer exists, and
+  `Shonkor.Bench` supersedes `Shonkor.Eval`/`Shonkor.Benchmarks`.
+
+### Fixed — The README's benchmark numbers were stale (#152)
+- The vector/hybrid retrieval rows said *"nightly gate"* instead of a figure: the README argued that keyword
+  search fails on plain-English intent and that hybrid retrieval is the fix — then never showed the number
+  proving it. **Now measured and pinned** (2026-07-14, `nomic-embed-text`, 3.529 nodes): on 33 hand-labeled
+  English queries, Recall@10 goes **0,212 (keyword) → 0,879 (hybrid)** and Precision@1 **0,121 → 0,455**.
+  Hybrid is also the best on exact names (P@1 **0,935** vs 0,895 for keyword alone), so it is not a trade-off.
+- **Two published numbers were simply wrong** on the current graph and are corrected:
+  - Plain-English keyword retrieval was published as **0 % P@1 / 12 % Recall@10**; it actually measures
+    **12,1 % / 21,2 %**. The "keyword search is *useless* at intent" framing overstated the case.
+  - Token reduction was published as **85,7 %** (931.030 → 133.423); on the current graph it measures
+    **96,2 %** (1.999.242 → 76.058 over 7 queries).
+- Both runs are checked in as `bench/metrics-exactname.json` and `bench/metrics-agent-queries.json`, so the
+  tables are traceable to raw harness output rather than an ad-hoc local run (`bench/metrics.json` and
+  `bench/report.md` are per-run scratch output and remain gitignored).
+
+### Added — MCP security hardening (TICKET-209, #103)
+- **Path containment on every file-taking tool.** `McpToolHelpers.TryResolveContainedPath` resolves a
+  caller-supplied path against the project base with `Path.GetRelativePath` and rejects any `..` escape or
+  rooted path that leaves the workspace — so `get_source`/`outline`/`reindex_file`/`check_edit` can't be
+  aimed outside the indexed tree.
+- **Loopback bypass is opt-in and fail-loud.** The dev-only API-key bypass is now
+  `env.IsDevelopment() && (flag ?? true)` with a startup warning when active; `/api/mcp` is added to the
+  SaaS-endpoint exemption so the relay authenticates like the rest of `/api/*`.
+- **`record` hardening** and **generic relay error messages** — the HTTP relay no longer leaks
+  `ex.Message` to the caller.
+
+### Added — MCP protocol conformance & backend hygiene (TICKET-210, #108)
+- **JSON-RPC correctness**: `ping` → empty result; malformed JSON → `-32700` (id `null`); non-object
+  request → `-32600`; `protocolVersion` negotiated against `SupportedProtocolVersions`; notifications
+  return nothing. Tool-execution failures surface as `isError:true` results carrying the **tool name +
+  `ex.GetType().Name`** — never the raw `ex.Message`.
+- **Ollama retry hygiene**: `OllamaRetry` (transient/connect-error classification + jittered backoff) and a
+  typed `OllamaResponseException`, so a flaky/slow embedding or summary backend degrades instead of throwing
+  opaque errors.
+- **Output clamps**: `MaxResultLimit`/`MaxHops`/`MaxPathHops` and a `DefaultOutputCapChars` (32 KiB) cap on
+  tool output.
+
+### Added — Markdown as first-class indexed content (TICKET-211, #109)
+- **Section bodies with real line ranges.** `MarkdownHierarchyParser` now captures each section's body and
+  a 1-based line range, detects headers **fence-aware** (no false headers inside code blocks), and splits
+  sections over `MaxSectionChars` (4000) at paragraph boundaries into `::part::N` nodes.
+- **Summaries are searchable**: the node `Summary` is indexed in `NodesFts` (with matching triggers), so an
+  AI summary contributes to keyword recall.
+- **Concept embeddings**: concept nodes get an embedding document (`EmbeddingTextBuilder.BuildConcept`) so
+  they participate in vector/hybrid retrieval.
+
+### Changed — Retrieval: capsule budget, vector scaling, one shared hybrid path
+- **`generate_capsule` is budget-aware and hybrid-seeded** (TICKET-214, #121): the MCP tool seeds via
+  hybrid retrieval and renders under the same seed-first / hub-capped budget the web capsule uses.
+- **Vector scaling Stage 1** (TICKET-215, #127): embeddings are **L2-normalized on write**, scored by a
+  **zero-copy dot product** (`MemoryMarshal.Cast` + `TensorPrimitives`), with a **similarity floor**
+  (`score <= 0` excluded) and the over-scan factor removed; a one-time `Meta`-flagged migration normalizes
+  pre-existing vectors. `VectorMath` moved to `Shonkor.Infrastructure`. Stage 2 (index/ANN over >20k nodes)
+  is intentionally deferred — this graph is ~2–4k nodes.
+- **One shared hybrid-retrieval path** (#122, #146): `HybridRetrieval.SearchAsync` in `Shonkor.Core.Services`
+  is now the single implementation behind the `search_hybrid` tool, `generate_capsule` seeding, the web
+  `/api/search/hybrid` endpoint, and `/api/capsule` — which previously seeded FTS-only and so retrieved
+  worse than the tool for intent-phrased queries. Three near-duplicate copies collapsed into one.
+- **Node-id scheme is now v6** (`CsharpNodeId.SchemeVersion`), triggering a clean reindex on upgrade.
+
+### Fixed — Concept hygiene & honest benchmarking
+- **Orphaned concept nodes are pruned** (#135, #141): concept ids are normalized at creation
+  (`concept_` + lowercase-alphanumeric) and the enrichment worker deletes `Concept` nodes with no incoming
+  `RELATES_TO` after a completed cycle. 1499 all-orphaned concepts had roughly **halved** semantic P@1;
+  removing them restored it.
+- **The benchmark corpus is de-contaminated** (#132/#133, #137): the golden/tickets/review/bench-prose meta
+  files are excluded from the indexed corpus (`shonkor.json`) **and** ignored at measurement time
+  (`IsEvalMetaNode`). The earlier "#110 doc-vs-code regression" was benchmark **self-contamination** (golden
+  files containing the query strings verbatim), not a real ranking regression — documented in
+  `bench/code-intent-decontamination.md` and `bench/eval-corpus-policy.md`.
+
+### Changed — Benchmark harness unified
+- `Shonkor.Eval` and `Shonkor.Benchmarks` are consolidated into the single **`Shonkor.Bench`** harness
+  (token reduction + retrieval precision + RAG head-to-head + answer groundedness). Earlier roadmap entries
+  below that name the `Shonkor.Eval`/`shonkor-eval`/`Shonkor.Benchmarks` projects refer to this now-unified
+  harness; the commands in the README Benchmark section are the current ones.
+
 ### Changed — Honest, reproducible benchmark numbers in the docs
 - Replaced the inflated "up to 87 % / 90 % / 92 % token reduction vs. the entire codebase" claims (a
   whole-repo strawman nobody would actually send) across the **README**, **sales presentation**, and

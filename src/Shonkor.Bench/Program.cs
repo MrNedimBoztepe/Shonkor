@@ -77,6 +77,61 @@ if (genGoldenPath is not null)
     return 0;
 }
 
+// --search-latency: measure FTS5/BM25 seed latency on the CURRENT graph (#160). The docs carried a "<5 ms"
+// figure of unknown provenance, published before FTS also indexed Summary (TICKET-211) and before the graph
+// roughly doubled. This makes the claim reproducible instead of hand-maintained: warm up, then time each
+// query and report median / p95 — the tail is what an agent actually feels, so a mean would flatter us.
+if (args.Contains("--search-latency"))
+{
+    var queries = golden is { Count: > 0 }
+        ? golden.Select(g => g.Query).ToList()
+        : allNodes.Where(n => n.Type is "Class" or "Interface" or "Method")
+                  .Select(n => n.Name).Distinct(StringComparer.Ordinal).Take(200).ToList();
+
+    if (queries.Count == 0) { Console.WriteLine("No queries to time."); return 1; }
+
+    foreach (var q in queries.Take(10)) await provider.SearchAsync(q, 10, 0, null); // warm the connection/page cache
+
+    var timings = new List<double>(queries.Count);
+    foreach (var q in queries)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await provider.SearchAsync(q, 10, 0, null);
+        sw.Stop();
+        timings.Add(sw.Elapsed.TotalMilliseconds);
+    }
+    timings.Sort();
+
+    double Pct(List<double> xs, double p) => xs[Math.Min(xs.Count - 1, (int)Math.Ceiling(p / 100.0 * xs.Count) - 1)];
+    Console.WriteLine($"Graph: {stats.TotalNodes:N0} nodes, {stats.TotalEdges:N0} edges — DB {new FileInfo(dbPath).Length / 1024.0 / 1024.0:F1} MB\n");
+    Console.WriteLine($"FTS5 (BM25) seed latency over {timings.Count} queries");
+    Console.WriteLine($"  median : {Pct(timings, 50):F2} ms");
+    Console.WriteLine($"  p95    : {Pct(timings, 95):F2} ms");
+    Console.WriteLine($"  max    : {timings[^1]:F2} ms");
+
+    // 2-hop subgraph traversal (the recursive CTE) — the other latency the docs published unmeasured.
+    var hopTimings = new List<double>();
+    foreach (var q in queries)
+    {
+        var seedHits = await provider.SearchAsync(q, 3, 0, null);
+        var seedIds = seedHits.Select(h => h.Node.Id).ToList();
+        if (seedIds.Count == 0) continue;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await provider.GetSubgraphAsync(seedIds, 2);
+        sw.Stop();
+        hopTimings.Add(sw.Elapsed.TotalMilliseconds);
+    }
+    if (hopTimings.Count > 0)
+    {
+        hopTimings.Sort();
+        Console.WriteLine($"\n2-hop subgraph traversal (recursive CTE) over {hopTimings.Count} seeds sets");
+        Console.WriteLine($"  median : {Pct(hopTimings, 50):F2} ms");
+        Console.WriteLine($"  p95    : {Pct(hopTimings, 95):F2} ms");
+        Console.WriteLine($"  max    : {hopTimings[^1]:F2} ms");
+    }
+    return 0;
+}
+
 // --provenance: audit the trust-tier distribution per relationship (TICKET-207). Prints RelationType ×
 // Provenance counts and flags any heuristic family (RELATES_TO, IMPORTS, OVERRIDES_BLOCK, BINDS_TO,
 // name-fallback) that wrongly claims Extracted. Exit 2 if any such offender exists.
@@ -293,14 +348,19 @@ if (compareRag)
         report.AppendLine("| Retriever | Avg tokens delivered | Coverage of the target symbol |");
         report.AppendLine("|-----------|---------------------:|------------------------------:|");
         report.AppendLine($"| chunked-RAG (no graph) | {rag.RagAvgTokens:N0} | {rag.RagCoverage:P1} |");
-        report.AppendLine($"| Shonkor capsule | {rag.ShonkorAvgTokens:N0} | {rag.ShonkorCoverage:P1} |");
+        report.AppendLine($"| Shonkor capsule — vector-only seeds (isolates the graph) | {rag.ShonkorAvgTokens:N0} | {rag.ShonkorCoverage:P1} |");
+        report.AppendLine($"| **Shonkor capsule — hybrid seeds (as shipped)** | {rag.ShonkorAvgTokens:N0} | **{rag.ShonkorHybridCoverage:P1}** |");
         report.AppendLine();
         report.AppendLine($"Seed survival (fraction of semantic seed nodes still present in the delivered capsule after budgeting): **{rag.ShonkorSeedSurvival:P1}**.");
         report.AppendLine();
-        var covDelta = (rag.ShonkorCoverage - rag.RagCoverage) * 100;
+        report.AppendLine($"Vector-only misses where the target was **never a seed** (a retrieval miss, not a budget casualty): **{rag.SeedMissedTarget}** of {rag.Queries}.");
+        report.AppendLine();
+        // The verdict is read off the SHIPPED path (hybrid seeds). The vector-only arm stays in the table
+        // because it isolates the graph's contribution, but it is not what a user runs (#162).
+        var covDelta = (rag.ShonkorHybridCoverage - rag.RagCoverage) * 100;
         report.AppendLine(covDelta >= 0
-            ? $"→ At ~equal tokens, Shonkor covers the target **+{covDelta:F1} pp** more often ({rag.ShonkorCoverage:P0} vs {rag.RagCoverage:P0}) — and delivers it as a structured capsule (call graph + signatures), not raw chunks."
-            : $"→ At ~equal tokens, chunked-RAG covers **{-covDelta:F1} pp** more ({rag.RagCoverage:P0} vs {rag.ShonkorCoverage:P0}); Shonkor's edge here is structure (call graph + signatures), not raw recall.");
+            ? $"→ At ~equal tokens, Shonkor (as shipped, hybrid seeds) covers the target **+{covDelta:F1} pp** more often ({rag.ShonkorHybridCoverage:P0} vs {rag.RagCoverage:P0}) — and delivers it as a structured capsule (call graph + signatures), not raw chunks."
+            : $"→ At ~equal tokens, chunked-RAG covers **{-covDelta:F1} pp** more ({rag.RagCoverage:P0} vs {rag.ShonkorHybridCoverage:P0}); Shonkor's edge here is structure (call graph + signatures), not raw recall.");
     }
     report.AppendLine();
 }

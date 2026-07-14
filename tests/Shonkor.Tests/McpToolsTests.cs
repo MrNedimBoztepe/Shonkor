@@ -860,8 +860,10 @@ public class McpToolsTests
         Assert.Contains("Widget", text);
         Assert.Contains("A reusable widget.", text);          // AI summary included
         Assert.Contains("@/Widget.cs::Widget", text);          // short handle, not the absolute id
-        Assert.True(text.IndexOf("Widget", StringComparison.Ordinal)
-                  < text.IndexOf("Gadget", StringComparison.Ordinal)); // ranked above the orthogonal node
+        Assert.Contains("score=1", text);                      // TICKET-215: the cosine score is shown
+        // Gadget's embedding [0,1,0] is ORTHOGONAL to the query [1,0,0] (cosine 0) — a non-match. The
+        // similarity floor now correctly hides it instead of returning noise dressed as a result.
+        Assert.DoesNotContain("Gadget", text);
     }
 
     [Fact]

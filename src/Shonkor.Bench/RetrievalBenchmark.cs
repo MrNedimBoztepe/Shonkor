@@ -73,10 +73,14 @@ internal static class RetrievalBenchmark
         foreach (var c in cases)
         {
             var hits = await retrieve(c);
-            var ranked = hits.Select(h => h.Node).ToList();
-            bool Match(GraphNode node) => c.Expected.Any(e =>
-                node.Id.Contains(e, StringComparison.OrdinalIgnoreCase) ||
-                node.Name.Equals(e, StringComparison.OrdinalIgnoreCase));
+            // Drop the eval's own DEV-PROCESS META prose from the results before ranking (#110, #133). These
+            // files describe the codebase in the same words a natural-language query uses, so they can outrank
+            // the code they document — circular. bench/golden/*.json is the acute case (query strings
+            // verbatim); tickets/, review/ and bench/*.md (this very measurement note included) are the
+            // diffuse tail. Product code (src/) and product docs (docs/) are NOT filtered — the doc-intent
+            // set is measured against docs/ and must stay retrievable.
+            var ranked = hits.Select(h => h.Node).Where(n => !IsEvalMetaNode(n)).ToList();
+            bool Match(GraphNode node) => GoldenMatch.Matches(node, c);
 
             var firstHit = ranked.FindIndex(Match);
             sumP1 += firstHit == 0 ? 1 : 0;
@@ -88,6 +92,33 @@ internal static class RetrievalBenchmark
         }
 
         return n == 0 ? new MetricSet(0, 0, 0, 0, 0) : new MetricSet(n, sumP1 / n, sumPk / n, sumRecall / n, sumRr / n);
+    }
+
+    /// <summary>
+    /// Whether a node is one of the project's DEV-PROCESS META documents, which must never count as a
+    /// retrieval result because they describe the code in query vocabulary (self-reference → circular eval):
+    /// <list type="bullet">
+    /// <item><c>bench/golden/*.json</c> — the golden sets, which contain the query strings verbatim (#110);</item>
+    /// <item><c>tickets/**</c>, <c>review/**</c> — process docs that paraphrase features in query words;</item>
+    /// <item><c>bench/**/*.md</c> — measurement notes (this file included) that quote example queries (#133).</item>
+    /// </list>
+    /// Product CODE (<c>src/</c>) and product DOCS (<c>docs/</c>) are deliberately NOT excluded — the
+    /// doc-intent golden set is scored against <c>docs/</c> sections and must stay retrievable. Path-separator
+    /// agnostic (holds on Windows and Unix). Kept in the graph for agents; only the EVAL ignores them.
+    /// </summary>
+    internal static bool IsEvalMetaNode(GraphNode node)
+    {
+        var path = node.FilePath;
+        if (string.IsNullOrEmpty(path)) return false;
+        var p = path.Replace('\\', '/');
+
+        bool Under(string dir) =>
+            p.Contains("/" + dir + "/", StringComparison.OrdinalIgnoreCase)
+            || p.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase);
+
+        if (Under("bench/golden") || Under("tickets") || Under("review")) return true;
+        // bench measurement notes (prose) — but NOT bench source code (.cs).
+        return Under("bench") && p.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
     }
 
     // One self-retrieval case per named symbol (Class/Interface/Record/Struct/Enum/Method).

@@ -201,6 +201,20 @@ public class SemanticEnrichmentService : BackgroundService
 
                 _logger.LogInformation("Finished processing batch for project '{Project}'.", project.Name);
             }
+            else
+            {
+                // Nothing left to analyze → this project's current code is fully enriched, so any Concept
+                // with no remaining RELATES_TO edge belongs to code that was deleted or re-indexed and is
+                // truly stale (#135). Prune it here, not mid-reindex — concepts carry no FilePath, so the
+                // path-based reindex cleanup can never remove them, and orphans (still embedded) otherwise
+                // accumulate and pollute semantic search. Done only when nothing is pending, so a concept
+                // that a still-pending node would re-link is never mistaken for stale.
+                var pruned = await storage.PruneOrphanConceptsAsync(cancellationToken).ConfigureAwait(false);
+                if (pruned > 0)
+                {
+                    _logger.LogInformation("Pruned {Count} orphaned concept node(s) in project '{Project}'.", pruned, project.Name);
+                }
+            }
 
             // Concepts are excluded from semantic ANALYSIS (they have no body to summarize), which is why
             // they never received an embedding either and stayed invisible to semantic search. Embed them

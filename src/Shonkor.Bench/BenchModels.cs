@@ -1,5 +1,7 @@
 // Licensed to Shonkor under the MIT License.
 
+using Shonkor.Core.Models;
+
 namespace Shonkor.Bench;
 
 /// <summary>One retrieval evaluation case: a query and the node ids/names that count as a correct hit.</summary>
@@ -11,6 +13,31 @@ internal sealed class GoldenCase
     public string? Mode { get; set; }
     /// <summary>Node-id substrings or exact names that count as a correct hit.</summary>
     public List<string> Expected { get; set; } = new();
+}
+
+/// <summary>
+/// The single definition of "this node satisfies this golden case" (#157).
+/// <para>
+/// A case's <see cref="GoldenCase.Expected"/> entries are <b>node-id substrings OR exact names</b> — the
+/// hand-written sets use bare symbol names (<c>"TokenHasher"</c>), not ids. Every consumer must resolve them
+/// the same way. The RAG head-to-head previously did an exact <c>byId[expected]</c> lookup instead, which
+/// never matches a bare name — so its coverage was structurally <b>0 % for both sides</b> and the whole
+/// comparison was meaningless. One matcher, used everywhere, is the fix.
+/// </para>
+/// </summary>
+internal static class GoldenMatch
+{
+    /// <summary>True when <paramref name="node"/> satisfies any of the case's expectations.</summary>
+    public static bool Matches(GraphNode node, GoldenCase c) => c.Expected.Any(e => Matches(node, e));
+
+    /// <summary>True when <paramref name="node"/> satisfies one expectation (id substring or exact name).</summary>
+    public static bool Matches(GraphNode node, string expected) =>
+        node.Id.Contains(expected, StringComparison.OrdinalIgnoreCase) ||
+        node.Name.Equals(expected, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Every graph node that satisfies the case — the case's ground-truth node set.</summary>
+    public static List<GraphNode> Resolve(IEnumerable<GraphNode> nodes, GoldenCase c) =>
+        nodes.Where(n => Matches(n, c)).ToList();
 }
 
 /// <summary>Aggregate retrieval metrics for one retriever over a golden set.</summary>

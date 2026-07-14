@@ -96,31 +96,9 @@ public sealed class McpToolContext
     /// fails. The single hybrid-retrieval entry point shared by <c>search_hybrid</c> and capsule seeding, so
     /// they can never drift apart.
     /// </summary>
-    public async Task<IReadOnlyList<SearchResult>> HybridSearchAsync(
+    public Task<IReadOnlyList<SearchResult>> HybridSearchAsync(
         IGraphStorageProvider storage, string query, int count, CancellationToken cancellationToken = default)
-    {
-        // Pull a wider candidate set from each retriever, then fuse and keep the top `count`.
-        var ftsResults = await storage.SearchAsync(query, count * 2, 0, null, cancellationToken).ConfigureAwait(false);
-
-        IReadOnlyList<SearchResult> semResults = [];
-        if (EmbeddingService != null)
-        {
-            try
-            {
-                var embedding = await EmbeddingService.GenerateEmbeddingAsync(query, EmbeddingKind.Query, cancellationToken).ConfigureAwait(false);
-                if (embedding is { Length: > 0 })
-                {
-                    semResults = await storage.SearchSemanticAsync(embedding, count * 2, cancellationToken).ConfigureAwait(false);
-                }
-            }
-            catch
-            {
-                // Embedding backend hiccup — fall back to FTS-only fusion rather than failing the query.
-            }
-        }
-
-        return HybridFusion.ReciprocalRankFusion(ftsResults, semResults, count);
-    }
+        => HybridRetrieval.SearchAsync(storage, EmbeddingService, query, count, cancellationToken);
 
     /// <summary>Resolves the filesystem root of the requested (or context) project, for path shortening.</summary>
     public string GetProjectBasePath(string? projectName)
