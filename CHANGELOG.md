@@ -5,6 +5,25 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — CI never ran on the PRs that introduce the code, and only ever tested one of two platforms (#209)
+- **CI did not run on feature PRs at all.** The triggers named only `main`, but every feature PR targets
+  **`develop`** — so CI fired when develop was promoted to main, and **never on the pull request that introduced
+  the change**. Verified against the run history: not one feature branch had a check. A gate that does not run
+  on the change is not a gate, and it quietly voided the guarantee #182 had just established. Both triggers now
+  include `develop`.
+- **Path containment is a security guard whose two halves are platform-specific, and CI tested one of them.**
+  On **Linux**, `File.CreateSymbolicLink` needs no privilege, so the file-symlink escape (#104) runs for real —
+  it must *skip* on Windows, which makes Linux the only place it is ever exercised. On **Windows**, the
+  junction-based directory escape (how the attack is actually built there), drive-letter paths, and the
+  case-**insensitive** comparison `TryResolveContainedPath` depends on — none of which Linux exercises at all.
+  CI ran Linux only, so half the guard was verified on nobody's machine but a developer's.
+- The job is now a **matrix over `ubuntu-latest` and `windows-latest`**, with `fail-fast: false` so a
+  Windows-only break cannot mask a Linux-only one. The Linux leg keeps its self-hosted override — it is the
+  *fallback* that is load-bearing, not the override.
+- `CiWorkflowContractTests` pins all of it: CI triggers on `develop`, both legs exist, the matrix does not
+  fail fast, and the suite runs unfiltered. **Mutation-verified** — dropping the develop trigger, the Windows
+  leg, or `fail-fast: false` each fails its guard.
+
 ### Fixed — A hung Ollama backend served an empty answer with a 200 OK (#227)
 - The streaming counterpart of #225, and it hid better — because most of it was already handled. Measured what
   the **user** actually sees for every way a stream can fail: a reset, a mid-body death and a 503 all correctly
