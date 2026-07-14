@@ -299,6 +299,18 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             }
         }
 
+        // A stream that ran to done=true having emitted NOTHING is a backend malfunction, not a blank answer —
+        // the same rule the blocking path now applies (#225), and for the same reason: an empty answer is
+        // indistinguishable from a broken model, so presenting it as an answer hides the failure. Nothing has
+        // been yielded at this point, so the response has not started and the endpoint can still return a
+        // proper 500 rather than a successful, empty one (#227).
+        if (completed && full.Length == 0)
+        {
+            throw new OllamaResponseException(
+                "Ollama streamed a complete response containing no tokens. The backend is misconfigured or " +
+                "malfunctioning — this is not the model declining to answer.");
+        }
+
         if (completed)
         {
             // Append the invalid-citation footer (if any) after the model's own text — never rewrite it.
