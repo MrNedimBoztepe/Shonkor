@@ -5,6 +5,25 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — A hung Ollama backend served an empty answer with a 200 OK (#227)
+- The streaming counterpart of #225, and it hid better — because most of it was already handled. Measured what
+  the **user** actually sees for every way a stream can fail: a reset, a mid-body death and a 503 all correctly
+  produced a **500** with a visible marker.
+- One did not. A backend that **hung** produced a **`200 OK` with an empty body** — a failure rendered as a
+  successful, blank answer. Cause: an `HttpClient` timeout arrives as a `TaskCanceledException`, and the
+  endpoint's `catch (OperationCanceledException)` — meant for "the client disconnected" — swallowed it. **The
+  same confusion #215 found in the retry classifier: a timeout is not a cancellation, it only looks like one.**
+- The catch is now filtered on `context.RequestAborted.IsCancellationRequested`, so a genuine client disconnect
+  still returns quietly (nobody is listening) while **our own** timeout falls through to the failure handler and
+  becomes a logged 500 with a marker.
+- Also applied #225's rule to the streaming path: a stream that runs to `done=true` having emitted **no tokens**
+  is a backend malfunction, not a blank answer, and now throws rather than completing successfully with nothing.
+- **The partial-answer case turned out to be already correct**, and is now pinned rather than assumed: a stream
+  that delivers real tokens and then dies without Ollama's terminal `done` line keeps the tokens (they are real)
+  and appends an *"Answer incomplete"* marker — so a truncated answer cannot be read as a finished one. That was
+  the failure this ticket was originally filed about; the ticket's premise was wrong, and the real bug was the
+  silent one next to it. **Mutation-verified**, both fixes.
+
 ### Fixed — A broken Ollama backend presented itself to users as a model that politely declined (#225)
 - On a `200 OK` carrying an unusable payload, `GenerateRAGResponseAsync` **returned the string**
   `"No answer could be generated."` — travelling back through the same channel as a real answer, arriving at
