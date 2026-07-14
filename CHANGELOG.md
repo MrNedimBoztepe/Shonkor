@@ -5,6 +5,30 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — The "add a resilience handler here" booby-trap in the Web DI registration is now enforced shut (#179)
+- After #176 the Ollama retry policy lives at the **call site** (`OllamaResilience.Background` / `.Blocking`),
+  because it has to cover the CLI and bench too — they build their own `HttpClient`, so a DI-only policy would
+  leave the **MCP stdio server** (the thing agents actually use) with no retry at all. Correct, but it left
+  `Shonkor.Web`'s typed-client registration looking bare — and that is exactly where a reader expects the policy
+  to be, with `AddStandardResilienceHandler()` one line away in the same package.
+- Adding one would be a **bug, not an improvement**: a handler-level policy sits *inside* the call-site
+  pipeline, so every attempt the pipeline makes gets retried again by the handler. **Measured:** adding it takes
+  a failing embedding call from **3 attempts to 12**, and the call from **2 s to 29 s** — retries nested in
+  retries, multiplying the wait against a backend that is already struggling.
+- #179 called a test for this "awkward, because it means testing an absence". It isn't — the absence has a
+  **behavioural** signature. `OllamaResiliencePolicyPlacementTests` boots the real web host against a backend
+  that always 503s and **counts the requests that actually arrive**: exactly `OllamaResilience.BackgroundAttempts`
+  (3). Nest a second policy and the count multiplies and the test fails. **Mutation-verified** by actually adding
+  `AddStandardResilienceHandler()`. So this is enforced, not merely asked for in a comment — though the comment
+  is there too, at the registration, saying why.
+- The three construction paths now have **one visible shape**: `OllamaClientFactory` replaces five hand-assembled
+  `new OllamaEmbeddingService(new HttpClient(), config, NullLogger…)` sites across the CLI and bench. Three
+  different shapes for one thing is what made "just put the policy in the DI registration" look like a complete
+  answer in the first place — from inside `Shonkor.Web`, the registration *is* the only construction site you
+  can see.
+- `OllamaResilience` now exposes its attempt budget (`BackgroundAttempts` / `BlockingAttempts`) instead of
+  hiding it in private constants, so the guard asserts against the policy rather than a number typed twice.
+
 ### Changed — The file-symlink escape test no longer passes green while exercising nothing (#182)
 - #104's **file**-symlink containment test cannot build its attack on an unprivileged Windows box (a file
   symlink needs Developer Mode/admin there; junctions are directory-only). #180 handled that with a bare
