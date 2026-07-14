@@ -5,6 +5,8 @@ using System.Text.Json.Nodes;
 using Shonkor.Core.Models;
 using static Shonkor.Infrastructure.Services.Mcp.McpToolHelpers;
 
+using Shonkor.Core.Services;
+
 namespace Shonkor.Infrastructure.Services.Mcp.Tools;
 
 /// <summary>Re-index a single file after an edit so the graph matches the working tree.</summary>
@@ -513,9 +515,9 @@ public sealed class ReviewTool : IMcpTool
         foreach (var p in rawPaths)
         {
             var full = p!;
-            if (!fullPaths.Contains(full, StringComparer.OrdinalIgnoreCase)) fullPaths.Add(full);
+            if (!fullPaths.Contains(full, FilePaths.Comparer)) fullPaths.Add(full);
         }
-        var changedFiles = new HashSet<string>(fullPaths, StringComparer.OrdinalIgnoreCase);
+        var changedFiles = new HashSet<string>(fullPaths, FilePaths.Comparer);
         var depth = Math.Clamp(ReadInt(args?["depth"], 3), 1, 6);
 
         var impactTypes = new HashSet<string>(StringComparer.Ordinal)
@@ -575,7 +577,7 @@ public sealed class ReviewTool : IMcpTool
             frontier = next;
         }
 
-        var affectedFiles = affected.Values.Where(n => !string.IsNullOrEmpty(n?.FilePath)).Select(n => n!.FilePath!).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var affectedFiles = affected.Values.Where(n => !string.IsNullOrEmpty(n?.FilePath)).Select(n => n!.FilePath!).Distinct(FilePaths.Comparer).Count();
 
         var sb = new System.Text.StringBuilder();
         sb.Append($"Review of {fullPaths.Count} changed file(s) — {changedDefs.Count} changed symbol(s).\n");

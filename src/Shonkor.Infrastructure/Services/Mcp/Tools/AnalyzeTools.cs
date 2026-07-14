@@ -102,7 +102,7 @@ public sealed class ReferencesTool : IMcpTool
                 return SendToolResponse(id, $"Blast radius of '{refDef.Name}' ({refDef.Type}): nothing depends on it — safe to change in isolation, or it is an entry point. (CALLS-level impact needs semantic indexing.)");
             }
 
-            var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var files = new HashSet<string>(FilePaths.Comparer);
             var testCount = 0;
             foreach (var (_, info) in affected)
             {

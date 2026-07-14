@@ -908,7 +908,9 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         ArgumentNullException.ThrowIfNull(fileIds);
 
         var ids = fileIds.Distinct().ToList();
-        var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Keys ARE file paths. Case-insensitive here let one file's hash answer for another on Linux (last row
+        // wins), so a changed file could be judged Fresh and never re-parsed — silently, with no exception (#235).
+        var hashes = new Dictionary<string, string>(FilePaths.Comparer);
         if (ids.Count == 0)
         {
             return hashes;
