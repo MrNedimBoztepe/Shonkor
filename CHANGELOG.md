@@ -5,6 +5,26 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — Topology audit + safety net for nested Markdown CONTAINS (#175)
+- #112 nested Markdown sections (`File → h1 → h2 → h3`); `outline` had silently broken on it and was fixed,
+  but **no test would have caught it**. This audits every other consumer of `CONTAINS` topology and
+  file-seeded traversal, and adds the failing-test surface that was missing.
+- **Data integrity is safe** — verified statically *and empirically* (re-indexing a doc shrunk from 6 to 4
+  sections leaves exactly 4 nodes, no orphans). Cleanup is **`FilePath`-scoped, not `CONTAINS`-walk-scoped**,
+  and every section carries its file's path at every nesting depth, so re-index and delete remove all nested
+  sections. `PruneOrphanConcepts` is `Concept`/`RELATES_TO`-only; `GraphAnalytics` and every MCP analysis tool
+  (`architecture`, `audit`, `hotspots`, `clusters`, `references`, `blast_radius`, …) exclude `CONTAINS`
+  entirely — all **unaffected**.
+- **One behaviour-change class, not a bug:** a `###` is now 3+ hops from its file, so file-seeded traversals
+  at the default 1–2 hops (`generate_capsule`, `/api/capsule`, `/api/rag/query`, dashboard graph expansion,
+  the references panel) reach fewer deep sections than under the flat shape. Each still returns a *correct*
+  N-hop subgraph and the caller can raise `hops`; #112 measured net-positive on retrieval. Left as-is here and
+  filed for a deliberate, measured decision rather than reflexively "fixed" inside an audit.
+- **New `MarkdownTopologyContractTests`** pins the load-bearing invariants: cleanup leaves no orphan sections,
+  delete removes every depth, a full `CONTAINS` walk reaches every section, and — pinned *deliberately* — a
+  fixed 2-hop file seed under-reaches `###`. The next change to the topology, the hop defaults, or the cleanup
+  scoping now fails a test **visibly**, instead of degrading in silence the way `outline` did.
+
 ### Fixed — Symlink-aware path containment, enforced centrally (#104, #105)
 - **The path guard was decorative against symlinks (#104).** `TryResolveContainedPath` compared paths with
   `Path.GetFullPath`, which normalizes **lexically** (collapses `..`) but does **not** follow symlinks. A link
