@@ -100,6 +100,61 @@ public class DeterministicFailureNeverRetriedTests
         Assert.Equal(1, backend.Requests);
     }
 
+    /// <summary>
+    /// The RAG path used to <b>return</b> <c>"No answer could be generated."</c> on this exact condition — a
+    /// string, handed back through the same channel as a real answer, so a user reading the dashboard saw what
+    /// looked like the model considering the question and declining. It had not: the backend was broken (#225).
+    /// <para>
+    /// Now all three Ollama call paths agree that a <c>200</c> carrying no usable payload is a failure. The
+    /// request count still matters — it must be one, not three — because a deterministic failure retried is the
+    /// #222 property, and this path is the one a human is waiting on.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AnUnusableRagPayload_ThrowsInsteadOfBeingReturnedAsAnAnswer()
+    {
+        using var backend = FakeOllamaBackend.ThatAnswers("{}");
+        var analyzer = Analyzer(backend.Url);
+
+        var ex = await Assert.ThrowsAsync<OllamaResponseException>(() =>
+            analyzer.GenerateRAGResponseAsync("what does the graph do?", [Node()]));
+
+        Assert.DoesNotContain("No answer could be generated", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, backend.Requests);
+    }
+
+    [Fact]
+    public async Task AnEmptyRagAnswer_IsAlsoAFailure_NotAnAnswerThatHappensToBeBlank()
+    {
+        // A model that produces nothing at all is malfunctioning too — an empty string rendered as the answer
+        // is indistinguishable from a broken backend, which is the whole complaint.
+        using var backend = FakeOllamaBackend.ThatAnswers("""{"response":"   "}""");
+        var analyzer = Analyzer(backend.Url);
+
+        await Assert.ThrowsAsync<OllamaResponseException>(() =>
+            analyzer.GenerateRAGResponseAsync("what does the graph do?", [Node()]));
+
+        Assert.Equal(1, backend.Requests);
+    }
+
+    /// <summary>
+    /// The point of #225: the three call paths disagreed about what a <c>200</c>-with-garbage means. Two threw;
+    /// the one a human waits on returned prose. Whatever the right answer is, it cannot depend on which method
+    /// you happened to call.
+    /// </summary>
+    [Fact]
+    public async Task AllThreeOllamaCallPaths_TreatAnUnusablePayload_TheSameWay()
+    {
+        using var backend = FakeOllamaBackend.ThatAnswers("{}");
+        var analyzer = Analyzer(backend.Url);
+        var embedding = Embedding(backend.Url);
+
+        await Assert.ThrowsAsync<OllamaResponseException>(() => embedding.GenerateEmbeddingAsync("hello"));
+        await Assert.ThrowsAsync<OllamaResponseException>(() => analyzer.AnalyzeNodeAsync(Node()));
+        await Assert.ThrowsAsync<OllamaResponseException>(() =>
+            analyzer.GenerateRAGResponseAsync("q", [Node()]));
+    }
+
     // ---- 4xx: the other deterministic failure ----------------------------------------------------------
 
     [Fact]
