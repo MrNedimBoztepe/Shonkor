@@ -5,6 +5,35 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — The MCP tool contract no longer lies by omission (#117, #118, #119, #120)
+Four ways the tool surface could leave an agent **confidently wrong**. Each is a different flavour of the
+same fault: the tool knew something the caller could not find out.
+
+- **Clamps announce themselves (#119).** `limit ≤ 100`, `hops ≤ 5`, `maxHops ≤ 10` were applied **silently** —
+  a caller asking for `limit=100000` got 100 results and no hint its request had been reduced, so an agent
+  could reasonably conclude *"only 100 nodes matched"* when 100 of thousands were returned. Every other cap in
+  the codebase announces itself; this one didn't. The note appears **only when the clamp actually bites**
+  (never on a default, never on a no-op), so the common path stays noise-free — the fear that kept this
+  unshipped was unfounded.
+- **`get_subgraph verbose` stays parseable (#117).** Its JSON was capped by **characters**, which is honest
+  about truncating but returns a document the caller cannot `JSON.parse` — a dangling brace is not an answer.
+  The cap is now **structural**: whole nodes/edges are dropped (tail-first, since `GetSubgraphAsync` is
+  breadth-first from the seeds), edges into dropped nodes go with them so the graph stays referentially
+  intact, and the payload reports `{ truncated, omitted: { nodes, edges }, reason }`. Valid JSON, explicit
+  omission.
+- **A negative that is a *failure* is told apart from a negative that is an *answer* (#118).** The line is
+  **whether the subject exists**: `get_source` on a symbol that is not in the graph is the agent's mistake — a
+  typo or a hallucination — and now fails with `isError` and a recovery hint. But *"nothing references
+  `Widget3`"* or *"no path from A to B"* are **real findings** and stay ordinary answers; flagging them
+  `isError` would teach the model that a correct negative is a malfunction and invite pointless retries.
+- **Failures carry a stable, machine-readable identity (#120).** TICKET-209 made relay errors generic and
+  TICKET-210 moved execution failures into `isError` — both right, and both left the surface **prose-only**, so
+  a client wanting to branch on *why* a call failed had to string-match English. Codes now ride in
+  `error.data.code` (protocol errors) and `result._meta.code` (`isError` results):
+  `missing_parameter`, `path_outside_root`, `project_not_found`, `symbol_not_found`, `file_not_indexed`,
+  `backend_unavailable`, `tool_failed`. The human message is unchanged and unconstrained — the code is
+  additive, not a replacement.
+
 ### Fixed — The benchmark was handicapping Shonkor against itself (#162)
 - `--compare-rag` seeded Shonkor's capsule from **vector search alone**, while every shipped path
   (`search_hybrid`, `generate_capsule`, `/api/search/hybrid`, `/api/capsule`) seeds from **`HybridRetrieval`**

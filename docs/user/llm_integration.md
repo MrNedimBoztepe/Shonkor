@@ -154,6 +154,29 @@ All tools accept an optional `projectName` for cross-project queries. Symbol-ori
 
 This closes the loop — precise read, see the impact, edit, refresh, re-check — far more token-efficient and reliable than repeatedly searching and reading whole files, because the structure and dependency edges live in the graph.
 
+### How a call fails, and how to tell the difference
+
+The tool contract is built so that a tool never knows something the caller can't find out. Three rules worth relying on:
+
+**1. "No result" is not the same as "that doesn't exist."**
+
+| You get | It means | What to do |
+|---|---|---|
+| `isError: true`, code `symbol_not_found` | The symbol **is not in the graph**. You mistyped it, or invented it. | Don't retry the same call. Run `search_graph` / `locate` to find the real name. |
+| An ordinary answer: *"Nothing references `Foo`"* | `Foo` **exists** and genuinely has no dependents. | This is a **real finding**, not a failure. Trust it. |
+
+The same split applies to `find_path` (*"no path from A to B"* = both exist and are unconnected — an answer) and `related_tests` (*"no tests reach X"* = X exists and is untested — an answer worth acting on).
+
+**2. Failures carry a stable code**, so you never have to string-match English. It rides in `error.data.code` for protocol errors and `result._meta.code` for `isError` results:
+
+`missing_parameter` · `path_outside_root` · `project_not_found` · `symbol_not_found` · `file_not_indexed` · `backend_unavailable` · `tool_failed`
+
+**3. If a bound was reduced, you are told.** Ask for `limit: 100000` and you get 100 results *plus* a line saying so — never a silently shortened list you might read as "that's all there is". `get_subgraph` with `verbose: true` returns valid JSON even when it has to drop material, reporting exactly what it dropped:
+
+```json
+{ "nodes": [...], "edges": [...], "truncated": true, "omitted": { "nodes": 42, "edges": 118 }, "reason": "maxChars" }
+```
+
 ---
 
 ## 💻 Integration into IDE Assistants (Cursor, VS Code)

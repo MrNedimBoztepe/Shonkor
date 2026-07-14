@@ -47,6 +47,47 @@ public static class McpToolHelpers
         return text[..maxChars].TrimEnd() + $"\n… (truncated to {maxChars} chars; {hint})";
     }
 
+    /// <summary>
+    /// A bound that <b>remembers when it bit</b> (#119).
+    /// <para>
+    /// The bounds themselves are not new — TICKET-210 capped <c>limit ≤ 100</c>, <c>hops ≤ 5</c>,
+    /// <c>maxHops ≤ 10</c>. They were applied <i>silently</i>: a caller asking for <c>limit=100000</c> got 100
+    /// results and no hint that its request had been reduced, so an agent could reasonably conclude "only 100
+    /// nodes matched" when 100 of thousands were returned. Every other cap in this codebase announces itself
+    /// (<c>get_source</c>, <c>get_subgraph</c>, <c>generate_capsule</c>); this one lied by omission.
+    /// </para>
+    /// <para>
+    /// The note is emitted <b>only when the clamp actually bites</b>, so the ordinary call stays noise-free —
+    /// which was the (unfounded) fear that kept this unshipped.
+    /// </para>
+    /// </summary>
+    public sealed class ClampReport
+    {
+        private readonly List<string> _notes = new();
+
+        /// <summary>Clamps <paramref name="arg"/> into [<paramref name="min"/>, <paramref name="max"/>], recording any reduction.</summary>
+        public int Clamp(JsonNode? arg, string name, int fallback, int min, int max)
+        {
+            var requested = ReadInt(arg, fallback);
+            var clamped = Math.Clamp(requested, min, max);
+
+            // Only report an explicit request we overrode — never a defaulted value, and never a no-op clamp.
+            if (arg is not null && requested != clamped)
+            {
+                _notes.Add(requested > max
+                    ? $"{name} clamped to {max} (you requested {requested})"
+                    : $"{name} raised to {min} (you requested {requested})");
+            }
+            return clamped;
+        }
+
+        /// <summary>Empty on the common path; a trailing warning line when a bound was actually applied.</summary>
+        public string Suffix => _notes.Count == 0 ? "" : $"\n\n⚠ {string.Join("; ", _notes)}";
+
+        /// <summary>Appends <see cref="Suffix"/> to a tool's rendered text.</summary>
+        public string Annotate(string text) => text + Suffix;
+    }
+
     /// <summary>Node types that count as a "declaration" when resolving a symbol to its definition.</summary>
     public static readonly string[] DeclarationTypes =
         { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Property", "Constructor" };
@@ -320,6 +361,24 @@ public static class McpToolHelpers
 
     public static string SendToolResponse(JsonElement id, string text) =>
         SendResponse(id, new { content = new[] { new { type = "text", text } } });
+
+    /// <summary>
+    /// A tool response whose payload is <b>JSON</b>, plus an optional out-of-band note (#119).
+    /// <para>
+    /// The note goes in a <b>second content block</b> rather than being appended to the payload. Appending
+    /// prose to a JSON document is precisely the bug #117 is about — it stops being parseable. And wrapping
+    /// the payload in an envelope to carry the note would change a shape existing callers already parse. A
+    /// second block costs neither: <c>content[0].text</c> stays exactly the JSON it was, and the note still
+    /// reaches the model.
+    /// </para>
+    /// </summary>
+    public static string SendToolJsonResponse(JsonElement id, string json, string note = "")
+    {
+        var blocks = string.IsNullOrWhiteSpace(note)
+            ? new[] { new { type = "text", text = json } }
+            : new[] { new { type = "text", text = json }, new { type = "text", text = note.Trim() } };
+        return SendResponse(id, new { content = blocks });
+    }
 
     public static string SendError(JsonElement id, int code, string message) =>
         JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code, message } });

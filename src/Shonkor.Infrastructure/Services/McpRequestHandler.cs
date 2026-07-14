@@ -211,7 +211,7 @@ public sealed class McpRequestHandler
     {
         if (string.IsNullOrWhiteSpace(toolName))
         {
-            return SendError(id, -32602, "Missing parameter: 'name'");
+            return SendError(id, -32602, "Missing parameter: 'name'", McpErrorCode.MissingParameter);
         }
 
         try
@@ -225,11 +225,21 @@ public sealed class McpRequestHandler
             }
             return await tool.ExecuteAsync(id, args, _ctx).ConfigureAwait(false);
         }
+        catch (McpToolException ex)
+        {
+            // A failure the tool gave a STABLE IDENTITY to (#120). It picks its own channel: a bad argument
+            // never became a meaningful execution (-32602), while a failed execution must reach the MODEL as
+            // isError so it can adapt. Either way the code travels alongside the prose, so a client can
+            // branch on `path_outside_root` without string-matching English.
+            return ex.IsArgumentError
+                ? SendError(id, -32602, ex.Message, ex.Code)
+                : SendToolError(id, ex.Message, ex.Code);
+        }
         catch (KeyNotFoundException ex)
         {
             // E.g. an explicitly requested projectName that isn't registered — an invalid ARGUMENT, not a
             // failed execution, so it stays a protocol error (-32602). Its message names only the project.
-            return SendError(id, -32602, ex.Message);
+            return SendError(id, -32602, ex.Message, McpErrorCode.ProjectNotFound);
         }
         catch (Exception ex)
         {
@@ -242,20 +252,33 @@ public sealed class McpRequestHandler
             // Full detail (message + stack) goes only to the server log.
             Console.Error.WriteLine($"[MCP Tool Error] {ex.Message}\n{ex.StackTrace}");
             return SendToolError(id,
-                $"Tool '{toolName}' failed to execute ({ex.GetType().Name}). This is a server-side failure, not a bad argument — see the server log for details. Try a different approach or a narrower query.");
+                $"Tool '{toolName}' failed to execute ({ex.GetType().Name}). This is a server-side failure, not a bad argument — see the server log for details. Try a different approach or a narrower query.",
+                McpErrorCode.ToolFailed);
         }
     }
 
     private static string SendResponse(JsonElement id, object result) =>
         JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result });
 
-    private static string SendError(JsonElement id, int code, string message) =>
-        JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code, message } });
+    /// <summary>
+    /// A JSON-RPC error. When <paramref name="errorCode"/> is given it rides in <c>error.data.code</c> (#120) —
+    /// a stable identity next to the human message, so a client never has to string-match prose.
+    /// </summary>
+    private static string SendError(JsonElement id, int code, string message, string? errorCode = null) =>
+        errorCode is null
+            ? JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code, message } })
+            : JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code, message, data = new { code = errorCode } } });
 
     /// <summary>
     /// A successful JSON-RPC response whose RESULT reports a failed tool execution (<c>isError: true</c>),
-    /// per the MCP spec. Unlike a JSON-RPC error this reaches the model, which can then adapt.
+    /// per the MCP spec. Unlike a JSON-RPC error this reaches the model, which can then adapt. The stable
+    /// code (#120) rides in <c>_meta.code</c>, the spec's designated slot for out-of-band metadata.
     /// </summary>
-    private static string SendToolError(JsonElement id, string text) =>
-        SendResponse(id, new { content = new[] { new { type = "text", text } }, isError = true });
+    private static string SendToolError(JsonElement id, string text, string errorCode = McpErrorCode.ToolFailed) =>
+        SendResponse(id, new
+        {
+            content = new[] { new { type = "text", text } },
+            isError = true,
+            _meta = new { code = errorCode }
+        });
 }

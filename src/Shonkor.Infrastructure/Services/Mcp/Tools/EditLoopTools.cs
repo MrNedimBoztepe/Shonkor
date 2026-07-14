@@ -33,7 +33,7 @@ public sealed class ReindexFileTool : IMcpTool
         var rawPath = args?["path"]?.ToString();
         if (string.IsNullOrWhiteSpace(rawPath))
         {
-            return SendError(id, -32602, "Parameter 'path' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'path' is required", isArgumentError: true);
         }
         if (ctx.FileParsers == null)
         {
@@ -45,7 +45,7 @@ public sealed class ReindexFileTool : IMcpTool
         var basePath = ctx.GetProjectBasePath(projectName);
         if (!TryResolveContainedPath(rawPath, basePath, out var resolved, out var pathError))
         {
-            return SendError(id, -32602, pathError!);
+            throw new McpToolException(McpErrorCode.PathOutsideRoot, pathError!, isArgumentError: true);
         }
 
         // Semantic projects route through the cached reconcile so CALLS / exact REFERENCES_TYPE refresh
@@ -93,7 +93,7 @@ public sealed class CheckEditTool : IMcpTool
         var rawPath = args?["path"]?.ToString();
         if (string.IsNullOrWhiteSpace(rawPath))
         {
-            return SendError(id, -32602, "Parameter 'path' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'path' is required", isArgumentError: true);
         }
         if (ctx.FileParsers == null)
         {
@@ -104,7 +104,7 @@ public sealed class CheckEditTool : IMcpTool
         var basePath = ctx.GetProjectBasePath(projectName);
         if (!TryResolveContainedPath(rawPath, basePath, out var resolved, out var pathError))
         {
-            return SendError(id, -32602, pathError!);
+            throw new McpToolException(McpErrorCode.PathOutsideRoot, pathError!, isArgumentError: true);
         }
 
         if (!resolved.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
@@ -167,7 +167,7 @@ public sealed class FreshnessTool : IMcpTool
             var fileBase = ctx.GetProjectBasePath(projectName);
             if (!TryResolveContainedPath(rawPath, fileBase, out var resolved, out var pathError))
             {
-                return SendError(id, -32602, pathError!);
+                throw new McpToolException(McpErrorCode.PathOutsideRoot, pathError!, isArgumentError: true);
             }
 
             var fileScanner = new GraphIndexScanner(storage, ctx.FileParsers);
@@ -239,7 +239,7 @@ public sealed class RelatedTestsTool : IMcpTool
         var symbol = ReadSymbol(args);
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return SendError(id, -32602, "Parameter 'symbol' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'symbol' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
@@ -248,7 +248,7 @@ public sealed class RelatedTestsTool : IMcpTool
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (def == null)
         {
-            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+            throw McpToolException.SymbolNotFound(symbol!);
         }
 
         var depth = Math.Clamp(ReadInt(args?["depth"], 3), 1, 6);
@@ -326,7 +326,7 @@ public sealed class EditPlanTool : IMcpTool
         var symbol = ReadSymbol(args);
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return SendError(id, -32602, "Parameter 'symbol' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'symbol' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
@@ -335,7 +335,7 @@ public sealed class EditPlanTool : IMcpTool
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (def == null)
         {
-            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+            throw McpToolException.SymbolNotFound(symbol!);
         }
 
         var defLoc = Shorten(string.IsNullOrEmpty(def.FilePath) ? def.Id : def.FilePath, basePath);
@@ -395,7 +395,7 @@ public sealed class RenamePlanTool : IMcpTool
         var symbol = ReadSymbol(args);
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return SendError(id, -32602, "Parameter 'symbol' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'symbol' is required", isArgumentError: true);
         }
         var newName = args?["new_name"]?.ToString();
         var projectName = args?["projectName"]?.ToString();
@@ -405,7 +405,7 @@ public sealed class RenamePlanTool : IMcpTool
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (def == null)
         {
-            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+            throw McpToolException.SymbolNotFound(symbol!);
         }
 
         // How many OTHER symbols share this name? A text find/replace would wrongly hit them.
@@ -489,7 +489,7 @@ public sealed class ReviewTool : IMcpTool
         if (!string.IsNullOrWhiteSpace(single)) rawPaths.Add(single);
         if (rawPaths.Count == 0)
         {
-            return SendError(id, -32602, "Provide the changed files via 'paths' (array) or 'path'.");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Provide the changed files via 'paths' (array) or 'path'.", isArgumentError: true);
         }
 
         // Reject the whole review if ANY supplied path escapes the project root — a review that silently
@@ -499,7 +499,7 @@ public sealed class ReviewTool : IMcpTool
         {
             if (!TryResolveContainedPath(p, basePath, out var full, out var pathError))
             {
-                return SendError(id, -32602, pathError!);
+                throw new McpToolException(McpErrorCode.PathOutsideRoot, pathError!, isArgumentError: true);
             }
             if (!fullPaths.Contains(full, StringComparer.OrdinalIgnoreCase)) fullPaths.Add(full);
         }
