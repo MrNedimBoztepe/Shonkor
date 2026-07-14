@@ -80,9 +80,7 @@ internal static class RetrievalBenchmark
             // diffuse tail. Product code (src/) and product docs (docs/) are NOT filtered — the doc-intent
             // set is measured against docs/ and must stay retrievable.
             var ranked = hits.Select(h => h.Node).Where(n => !IsEvalMetaNode(n)).ToList();
-            bool Match(GraphNode node) => c.Expected.Any(e =>
-                node.Id.Contains(e, StringComparison.OrdinalIgnoreCase) ||
-                node.Name.Equals(e, StringComparison.OrdinalIgnoreCase));
+            bool Match(GraphNode node) => GoldenMatch.Matches(node, c);
 
             var firstHit = ranked.FindIndex(Match);
             sumP1 += firstHit == 0 ? 1 : 0;

@@ -37,18 +37,21 @@ Today's RAG systems (Retrieval-Augmented Generation) mostly rely on probabilisti
 
 ---
 
-## 1.4 Real Project Results & Benchmarks (As of: May 2026)
+## 1.4 Measured Results (2026-07-14)
 
-The following measurement data was collected directly in the production environment during the analysis of a real code and documentation base and proves the achievement of our ambitious quality goals:
+All figures below are **measured on a stated corpus with the stated command**, on Shonkor's own repository. Every earlier number in this section was of unknown provenance and turned out to be stale — some by a wide margin (see the note at the end) — so the rule now is: *a number here either names the corpus and the command that produces it, or it does not belong here.*
 
-* **Indexing Performance**:
-  * **Scan Speed**: **34 source code files** (.NET C#, JS, Markdown) were completely read, lexically parsed, and transferred to the graph in **just 1.80 seconds** (~19 files/second).
-  * **Graph Density**: From the 34 files, **241 semantic nodes** (classes, methods, interfaces, Markdown sections) and **229 precise logical edges** (dependencies, parent-child relationships) were extracted.
-* **Query Speed (FTS5 & CTE Traversal)**:
-  * **Semantic Search**: BM25-weighted keyword searches across the entire source code of the database take **under 5 milliseconds**.
-  * **N-Hop Graph Traversal**: Extracting a 2-hop subgraph including the physical code contents takes **under 10 milliseconds**.
-* **Token Savings (Pruning & Capsule Synthesis)**:
-  * For a query regarding the core class `SqliteGraphStorageProvider`, Shonkor generates a complete, prompt-ready context capsule (including Mermaid diagram and code of the relevant methods) with a size of **only 4,592 characters (~1,148 tokens)**.
-  * Measured honestly against **dumping the same retrieved 2-hop subgraph in full** (the fair baseline — not the whole codebase, which nobody would send), the budget-aware capsule cuts context tokens by **≈ 41 %** on Shonkor's own graph, rising to **~88 %** on larger, hub-dense graphs. Reproduce with `dotnet run --project src/Shonkor.Bench -- shonkor.db`; see the README **Benchmark** section for the full, current numbers.
-* **Resource Efficiency**:
-  * The entire indexed SQLite database (`shonkor.db`) is only **352 KB** in size and can easily be placed under version control in the Git repository.
+**Corpus**: this repository, `shonkor index .` (semantic C# resolution **on**, the default) → **231 files**, **2 071 nodes**, **5 152 edges**.
+
+* **Indexing throughput**: **≈ 31 files/second** (231 files, cold full index, **7,55 s**). Semantic C# resolution builds a Roslyn compilation per scan; with `SHONKOR_SEMANTIC_CSHARP=false` the scan is materially faster but the edges are name-based, not exact.
+* **Query latency** (`dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/agent-queries.json --search-latency`):
+  * **FTS5/BM25 seed search**: median **0,74 ms**, **p95 15 ms**.
+  * **2-hop subgraph traversal** (recursive CTE): median **2,4 ms**, **p95 10,8 ms**.
+  > The tail is reported on purpose. A median-only "under 5 ms" claim hides the p95 an agent actually waits on.
+* **Token reduction**: **75,9 %** (481 539 → 115 978 tokens over 7 queries) — the budget-aware capsule versus **dumping the same retrieved subgraph in full** (the fair baseline; not the whole repo, which nobody would send).
+* **Retrieval** (`nomic-embed-text`, 768-dim): exact-name **P@1 0,890 / Recall@10 0,991** (FTS5) and **0,945 / 0,998** (hybrid); plain-English intent **0,091 / 0,182** (FTS5) → **0,485 / 0,788** (hybrid).
+* **Footprint**: the SQLite database is **20,1 MB** at this graph size *with embeddings stored*. It is **not** a "commit it to Git" artifact — `shonkor.db` is gitignored, and should be.
+
+Reproduce everything: see the **README → The numbers** section, which pins the same values against checked-in harness output (`bench/metrics-*.json`) and is guarded by a test so it cannot silently drift.
+
+> **Why this section was rewritten.** It previously claimed *34 files in 1.80 s (~19 files/s)*, *search under 5 ms*, *traversal under 10 ms*, a *≈ 41 %* token reduction and a **352 KB** database "which can easily be placed under version control". Measured on the current system: throughput is ~31 files/s, p95 search latency is 15 ms (not "< 5 ms"), token reduction is 75,9 %, and the database is **20,1 MB — 57× larger** than the published figure, i.e. precisely *not* something to commit. The retrieval figures quoted here previously (*Recall@10 0,37 → 0,97*) came from the **circular** `doc-intent` golden set, whose queries are the target's own doc-comment — a set the project has since explicitly disowned.

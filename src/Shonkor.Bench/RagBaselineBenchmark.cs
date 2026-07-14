@@ -82,10 +82,15 @@ internal static class RagBaselineBenchmark
             var shTokQ = capsule.Length / CharsPerToken;
             shTok += shTokQ;
 
+            // The case's ground-truth nodes. Expected entries are id substrings OR bare names, so they must be
+            // resolved with the shared GoldenMatch — an exact byId[expected] lookup silently matches nothing
+            // for a name-based set, which is exactly how this metric came to report 0 % for both sides (#157).
+            var expectedNodes = GoldenMatch.Resolve(nodes, c);
+
             // Coverage on the DELIVERED capsule TEXT (TICKET-202) — symmetric with the baseline, which
             // checks its delivered chunks. The pre-budget subgraph was an asymmetric, over-optimistic proxy:
             // the capsule budget can drop a node the subgraph contained.
-            shCov += CapsuleCovers(capsule, c, byId) ? 1 : 0;
+            shCov += expectedNodes.Any(node => CapsuleMentions(capsule, node)) ? 1 : 0;
             // Seed survival: fraction of the semantic seeds whose node still appears in the delivered capsule.
             if (seeds.Count > 0)
                 shSeedSurv += (double)seeds.Count(id => CapsuleMentions(capsule, byId.GetValueOrDefault(id))) / seeds.Count;
@@ -105,16 +110,12 @@ internal static class RagBaselineBenchmark
                 if (picked.Count >= 40) break;
             }
             ragTok += used;
-            ragCov += picked.Any(ch => CoversExpected(ch, c, byId)) ? 1 : 0;
+            ragCov += picked.Any(ch => CoversExpected(ch, expectedNodes)) ? 1 : 0;
             n++;
         }
 
         return n == 0 ? null : new ComparisonResult(n, embedded.Count, ragTok / n, ragCov / n, shTok / n, shCov / n, shSeedSurv / n);
     }
-
-    /// <summary>True when the delivered capsule TEXT mentions an expected node (by its name as a token).</summary>
-    private static bool CapsuleCovers(string capsule, GoldenCase c, Dictionary<string, GraphNode> byId) =>
-        c.Expected.Any(e => byId.TryGetValue(e, out var node) && CapsuleMentions(capsule, node));
 
     /// <summary>True when <paramref name="node"/>'s name appears as a whole word in the capsule text.</summary>
     private static bool CapsuleMentions(string capsule, GraphNode? node)
@@ -187,11 +188,16 @@ internal static class RagBaselineBenchmark
         }
     }
 
-    private static bool CoversExpected(Chunk ch, GoldenCase c, Dictionary<string, GraphNode> byId)
+    /// <summary>
+    /// True when the delivered chunk's file/line window overlaps one of the case's ground-truth nodes — the
+    /// baseline's symmetric counterpart to <see cref="CapsuleMentions"/>. Takes the already-resolved nodes
+    /// (see <see cref="GoldenMatch"/>); resolving by exact node id here was the #157 bug.
+    /// </summary>
+    private static bool CoversExpected(Chunk ch, IReadOnlyList<GraphNode> expectedNodes)
     {
-        foreach (var e in c.Expected)
+        foreach (var node in expectedNodes)
         {
-            if (!byId.TryGetValue(e, out var node) || string.IsNullOrEmpty(node.FilePath)) continue;
+            if (string.IsNullOrEmpty(node.FilePath)) continue;
             if (!string.Equals(node.FilePath, ch.File, StringComparison.OrdinalIgnoreCase)) continue;
             var ns = node.StartLine ?? 0;
             var ne = node.EndLine ?? ns;
