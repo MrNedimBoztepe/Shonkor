@@ -19,6 +19,7 @@ internal sealed class FakeOllamaBackend : IDisposable
 {
     private readonly HttpListener _listener = new();
     private readonly HttpStatusCode? _status;
+    private readonly string? _body;
     private readonly List<HttpListenerContext> _hung = [];
     private int _requests;
 
@@ -35,14 +36,23 @@ internal sealed class FakeOllamaBackend : IDisposable
     /// <summary>How many requests reached the backend. This is the attempt count.</summary>
     public int Requests => Volatile.Read(ref _requests);
 
+    /// <summary>
+    /// A backend that <b>answers <c>200 OK</c> with an unusable payload</b> — the deterministic failure. It
+    /// will answer identically on every attempt, so retrying it is pure waste against a backend that cannot
+    /// succeed. Pass an empty JSON object, a body missing the expected field, or malformed JSON (#222).
+    /// </summary>
+    public static FakeOllamaBackend ThatAnswers(string body) => new(HttpStatusCode.OK, body);
+
     /// <param name="status">
     /// The status every request gets. <see cref="HttpStatusCode.ServiceUnavailable"/> (503) is <i>transient</i>
     /// by <c>OllamaRetry</c>'s rules, so the background pipeline retries it and the blocking one must not —
     /// which is what makes the request count a readable signal for telling the two policies apart.
     /// </param>
-    public FakeOllamaBackend(HttpStatusCode? status = HttpStatusCode.ServiceUnavailable)
+    /// <param name="body">Response body to return with <paramref name="status"/>, if any.</param>
+    public FakeOllamaBackend(HttpStatusCode? status = HttpStatusCode.ServiceUnavailable, string? body = null)
     {
         _status = status;
+        _body = body;
         Url = $"http://127.0.0.1:{FreePort()}";
         _listener.Prefixes.Add($"{Url}/");
         _listener.Start();
@@ -68,6 +78,13 @@ internal sealed class FakeOllamaBackend : IDisposable
             try
             {
                 ctx.Response.StatusCode = (int)_status.Value;
+                if (_body is not null)
+                {
+                    var bytes = System.Text.Encoding.UTF8.GetBytes(_body);
+                    ctx.Response.ContentType = "application/json";
+                    ctx.Response.ContentLength64 = bytes.Length;
+                    await ctx.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+                }
                 ctx.Response.Close();
             }
             catch { /* client already gone */ }

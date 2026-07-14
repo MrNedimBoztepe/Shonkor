@@ -5,6 +5,26 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — "Deterministic failures are never retried" was a comment; it is now a test (#222)
+- Both Ollama services asserted a safety property in prose: an `OllamaResponseException` (a `200 OK` carrying an
+  unusable payload) is raised *after* the pipeline returns, so it **cannot** be retried —
+  "deterministic-failure-is-never-retried is now **structural**". The property matters: a backend answering
+  `200` with garbage answers identically every time, so retrying triples the load on something that cannot
+  succeed, and the only symptom is that indexing got slow.
+- #215 and #218 both began as exactly this — a correct-sounding claim, argued in prose, that nothing was
+  checking — and **both turned out to be broken** once someone looked. So this one was checked.
+- **It holds.** A backend returning `200` with an empty embedding, a missing field, or malformed JSON is hit
+  **exactly once**; a `4xx` likewise; and a `503` on the same call path is still retried `BackgroundAttempts`
+  times, which proves the guard is measuring a live pipeline rather than a broken one.
+- **The comment understated it, though.** Mutating each mechanism in turn: move the validation *inside* the
+  pipeline and it is *still* not retried (the classifier refuses it — an unusable payload is not transient);
+  make the classifier call it transient and it is *still* not retried (placement saves it). Only **both**
+  together break it (3 requests instead of 1). So there are **two independent** protections, either sufficient —
+  not the single one the word "structural" implied. Worth knowing before someone simplifies one away on the
+  grounds that the other is doing the work.
+- The tests therefore pin the **outcome** (exactly one request reaches the backend), not either mechanism: a
+  guard tied to placement would fail on a harmless rearrangement and pass if the classifier silently changed.
+
 ### Fixed — A generation that died mid-answer was also mistaken for a connection failure, and re-run (#218)
 - #218 asked whether `IsTransient` had the mirror flaw of the #215 bug (it classifies on the **outermost**
   exception only, so a wrapped transient failure could go silently unretried). **It does not** — every failure a
