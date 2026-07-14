@@ -185,7 +185,7 @@ internal static class RetrievalBenchmark
         {
             var config = new ConfigurationBuilder().AddEnvironmentVariables().Build();
             var logger = LoggerFactory.Create(_ => { }).CreateLogger<OllamaEmbeddingService>();
-            return new OllamaEmbeddingService(new HttpClient(), config, logger);
+            return OllamaClientFactory.CreateEmbeddingService(config, logger);
         }
         catch
         {

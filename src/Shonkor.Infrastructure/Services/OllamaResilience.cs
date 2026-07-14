@@ -51,6 +51,29 @@ namespace Shonkor.Infrastructure.Services;
 /// </summary>
 public static class OllamaResilience
 {
+    /// <summary>
+    /// <b>Do not also register a resilience handler on the <c>HttpClient</c>.</b> (#179)
+    ///
+    /// <para>
+    /// The pipelines here wrap the <i>call</i>. A handler-level policy — e.g.
+    /// <c>AddStandardResilienceHandler()</c> on the typed-client registration in <c>Shonkor.Web</c> — would sit
+    /// <b>inside</b> them, so every attempt this pipeline makes would itself be retried by the handler:
+    /// retries nested in retries, multiplying the attempt count and the wait against a backend that is already
+    /// struggling. It is a natural mistake, because the typed-client registration is exactly where a reader
+    /// expects the policy to live, and <c>AddStandardResilienceHandler</c> is right there in the same package.
+    /// </para>
+    /// <para>
+    /// So it is not left to a comment: <c>OllamaResiliencePolicyPlacementTests</c> boots the real web host,
+    /// points it at a failing backend and counts the HTTP attempts that actually reach it. Add a handler-level
+    /// policy and the count multiplies past <see cref="BackgroundAttempts"/> and the test fails.
+    /// </para>
+    /// </summary>
+    /// <remarks>Total attempts a background call makes against the backend, the first one included.</remarks>
+    public static int BackgroundAttempts => 1 + BackgroundRetries;
+
+    /// <summary>Total attempts a blocking (RAG) call makes against the backend, the first one included.</summary>
+    public static int BlockingAttempts => 1 + BlockingRetries;
+
     /// <summary>Attempts after the first, for the background paths (enrichment, embedding).</summary>
     private const int BackgroundRetries = 2;
 

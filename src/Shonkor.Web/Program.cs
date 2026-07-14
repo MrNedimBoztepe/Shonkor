@@ -78,6 +78,23 @@ builder.Services.AddSingleton<ContextCapsuleSynthesizer>();
 builder.Services.AddSingleton<SemanticCompilationCache>();
 
 // Semantic enrichment backend (Ollama) + the background worker that drives it.
+//
+// DELIBERATELY NO RESILIENCE HANDLER HERE (#179). This registration is where a reader expects to find the
+// retry policy — AddStandardResilienceHandler() is one line away in the same package — and adding one would
+// be a BUG, not an improvement:
+//
+//   * The policy already exists, at the CALL SITE (OllamaResilience.Background / .Blocking), because it has to
+//     cover the CLI and the bench too — they build their own HttpClient, so a DI-only policy would leave the
+//     MCP stdio server (the thing agents actually use) with no retry at all. See OllamaResilience for why.
+//   * A handler-level policy would sit INSIDE that pipeline, so every attempt the call-site pipeline makes
+//     would itself be retried by the handler — retries nested in retries, multiplying the attempts and the
+//     wait against a backend that is already struggling.
+//   * The two operations need DIFFERENT policies on the same client (background retries transient failures;
+//     the blocking RAG path must never retry a timeout), and one handler can only carry one.
+//
+// OllamaResiliencePolicyPlacementTests boots this host against a failing backend and counts the attempts that
+// reach it, so this is enforced rather than merely asked for: add a handler policy and the count multiplies
+// and the test fails.
 builder.Services.AddHttpClient<ISemanticAnalyzer, OllamaSemanticAnalyzer>();
 builder.Services.AddHttpClient<IEmbeddingService, OllamaEmbeddingService>();
 builder.Services.AddHostedService<SemanticEnrichmentService>();

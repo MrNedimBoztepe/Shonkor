@@ -457,7 +457,7 @@ static IEmbeddingService? CreateEmbeddingService()
     {
         var config = new ConfigurationBuilder().AddEnvironmentVariables().Build();
         var logger = LoggerFactory.Create(_ => { }).CreateLogger<OllamaEmbeddingService>();
-        return new OllamaEmbeddingService(new HttpClient(), config, logger);
+        return OllamaClientFactory.CreateEmbeddingService(config, logger);
     }
     catch
     {
@@ -471,5 +471,5 @@ static ISemanticAnalyzer CreateSemanticAnalyzer()
     // environment (e.g. SemanticAnalyzer__OllamaModel), defaulting to localhost + qwen2.5-coder.
     var config = new ConfigurationBuilder().AddEnvironmentVariables().Build();
     var logger = LoggerFactory.Create(_ => { }).CreateLogger<OllamaSemanticAnalyzer>();
-    return new OllamaSemanticAnalyzer(new HttpClient(), config, logger);
+    return OllamaClientFactory.CreateSemanticAnalyzer(config, logger);
 }
