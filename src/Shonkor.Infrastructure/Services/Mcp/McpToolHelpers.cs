@@ -5,6 +5,8 @@ using System.Text.Json.Nodes;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 
+using Shonkor.Core.Services;
+
 namespace Shonkor.Infrastructure.Services.Mcp;
 
 /// <summary>
@@ -211,32 +213,42 @@ public static class McpToolHelpers
         }
     }
 
-    /// <summary>Returns <paramref name="path"/> relative to <paramref name="basePath"/> when contained, else the original.</summary>
+    /// <summary>
+    /// Returns <paramref name="path"/> relative to <paramref name="basePath"/> when contained, else the original.
+    ///
+    /// <para>
+    /// This used to test containment with <c>path.StartsWith(basePath, OrdinalIgnoreCase)</c>, which is not a
+    /// containment test (#235). With <c>basePath = /x/proj</c>, the path <c>/x/project/File.cs</c> passed — and
+    /// the "relative" remainder came out as <c>ect/File.cs</c>. Sibling directories sharing a prefix
+    /// (<c>repo</c>/<c>repo2</c>, <c>src</c>/<c>src-gen</c>) are ordinary, so this was wrong on every platform;
+    /// the <c>OrdinalIgnoreCase</c> was additionally wrong on Linux, where <c>Foo.cs</c> and <c>foo.cs</c> are
+    /// two files. <see cref="FilePaths.TryGetRelative"/> does both correctly.
+    /// </para>
+    /// </summary>
     public static string Shorten(string? path, string basePath)
     {
         if (string.IsNullOrEmpty(path)) return string.Empty;
-        if (!string.IsNullOrEmpty(basePath) && path.StartsWith(basePath, StringComparison.OrdinalIgnoreCase))
-        {
-            var rel = path[basePath.Length..].TrimStart('\\', '/');
-            return rel.Length > 0 ? rel : path;
-        }
-        return path;
+        return FilePaths.TryGetRelative(path, basePath, out var rel) ? rel : path;
     }
 
     /// <summary>
     /// Shortens a node id to a reusable, token-cheap "handle". File-path ids under the project root are
     /// emitted as <c>@/&lt;relative&gt;</c>; other ids are left unchanged. The <c>@/</c> marker makes the
     /// transform reversible via <see cref="FromHandle"/> and unambiguous.
+    ///
+    /// <para>
+    /// The handle always uses <c>/</c> internally, whatever the host separator (#235). It used to keep the
+    /// platform's own separator, so a handle minted on Windows (<c>@/Services\Foo.cs</c>) did not round-trip on
+    /// Linux — and handles travel: they are emitted to agents, quoted back, and persisted. A handle is a
+    /// portable identifier or it is not an identifier at all.
+    /// </para>
     /// </summary>
     public static string ToHandle(string? id, string basePath)
     {
         if (string.IsNullOrEmpty(id)) return string.Empty;
-        if (!string.IsNullOrEmpty(basePath) && id.StartsWith(basePath, StringComparison.OrdinalIgnoreCase))
-        {
-            var rel = id[basePath.Length..].TrimStart('\\', '/');
-            if (rel.Length > 0) return "@/" + rel;
-        }
-        return id;
+        return FilePaths.TryGetRelative(id, basePath, out var rel)
+            ? "@/" + rel.Replace('\\', '/')
+            : id;
     }
 
     /// <summary>Expands a <c>@/&lt;relative&gt;</c> handle back to a real node id; other values pass through unchanged.</summary>
@@ -245,7 +257,9 @@ public static class McpToolHelpers
         if (string.IsNullOrEmpty(handle)) return string.Empty;
         if (handle.StartsWith("@/", StringComparison.Ordinal) && !string.IsNullOrEmpty(basePath))
         {
-            return basePath.TrimEnd('\\', '/') + System.IO.Path.DirectorySeparatorChar + handle[2..];
+            // Handles carry '/' by contract (see ToHandle); re-seat them on the host separator on the way back.
+            var rel = handle[2..].Replace('/', System.IO.Path.DirectorySeparatorChar);
+            return System.IO.Path.Combine(basePath.TrimEnd('\\', '/'), rel);
         }
         return handle;
     }
