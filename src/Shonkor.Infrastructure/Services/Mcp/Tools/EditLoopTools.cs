@@ -12,6 +12,9 @@ public sealed class ReindexFileTool : IMcpTool
 {
     public string Name => "reindex_file";
 
+    /// <summary>#105: resolved and contained by the dispatcher before this tool runs.</summary>
+    public IReadOnlyList<string> PathArguments => ["path"];
+
     public object GetSchema() => new
     {
         name = "reindex_file",
@@ -43,10 +46,9 @@ public sealed class ReindexFileTool : IMcpTool
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var basePath = ctx.GetProjectBasePath(projectName);
-        if (!TryResolveContainedPath(rawPath, basePath, out var resolved, out var pathError))
-        {
-            throw new McpToolException(McpErrorCode.PathOutsideRoot, pathError!, isArgumentError: true);
-        }
+        // #105: `path` arrived already resolved and contained — the dispatcher aborted the call otherwise,
+        // so there is nothing left to check here and no way for this tool to forget to.
+        var resolved = rawPath!;
 
         // Semantic projects route through the cached reconcile so CALLS / exact REFERENCES_TYPE refresh
         // incrementally; otherwise the plain single-file path (fast name-mode structure).
@@ -71,6 +73,9 @@ public sealed class ReindexFileTool : IMcpTool
 public sealed class CheckEditTool : IMcpTool
 {
     public string Name => "check_edit";
+
+    /// <summary>#105: resolved and contained by the dispatcher before this tool runs.</summary>
+    public IReadOnlyList<string> PathArguments => ["path"];
 
     public object GetSchema() => new
     {
@@ -102,10 +107,8 @@ public sealed class CheckEditTool : IMcpTool
         }
         var projectName = args?["projectName"]?.ToString();
         var basePath = ctx.GetProjectBasePath(projectName);
-        if (!TryResolveContainedPath(rawPath, basePath, out var resolved, out var pathError))
-        {
-            throw new McpToolException(McpErrorCode.PathOutsideRoot, pathError!, isArgumentError: true);
-        }
+        // #105: contained by the dispatcher before this tool was entered.
+        var resolved = rawPath!;
 
         if (!resolved.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
         {
@@ -134,6 +137,12 @@ public sealed class CheckEditTool : IMcpTool
 public sealed class FreshnessTool : IMcpTool
 {
     public string Name => "freshness";
+
+    /// <summary>
+    /// #105. <c>path</c> is OPTIONAL here — absent means the project-wide drift report, so there is nothing
+    /// to contain. When present it is contained like any other.
+    /// </summary>
+    public IReadOnlyList<string> PathArguments => ["path"];
 
     public object GetSchema() => new
     {
@@ -165,10 +174,8 @@ public sealed class FreshnessTool : IMcpTool
         if (!string.IsNullOrWhiteSpace(rawPath))
         {
             var fileBase = ctx.GetProjectBasePath(projectName);
-            if (!TryResolveContainedPath(rawPath, fileBase, out var resolved, out var pathError))
-            {
-                throw new McpToolException(McpErrorCode.PathOutsideRoot, pathError!, isArgumentError: true);
-            }
+            // #105: contained by the dispatcher before this tool was entered.
+            var resolved = rawPath!;
 
             var fileScanner = new GraphIndexScanner(storage, ctx.FileParsers);
             var state = await fileScanner.CheckFreshnessAsync(resolved).ConfigureAwait(false);
@@ -461,6 +468,12 @@ public sealed class ReviewTool : IMcpTool
 {
     public string Name => "review";
 
+    /// <summary>
+    /// #105: an array (<c>paths</c>) plus a singular alias (<c>path</c>). Both are declared; the array is
+    /// contained element by element, so one poisoned entry rejects the whole call rather than being skipped.
+    /// </summary>
+    public IReadOnlyList<string> PathArguments => ["paths", "path"];
+
     public object GetSchema() => new
     {
         name = "review",
@@ -494,13 +507,12 @@ public sealed class ReviewTool : IMcpTool
 
         // Reject the whole review if ANY supplied path escapes the project root — a review that silently
         // dropped an out-of-root path would under-report impact, and honoring it would read arbitrary files.
+        // #105: every element arrived contained — one escaping entry rejected the whole call upstream, so a
+        // poisoned path can neither be silently skipped (under-reporting impact) nor honoured (reading it).
         var fullPaths = new List<string>();
         foreach (var p in rawPaths)
         {
-            if (!TryResolveContainedPath(p, basePath, out var full, out var pathError))
-            {
-                throw new McpToolException(McpErrorCode.PathOutsideRoot, pathError!, isArgumentError: true);
-            }
+            var full = p!;
             if (!fullPaths.Contains(full, StringComparer.OrdinalIgnoreCase)) fullPaths.Add(full);
         }
         var changedFiles = new HashSet<string>(fullPaths, StringComparer.OrdinalIgnoreCase);

@@ -5,6 +5,25 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — Symlink-aware path containment, enforced centrally (#104, #105)
+- **The path guard was decorative against symlinks (#104).** `TryResolveContainedPath` compared paths with
+  `Path.GetFullPath`, which normalizes **lexically** (collapses `..`) but does **not** follow symlinks. A link
+  inside the indexed tree pointing outside it is therefore lexically contained, passes the gate, and is read
+  straight through — defeating the control TICKET-209 exists to provide. In multi-tenant / SaaS mode, a tenant
+  who can commit a symlink could read the host filesystem via `get_source` / `outline` / `check_edit`.
+  Containment now resolves symlinks **component by component** first (the escape hides in a linked *directory*,
+  where the leaf file is not itself a link), and hands back the **real** resolved path so a caller opens the
+  file the gate approved.
+- **Containment is enforced once, in the dispatcher (#105).** It was applied per tool — six copies, and
+  nothing stopping the seventh from forgetting. A tool now declares `IMcpTool.PathArguments`; the dispatcher
+  resolves + contains each (arrays element by element) and aborts with `path_outside_root` before the tool
+  runs. Crucially it **cannot be forgotten**: a test cross-checks every tool's *schema* against its declared
+  path arguments, so a tool advertising a `path`/`paths`/`file` it forgot to declare **fails the build**
+  rather than silently bypassing the guard. Aliases count.
+- Verified **without silently-skipped tests**: Windows blocks unprivileged symlink creation, so the
+  directory-escape case is built with a **junction** (needs no elevation, resolves the same) and runs for real
+  everywhere — plus a live junction-escape through the real stdio server, rejected `-32602` / `path_outside_root`.
+
 ### Changed — Ollama retry is Polly's job now (#116)
 - `OllamaEmbeddingService` and `OllamaSemanticAnalyzer` carried **hand-written retry loops** with their own
   exponential backoff and jitter. That is exactly what `Microsoft.Extensions.Http.Resilience` (Polly) exists

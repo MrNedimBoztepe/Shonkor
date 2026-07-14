@@ -24,6 +24,24 @@ public interface IMcpTool
     bool IsAvailable(McpToolContext ctx) => true;
 
     /// <summary>
+    /// The argument names this tool treats as <b>filesystem paths</b> (#105). The dispatcher resolves and
+    /// <b>contains</b> each of them before <see cref="ExecuteAsync"/> is ever entered, and rejects the call
+    /// outright if one escapes the project root — so a tool receives paths that are already vetted and
+    /// already absolute.
+    ///
+    /// <para>
+    /// Containment used to be applied <i>per tool</i>, which meant six copies of the same dance and a
+    /// standing invitation for the seventh tool to forget it. Now the guard is structural: a tool that
+    /// declares its path arguments cannot skip it, and one that <i>forgets to declare them</i> fails
+    /// <c>PathArgumentsAreDeclared</c> — the schema is cross-checked against this list, so "forgot" is a
+    /// build error rather than a vulnerability.
+    /// </para>
+    ///
+    /// <para>An array-valued argument (e.g. <c>paths</c>) is contained element by element.</para>
+    /// </summary>
+    IReadOnlyList<string> PathArguments => [];
+
+    /// <summary>
     /// Executes the tool and returns a complete JSON-RPC response string (success or error), built via
     /// <see cref="McpToolHelpers"/>.
     /// </summary>
