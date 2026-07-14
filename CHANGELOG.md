@@ -5,6 +5,27 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — A broken Ollama backend presented itself to users as a model that politely declined (#225)
+- On a `200 OK` carrying an unusable payload, `GenerateRAGResponseAsync` **returned the string**
+  `"No answer could be generated."` — travelling back through the same channel as a real answer, arriving at
+  `/api/ask` as a **200 OK**, and rendering in the dashboard as though the model had weighed the question and
+  declined. It had not. The backend was broken: a misconfigured model, a wrong response schema, a bad Ollama
+  build. Nothing was logged as a failure and nothing was measured, so a backend malfunctioning on **every**
+  query presented as a system that politely refuses to answer anything.
+- The codebase already had a real "no answer" path, and it is nothing like that one: `GroundingPrep` abstains
+  **deterministically, without calling the LLM at all**, and says so (`grounded = false`). Conflating a broken
+  backend with a considered abstention is exactly what made the failure invisible.
+- It now **throws**, as `AnalyzeNodeAsync` already did for the identical condition — so the three Ollama call
+  paths finally agree on what a `200`-with-garbage means, instead of the answer depending on which method you
+  happened to call. The endpoints already turn that into a logged **500** (`Fail` → `Results.Problem`), which is
+  what an infrastructure failure should look like. An empty/whitespace answer is treated the same way: a model
+  that produces nothing is malfunctioning, and a blank answer is indistinguishable from a broken backend.
+- Guarded at both levels: the service throws and is hit **exactly once** (a deterministic failure, per #222, on
+  the path a human is waiting on), and `/api/ask` returns a 500 rather than a 200 carrying prose. The
+  deterministic abstention is asserted **beside** it — still a 200, still `grounded = false`, still zero backend
+  calls — because the whole point is that the two must not look alike. **Mutation-verified:** restoring the
+  string fails all four guards.
+
 ### Added — "Deterministic failures are never retried" was a comment; it is now a test (#222)
 - Both Ollama services asserted a safety property in prose: an `OllamaResponseException` (a `200 OK` carrying an
   unusable payload) is raised *after* the pipeline returns, so it **cannot** be retried —

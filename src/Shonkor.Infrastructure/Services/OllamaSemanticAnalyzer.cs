@@ -173,7 +173,31 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
                 var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
                 var responseText = responseJson?["response"]?.ToString();
-                if (responseText is null) return "No answer could be generated.";
+
+                // A 200 OK with no usable answer in it is a BACKEND FAILURE, and is now reported as one (#225).
+                //
+                // It used to `return "No answer could be generated."` — a string, handed back through the same
+                // channel as a real answer and rendered to the user as though the model had considered the
+                // question and declined. It had not: the payload was unusable (a misconfigured model, a wrong
+                // response schema, a broken Ollama build). Nothing was logged as a failure and nothing was
+                // measured, so a backend malfunctioning on EVERY query presented as a system that politely
+                // refuses to answer anything.
+                //
+                // The codebase already has a real "no answer" path, and it is nothing like this one:
+                // GroundingPrep.NoEvidence abstains DETERMINISTICALLY, without calling the LLM at all, and says
+                // so (`grounded = false`). Conflating a broken backend with a considered abstention is what made
+                // the failure invisible.
+                //
+                // So this now throws, exactly as AnalyzeNodeAsync does for the identical condition — the three
+                // Ollama call paths finally agree on what a 200-with-garbage means. The endpoints already turn
+                // it into a logged 500 (EndpointHelpers.Fail → Results.Problem), which is what an infrastructure
+                // failure should look like.
+                if (string.IsNullOrWhiteSpace(responseText))
+                {
+                    throw new OllamaResponseException(
+                        "Ollama returned a 200 OK with no usable answer. The backend is misconfigured or " +
+                        "malfunctioning — this is not the model declining to answer.");
+                }
 
                 WarnIfPromptTruncated(responseJson, options.NumCtx);
 
