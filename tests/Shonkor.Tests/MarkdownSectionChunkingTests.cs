@@ -158,13 +158,33 @@ public class MarkdownSectionChunkingTests
         Assert.False(section.Properties.ContainsKey("parts"));
     }
 
+    /// <summary>
+    /// Every section is still reachable from the file — but since #112, <b>through the heading hierarchy</b>,
+    /// not as a flat fan-out. A <c>##</c> now hangs off its enclosing <c>#</c>, so the file no longer has a
+    /// direct edge to it. This test asserts the property that actually matters (nothing is orphaned) rather
+    /// than the shape that happened to provide it.
+    /// </summary>
     [Fact]
-    public async Task FileStillContainsEverySection()
+    public async Task EverySection_IsStillReachableFromTheFile_ViaTheHeadingHierarchy()
     {
         var (nodes, edges) = await ParseAsync("# A\n\nx\n\n## B\n\ny\n");
-        foreach (var s in Sections(nodes).Where(n => !n.Id.Contains("::part::", StringComparison.Ordinal)))
+        var contains = edges.Where(e => e.Relationship == "CONTAINS").ToList();
+
+        // Walk CONTAINS from the file and collect everything it transitively reaches.
+        var reached = new HashSet<string>(StringComparer.Ordinal);
+        var frontier = new Queue<string>([DocPath]);
+        while (frontier.Count > 0)
         {
-            Assert.Contains(edges, e => e.SourceId == DocPath && e.TargetId == s.Id && e.Relationship == "CONTAINS");
+            var current = frontier.Dequeue();
+            foreach (var e in contains.Where(e => e.SourceId == current && reached.Add(e.TargetId)))
+            {
+                frontier.Enqueue(e.TargetId);
+            }
+        }
+
+        foreach (var s in Sections(nodes))
+        {
+            Assert.Contains(s.Id, reached);
         }
     }
 }

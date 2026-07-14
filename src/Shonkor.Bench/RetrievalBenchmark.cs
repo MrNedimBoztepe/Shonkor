@@ -18,7 +18,7 @@ namespace Shonkor.Bench;
 /// </summary>
 internal static class RetrievalBenchmark
 {
-    public static async Task<(MetricSet Fts, MetricSet? Semantic, MetricSet? Hybrid)> RunAsync(
+    public static async Task<(MetricSet Fts, MetricSet? Semantic, MetricSet? Hybrid, IReadOnlyCollection<string> Contamination)> RunAsync(
         SqliteGraphStorageProvider provider, IReadOnlyList<GraphNode> allNodes, int k, TextWriter log,
         List<GoldenCase>? goldenSet = null, string? setLabel = null)
     {
@@ -27,7 +27,12 @@ internal static class RetrievalBenchmark
         var cases = goldenSet ?? Bootstrap(allNodes);
         log.WriteLine($"  golden cases: {cases.Count} ({setLabel ?? "auto-bootstrapped self-retrieval"}), k={k}");
 
-        var fts = await Score(cases, k, c => provider.SearchAsync(c.Query, k));
+        // Any index-excluded meta file that surfaces in ANY retriever's results (#136). It stays empty on a
+        // correctly-indexed graph — these dirs aren't in it — so a non-empty set means re-contamination, and
+        // the run fails loudly rather than the filter silently patching over it.
+        var contamination = new SortedSet<string>(StringComparer.Ordinal);
+
+        var fts = await Score(cases, k, contamination, c => provider.SearchAsync(c.Query, k));
 
         MetricSet? semantic = null, hybrid = null;
         var emb = TryCreateEmbeddingService();
@@ -42,11 +47,11 @@ internal static class RetrievalBenchmark
         {
             // Embed the QUERY with the query prefix (TICKET-202): the kind-less overload defaulted to the
             // Document prefix, so an earlier A/B "within noise" result measured document-prefixed queries.
-            semantic = await Score(cases, k, async c =>
+            semantic = await Score(cases, k, contamination, async c =>
                 await provider.SearchSemanticAsync(await emb.GenerateEmbeddingAsync(c.Query, EmbeddingKind.Query), k));
 
             // Hybrid = RRF of FTS + vector, exactly like the /api/search/hybrid endpoint (over-fetch k*2).
-            hybrid = await Score(cases, k, async c =>
+            hybrid = await Score(cases, k, contamination, async c =>
             {
                 var ftsHits = await provider.SearchAsync(c.Query, k * 2);
                 var qv = await emb.GenerateEmbeddingAsync(c.Query, EmbeddingKind.Query);
@@ -61,11 +66,12 @@ internal static class RetrievalBenchmark
                 : "  semantic/hybrid: embedding backend unreachable — skipped");
         }
 
-        return (fts, semantic, hybrid);
+        return (fts, semantic, hybrid, contamination);
     }
 
     private static async Task<MetricSet> Score(
-        List<GoldenCase> cases, int k, Func<GoldenCase, Task<IReadOnlyList<SearchResult>>> retrieve)
+        List<GoldenCase> cases, int k, ICollection<string> contamination,
+        Func<GoldenCase, Task<IReadOnlyList<SearchResult>>> retrieve)
     {
         double sumP1 = 0, sumPk = 0, sumRecall = 0, sumRr = 0;
         var n = 0;
@@ -73,6 +79,14 @@ internal static class RetrievalBenchmark
         foreach (var c in cases)
         {
             var hits = await retrieve(c);
+
+            // #136: an index-excluded meta file appearing here means the shonkor.json exclude broke and the
+            // graph is re-contaminated. Record it (loud failure at the end) instead of relying only on the
+            // silent filter below — a silent filter keeps TODAY's number right but hides that the fix regressed.
+            foreach (var h in hits)
+                if (IsIndexExcludedMeta(h.Node) && h.Node.FilePath is { Length: > 0 } fp)
+                    contamination.Add(fp.Replace('\\', '/'));
+
             // Drop the eval's own DEV-PROCESS META prose from the results before ranking (#110, #133). These
             // files describe the codebase in the same words a natural-language query uses, so they can outrank
             // the code they document — circular. bench/golden/*.json is the acute case (query strings
@@ -106,19 +120,40 @@ internal static class RetrievalBenchmark
     /// doc-intent golden set is scored against <c>docs/</c> sections and must stay retrievable. Path-separator
     /// agnostic (holds on Windows and Unix). Kept in the graph for agents; only the EVAL ignores them.
     /// </summary>
+    /// <summary>
+    /// The dev-process meta DIRECTORIES the eval ignores — the <b>single source of truth</b> for that list
+    /// (#140). <see cref="IsEvalMetaNode"/> reads it, and so does the config-sync test, so the guard and
+    /// <c>shonkor.json</c>'s <c>ExcludePatterns</c> cannot drift into disagreeing about which directories are
+    /// meta. Each of these must ALSO be excluded from indexing in <c>shonkor.json</c>: otherwise the dir would
+    /// be in the graph and only this measurement-time guard would keep it out of the eval — defence in depth,
+    /// not defence by one layer.
+    /// </summary>
+    internal static readonly string[] MetaDirectories = ["bench/golden", "tickets", "review"];
+
+    private static bool PathUnder(string? filePath, string dir)
+    {
+        if (string.IsNullOrEmpty(filePath)) return false;
+        var p = filePath.Replace('\\', '/');
+        return p.Contains("/" + dir + "/", StringComparison.OrdinalIgnoreCase)
+            || p.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A node under one of the <see cref="MetaDirectories"/> — a directory that <c>shonkor.json</c> excludes
+    /// from indexing, so it must <b>never</b> be in a correctly-built graph. If one appears in retrieval
+    /// results, the index-time exclude has broken and the eval is re-contaminating: <see cref="Score"/>
+    /// records it and the run fails loudly (#136), rather than the measurement-time filter quietly patching
+    /// over it. Distinct from the guard-only <c>bench/*.md</c> case, which is *legitimately* indexed.
+    /// </summary>
+    internal static bool IsIndexExcludedMeta(GraphNode node) => MetaDirectories.Any(d => PathUnder(node.FilePath, d));
+
     internal static bool IsEvalMetaNode(GraphNode node)
     {
-        var path = node.FilePath;
-        if (string.IsNullOrEmpty(path)) return false;
-        var p = path.Replace('\\', '/');
-
-        bool Under(string dir) =>
-            p.Contains("/" + dir + "/", StringComparison.OrdinalIgnoreCase)
-            || p.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase);
-
-        if (Under("bench/golden") || Under("tickets") || Under("review")) return true;
-        // bench measurement notes (prose) — but NOT bench source code (.cs).
-        return Under("bench") && p.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
+        if (IsIndexExcludedMeta(node)) return true;
+        // bench measurement notes (prose) — but NOT bench source code (.cs). Deliberately GUARD-ONLY: these
+        // .md files stay indexed (agents may read them) and are excluded only from the eval, so there is no
+        // corresponding shonkor.json directory exclude. The #140 test whitelists this exception explicitly.
+        return PathUnder(node.FilePath, "bench") && node.FilePath!.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
     }
 
     // One self-retrieval case per named symbol (Class/Interface/Record/Struct/Enum/Method).
@@ -150,7 +185,7 @@ internal static class RetrievalBenchmark
         {
             var config = new ConfigurationBuilder().AddEnvironmentVariables().Build();
             var logger = LoggerFactory.Create(_ => { }).CreateLogger<OllamaEmbeddingService>();
-            return new OllamaEmbeddingService(new HttpClient(), config, logger);
+            return OllamaClientFactory.CreateEmbeddingService(config, logger);
         }
         catch
         {

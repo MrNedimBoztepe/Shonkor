@@ -33,7 +33,7 @@ public sealed class SignatureTool : IMcpTool
         var symbol = ReadSymbol(args);
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return SendError(id, -32602, "Parameter 'symbol' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'symbol' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
@@ -41,7 +41,7 @@ public sealed class SignatureTool : IMcpTool
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (def == null)
         {
-            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+            throw McpToolException.SymbolNotFound(symbol!);
         }
         var loc = Shorten(string.IsNullOrEmpty(def.FilePath) ? def.Id : def.FilePath, basePath);
         if (def.StartLine is int sl) loc += $":{sl}";
@@ -76,7 +76,7 @@ public sealed class GetSourceTool : IMcpTool
         var symbol = ReadSymbol(args);
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return SendError(id, -32602, "Parameter 'symbol' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'symbol' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
@@ -85,7 +85,7 @@ public sealed class GetSourceTool : IMcpTool
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (def == null)
         {
-            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+            throw McpToolException.SymbolNotFound(symbol!);
         }
         // Prefer the stored body; for nodes that store none (or, for a DB indexed before TICKET-204, a body
         // truncated with the legacy "..." marker) read the exact line range from the file instead.
@@ -128,6 +128,12 @@ public sealed class OutlineTool : IMcpTool
 {
     public string Name => "outline";
 
+    /// <summary>
+    /// #105. Note <c>file</c>: this tool accepts it as an alias of <c>path</c>, so it must be declared too —
+    /// an undeclared alias is exactly the hole the central guard exists to close.
+    /// </summary>
+    public IReadOnlyList<string> PathArguments => ["path", "file"];
+
     public object GetSchema() => new
     {
         name = "outline",
@@ -149,29 +155,46 @@ public sealed class OutlineTool : IMcpTool
         var rawPath = args?["path"]?.ToString() ?? args?["file"]?.ToString();
         if (string.IsNullOrWhiteSpace(rawPath))
         {
-            return SendError(id, -32602, "Parameter 'path' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'path' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var basePath = ctx.GetProjectBasePath(projectName);
-        if (!TryResolveContainedPath(rawPath, basePath, out var fileId, out var pathError))
-        {
-            return SendError(id, -32602, pathError!);
-        }
+        // #105: `path`/`file` arrived resolved and contained — the dispatcher aborted the call otherwise.
+        var fileId = rawPath!;
 
         var fileNode = await storage.GetNodeByIdAsync(fileId).ConfigureAwait(false);
         if (fileNode == null)
         {
-            return SendToolResponse(id, $"File '{ToHandle(fileId, basePath)}' is not indexed.");
+            // #118: the file is not in the graph — the caller's premise is wrong, so this fails rather than
+            // returning a bland answer an agent could read as "the file exists and is empty".
+            throw McpToolException.FileNotIndexed(ToHandle(fileId, basePath));
         }
 
-        var (nodes, edges) = await storage.GetSubgraphAsync(new[] { fileId }, 2).ConfigureAwait(false);
-        var byId = nodes.ToDictionary(n => n.Id);
-        var children = new Dictionary<string, List<string>>();
-        foreach (var e in edges.Where(e => e.Relationship == "CONTAINS"))
+        // Walk CONTAINS specifically, breadth-first from the file, rather than pulling a generic n-hop
+        // subgraph. Two reasons, both introduced by the markdown nesting (#112):
+        //   - Depth: a `###` is now file → h1 → h2 → h3, so a fixed 2-hop fetch simply MISSED it. The tree can
+        //     be six levels deep, and raising the hop count on a generic subgraph would drag in the file's
+        //     whole reference neighbourhood at every level — expensive, and none of it is outline material.
+        //   - Precision: outline only ever renders CONTAINS. Fetching other edge types was always waste.
+        // The walk is bounded by the containment tree itself, which is exactly what we are rendering.
+        var byId = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
+        var children = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal) { fileId };
+        var frontier = new Queue<string>();
+        frontier.Enqueue(fileId);
+
+        while (frontier.Count > 0)
         {
-            if (!children.TryGetValue(e.SourceId, out var list)) children[e.SourceId] = list = new();
-            list.Add(e.TargetId);
+            var current = frontier.Dequeue();
+            var (incident, neighbours) = await storage.GetIncidentEdgesAsync(current).ConfigureAwait(false);
+            foreach (var e in incident.Where(e => e.Relationship == "CONTAINS" && e.SourceId == current))
+            {
+                if (neighbours.TryGetValue(e.TargetId, out var child)) byId[e.TargetId] = child;
+                if (!children.TryGetValue(current, out var list)) children[current] = list = new();
+                list.Add(e.TargetId);
+                if (seen.Add(e.TargetId)) frontier.Enqueue(e.TargetId);
+            }
         }
 
         var sb = new System.Text.StringBuilder();
@@ -223,11 +246,12 @@ public sealed class GetSubgraphTool : IMcpTool
         var seedsNode = args?["seeds"] as JsonArray;
         if (seedsNode == null || seedsNode.Count == 0)
         {
-            return SendError(id, -32602, "Parameter 'seeds' is required and must be a non-empty array");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'seeds' is required and must be a non-empty array", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var hops = Math.Clamp(ReadInt(args?["hops"], 2), 1, MaxHops);
+        var clamps = new ClampReport();
+        var hops = clamps.Clamp(args?["hops"], "hops", 2, 1, MaxHops);
         var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
         var maxChars = ReadOutputCap(args?["maxChars"]);
         var basePath = ctx.GetProjectBasePath(projectName);
@@ -258,31 +282,72 @@ public sealed class GetSubgraphTool : IMcpTool
             return SendToolResponse(id, CapOutput(sb.ToString(), maxChars, "raise maxChars or reduce hops"));
         }
 
-        var formatted = new
-        {
-            nodes = nodes.Select(n => new
-            {
-                n.Id,
-                n.Type,
-                n.Name,
-                n.FilePath,
-                n.StartLine,
-                n.EndLine,
-                ContentLength = n.Content.Length
-            }),
-            edges = edges.Select(e => new
-            {
-                e.SourceId,
-                e.TargetId,
-                Relationship = e.Relationship,
-                Provenance = e.Provenance.ToString()
-            })
-        };
+        // The verbose branch emits JSON, so the cap must be STRUCTURAL (#117). TICKET-210 capped it by
+        // characters, which is honest about truncating but hands back a document the caller cannot
+        // JSON.parse — a dangling brace is not a usable answer. Dropping whole nodes/edges keeps the result
+        // valid and states the omission outright, instead of implying it with a severed string.
+        var json = BuildCappedSubgraphJson(nodes, edges, maxChars);
+        return SendToolJsonResponse(id, json, clamps.Suffix);
+    }
 
-        // verbose JSON previously bypassed the cap entirely — it is the LARGEST output this tool can emit,
-        // so it must be capped too. (Truncated JSON is invalid, hence the explicit note.)
-        return SendToolResponse(id, CapOutput(JsonSerializer.Serialize(formatted), maxChars,
-            "raise maxChars or reduce hops — this JSON is truncated and no longer parseable"));
+    /// <summary>
+    /// Serializes the subgraph to fit <paramref name="maxChars"/> by <b>dropping whole nodes and edges</b>,
+    /// never by cutting the string (#117). The result is always parseable and always reports what it left out.
+    /// <para>
+    /// Nodes are dropped from the tail. That is correct because <see cref="IGraphSearch.GetSubgraphAsync"/>
+    /// has a <b>documented, tested ordering contract</b> (#170): it returns nodes nearest-first (seeds, then by
+    /// hop distance). So the tail is the material furthest from what the caller asked about — the right thing
+    /// to lose first. This used to rest on an *un-enforced* assumption about the query's row order; it now
+    /// rests on that contract (see the method's remarks and its ordering test). Edges whose endpoints no longer
+    /// survive are dropped with them, so the graph stays referentially intact rather than carrying edges into
+    /// nodes that are not there.
+    /// </para>
+    /// </summary>
+    private static string BuildCappedSubgraphJson(
+        IReadOnlyList<GraphNode> nodes, IReadOnlyList<GraphEdge> edges, int maxChars)
+    {
+        string Render(int nodeCount, int edgeCount)
+        {
+            var keptNodes = nodes.Take(nodeCount).ToList();
+            var keptIds = keptNodes.Select(n => n.Id).ToHashSet(StringComparer.Ordinal);
+            var keptEdges = edges
+                .Where(e => keptIds.Contains(e.SourceId) && keptIds.Contains(e.TargetId))
+                .Take(edgeCount)
+                .ToList();
+
+            return JsonSerializer.Serialize(new
+            {
+                nodes = keptNodes.Select(n => new
+                {
+                    n.Id, n.Type, n.Name, n.FilePath, n.StartLine, n.EndLine, ContentLength = n.Content.Length
+                }),
+                edges = keptEdges.Select(e => new
+                {
+                    e.SourceId, e.TargetId, Relationship = e.Relationship, Provenance = e.Provenance.ToString()
+                }),
+                truncated = keptNodes.Count < nodes.Count || keptEdges.Count < edges.Count,
+                omitted = new
+                {
+                    nodes = nodes.Count - keptNodes.Count,
+                    edges = edges.Count - keptEdges.Count
+                },
+                reason = keptNodes.Count < nodes.Count || keptEdges.Count < edges.Count ? "maxChars" : null
+            });
+        }
+
+        var full = Render(nodes.Count, edges.Count);
+        if (full.Length <= maxChars) return full;
+
+        // Largest prefix of nodes that still fits. Binary search — the payload grows monotonically with the
+        // node count, so ~log2(n) serializations settle it rather than a linear walk.
+        int lo = 0, hi = nodes.Count, best = 0;
+        while (lo <= hi)
+        {
+            var mid = (lo + hi) / 2;
+            if (Render(mid, edges.Count).Length <= maxChars) { best = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        return Render(best, edges.Count);
     }
 }
 
@@ -314,11 +379,12 @@ public sealed class GenerateCapsuleTool : IMcpTool
         var query = args?["query"]?.ToString();
         if (string.IsNullOrWhiteSpace(query))
         {
-            return SendError(id, -32602, "Parameter 'query' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'query' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var hops = Math.Clamp(ReadInt(args?["hops"], 2), 1, MaxHops);
+        var clamps = new ClampReport();
+        var hops = clamps.Clamp(args?["hops"], "hops", 2, 1, MaxHops);
 
         // Seed with the same hybrid retrieval agents get from search_hybrid (vector + FTS, FTS-only
         // fallback) — the old FTS-only seeding missed intent-phrased queries the tool is built for.
@@ -345,7 +411,7 @@ public sealed class GenerateCapsuleTool : IMcpTool
             MaxNodes = 40
         });
 
-        return SendToolResponse(id, markdown);
+        return SendToolResponse(id, clamps.Annotate(markdown));
     }
 }
 

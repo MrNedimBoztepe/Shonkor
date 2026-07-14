@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shonkor.Core.Interfaces;
+using Polly;
 using Shonkor.Infrastructure.Services;
 
 namespace Shonkor.Tests;
@@ -56,14 +57,116 @@ public class OllamaRetryTests
         Assert.False(OllamaRetry.IsConnectError(new OllamaResponseException("empty")));
     }
 
-    [Fact]
-    public void Backoff_GrowsExponentially_AndCarriesJitter()
+    // ---- #116: the retry MECHANISM is Polly's now; assert it against the real pipeline ---------------
+    //
+    // The old test asserted on OllamaRetry.Backoff(int) — a hand-rolled exponential-with-jitter helper.
+    // That helper is gone: computing backoff is precisely what Polly exists to do. Preserving it so a unit
+    // test could keep asserting on it would have been dead code kept alive for the benefit of its own test.
+    //
+    // These assert the same properties, but end-to-end through OllamaResilience — a stronger check, because
+    // it exercises the pipeline the services actually run on rather than a helper they no longer call.
+
+    /// <summary>Fails a fixed number of times, then succeeds. Counts how many attempts the pipeline made.</summary>
+    private sealed class FlakyHandler(int failures, Func<Exception>? error = null) : HttpMessageHandler
     {
-        Assert.True(OllamaRetry.Backoff(1) < OllamaRetry.Backoff(3));
-        Assert.True(OllamaRetry.Backoff(1) >= TimeSpan.FromSeconds(1));
-        // Jitter: repeated draws for the same attempt should not all be identical.
-        var draws = Enumerable.Range(0, 20).Select(_ => OllamaRetry.Backoff(1)).Distinct().Count();
-        Assert.True(draws > 1, "backoff must carry jitter so workers don't retry in lockstep");
+        public int Attempts { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Attempts++;
+            if (Attempts <= failures) throw error?.Invoke() ?? new HttpRequestException("boom", null, HttpStatusCode.ServiceUnavailable);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        }
+    }
+
+    private static async Task<(int Attempts, Exception? Error)> RunAsync(
+        ResiliencePipeline<HttpResponseMessage> pipeline, FlakyHandler handler)
+    {
+        using var client = new HttpClient(handler);
+        try
+        {
+            await pipeline.ExecuteAsync(async ct =>
+                await client.GetAsync("http://localhost/x", ct).ConfigureAwait(false), CancellationToken.None);
+            return (handler.Attempts, null);
+        }
+        catch (Exception ex)
+        {
+            return (handler.Attempts, ex);
+        }
+    }
+
+    [Fact]
+    public async Task Background_RetriesATransientFailure_ThenSucceeds()
+    {
+        var handler = new FlakyHandler(failures: 2);
+        var (attempts, error) = await RunAsync(OllamaResilience.Background, handler);
+
+        Assert.Null(error);
+        Assert.Equal(3, attempts); // the original + 2 retries
+    }
+
+    [Fact]
+    public async Task Background_DoesNotRetryADeterministicFailure()
+    {
+        // A 400 will fail identically forever. Retrying it just wastes the backend's time and ours.
+        var handler = new FlakyHandler(failures: 99, () => new HttpRequestException("bad", null, HttpStatusCode.BadRequest));
+        var (attempts, error) = await RunAsync(OllamaResilience.Background, handler);
+
+        Assert.NotNull(error);
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
+    public async Task Blocking_RetriesAConnectFailure_ExactlyOnce()
+    {
+        // The backend simply wasn't listening yet — cheap to retry, likely to fix itself.
+        var handler = new FlakyHandler(failures: 1, () => new HttpRequestException("refused", new SocketException()));
+        var (attempts, error) = await RunAsync(OllamaResilience.Blocking, handler);
+
+        Assert.Null(error);
+        Assert.Equal(2, attempts); // the original + exactly one retry
+    }
+
+    [Fact]
+    public async Task Blocking_NeverRetriesATimeout_BecauseThatWouldDoubleAMinutesLongWait()
+    {
+        // THE critical property of the blocking RAG path. A generation can legitimately run for minutes;
+        // retrying a timeout would make a human wait twice as long for an answer that is not coming.
+        // A timeout is "transient" by every ordinary definition — and must still not be retried here.
+        var handler = new FlakyHandler(failures: 99, () => new TaskCanceledException("timeout"));
+        var (attempts, error) = await RunAsync(OllamaResilience.Blocking, handler);
+
+        Assert.NotNull(error);
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
+    public async Task Background_RetriesATimeout_UnlikeTheBlockingPath()
+    {
+        // The counterpart: in background work nobody is waiting, so a timeout IS worth retrying. The two
+        // policies genuinely differ — which is why they cannot both live on the shared HttpClient's handler.
+        var handler = new FlakyHandler(failures: 1, () => new TaskCanceledException("timeout"));
+        var (attempts, error) = await RunAsync(OllamaResilience.Background, handler);
+
+        Assert.Null(error);
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task CallerCancellation_IsNeverRetried()
+    {
+        // Previously enforced by a rule (inspect the token to tell caller-cancellation from a client
+        // timeout). Now true by construction: a cancelled token aborts the pipeline itself.
+        var handler = new FlakyHandler(failures: 99);
+        using var client = new HttpClient(handler);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            OllamaResilience.Background.ExecuteAsync(async ct =>
+                await client.GetAsync("http://localhost/x", ct).ConfigureAwait(false), cts.Token).AsTask());
+
+        Assert.Equal(0, handler.Attempts);
     }
 
     // ---- Behaviour: a triggered cancellation is never retried ----------------------------------------

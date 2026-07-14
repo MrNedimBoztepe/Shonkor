@@ -37,7 +37,7 @@ public sealed class ReferencesTool : IMcpTool
         var symbol = ReadSymbol(args);
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return SendError(id, -32602, "Parameter 'symbol' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'symbol' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
@@ -64,7 +64,7 @@ public sealed class ReferencesTool : IMcpTool
         var refDef = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (refDef == null)
         {
-            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+            throw McpToolException.SymbolNotFound(symbol!);
         }
         var refBasePath = ctx.GetProjectBasePath(projectName);
 
@@ -196,7 +196,7 @@ public sealed class FindUsagesTool : IMcpTool
         var symbol = ReadSymbol(args);
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return SendError(id, -32602, "Parameter 'symbol' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'symbol' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
@@ -206,7 +206,7 @@ public sealed class FindUsagesTool : IMcpTool
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (def == null)
         {
-            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+            throw McpToolException.SymbolNotFound(symbol!);
         }
 
         var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
@@ -264,7 +264,7 @@ public sealed class CallHierarchyTool : IMcpTool
         var symbol = ReadSymbol(args);
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return SendError(id, -32602, "Parameter 'symbol' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'symbol' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
@@ -275,7 +275,7 @@ public sealed class CallHierarchyTool : IMcpTool
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (def == null)
         {
-            return SendToolResponse(id, $"No definition found for '{symbol}'.");
+            throw McpToolException.SymbolNotFound(symbol!);
         }
 
         var sb = new System.Text.StringBuilder();
@@ -345,7 +345,7 @@ public sealed class ImplementationsOfTool : IMcpTool
         var symbol = ReadSymbol(args);
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return SendError(id, -32602, "Parameter 'symbol' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'symbol' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
@@ -466,16 +466,20 @@ public sealed class FindPathTool : IMcpTool
         var toArg = args?["to"]?.ToString();
         if (string.IsNullOrWhiteSpace(fromArg) || string.IsNullOrWhiteSpace(toArg))
         {
-            return SendError(id, -32602, "Parameters 'from' and 'to' are required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameters 'from' and 'to' are required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var maxHops = Math.Clamp(ReadInt(args?["maxHops"], 5), 1, MaxPathHops);
+        var clamps = new ClampReport();
+        var maxHops = clamps.Clamp(args?["maxHops"], "maxHops", 5, 1, MaxPathHops);
 
-        var fromDef = await ResolveDefinitionAsync(storage, fromArg).ConfigureAwait(false);
-        if (fromDef == null) return SendToolResponse(id, $"No definition found for 'from' = '{fromArg}'.");
-        var toDef = await ResolveDefinitionAsync(storage, toArg).ConfigureAwait(false);
-        if (toDef == null) return SendToolResponse(id, $"No definition found for 'to' = '{toArg}'.");
+        // #118: the SUBJECT not existing is the caller's mistake — a typo, or a symbol it invented — so it
+        // fails (isError). It must not look like an ordinary answer.
+        var fromDef = await ResolveDefinitionAsync(storage, fromArg).ConfigureAwait(false)
+                      ?? throw McpToolException.SymbolNotFound(fromArg!);
+        var toDef = await ResolveDefinitionAsync(storage, toArg).ConfigureAwait(false)
+                    ?? throw McpToolException.SymbolNotFound(toArg!);
+
         if (fromDef.Id == toDef.Id)
         {
             return SendToolResponse(id, $"'{fromArg}' and '{toArg}' resolve to the same node ({fromDef.Name}).");
@@ -484,8 +488,11 @@ public sealed class FindPathTool : IMcpTool
         var path = await GraphPathFinder.FindPathAsync(storage, fromDef.Id, toDef.Id, maxHops).ConfigureAwait(false);
         if (path == null)
         {
-            return SendToolResponse(id,
-                $"No path from '{fromDef.Name}' to '{toDef.Name}' within {maxHops} hops — they may be in different components. Try raising maxHops.");
+            // ...whereas THIS is a real finding, not a failure: both symbols exist and are genuinely
+            // unconnected within the bound. Flagging it isError would teach the model that a correct negative
+            // is a malfunction and invite pointless retries (#118).
+            return SendToolResponse(id, clamps.Annotate(
+                $"No path from '{fromDef.Name}' to '{toDef.Name}' within {maxHops} hops — they may be in different components. Try raising maxHops."));
         }
 
         var sb = new System.Text.StringBuilder();

@@ -71,14 +71,16 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
         var endpoint = $"{_ollamaUrl}/api/generate";
 
-        const int maxRetries = 3;
-        for (int attempt = 1; attempt <= maxRetries; attempt++)
-        {
-            try
-            {
-                _logger.LogDebug("Sending node {NodeId} to Ollama ({Model}) for analysis... (Attempt {Attempt})", node.Id, _ollamaModel, attempt);
+        _logger.LogDebug("Sending node {NodeId} to Ollama ({Model}) for analysis...", node.Id, _ollamaModel);
 
-                var response = await _httpClient.PostAsJsonAsync(endpoint, requestBody, cancellationToken).ConfigureAwait(false);
+        // Background work: Polly retries transient failures with exponential backoff + jitter (#116). The
+        // OllamaResponseException raised below comes AFTER a 200, so the pipeline has already returned and
+        // cannot retry it — deterministic failures are excluded by construction, not by a rule.
+        {
+            {
+                var response = await OllamaResilience.Background
+                    .ExecuteAsync(async ct => await _httpClient.PostAsJsonAsync(endpoint, requestBody, ct).ConfigureAwait(false), cancellationToken)
+                    .ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
                 var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -126,20 +128,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                     LatencyMs = durationNs / 1_000_000
                 };
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                // The caller cancelled — never burn retries (and never a 2s Delay) on a shutdown.
-                throw;
-            }
-            catch (Exception ex) when (OllamaRetry.IsTransient(ex) && attempt < maxRetries)
-            {
-                _logger.LogWarning(ex, "Transient failure analyzing node {NodeId} via Ollama on attempt {Attempt}; retrying.", node.Id, attempt);
-                await Task.Delay(OllamaRetry.Backoff(attempt), cancellationToken).ConfigureAwait(false);
-            }
         }
-
-        // Unreachable: the last attempt propagates its own exception (the retry filter needs attempt < maxRetries).
-        throw new OllamaResponseException($"Analysis of node '{node.Id}' exhausted its retries without a result.");
     }
 
     public Task<string> GenerateRAGResponseAsync(string query, IReadOnlyList<GraphNode> contextNodes, CancellationToken cancellationToken = default)
@@ -165,16 +154,17 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         var ragEndpoint = $"{_ollamaUrl}/api/generate";
         _logger.LogInformation("Generating RAG response via Ollama ({Model}) for query: {Query}", _ollamaModel, query);
 
-        // A RAG generation is BLOCKING and can take minutes. Retrying it three times could keep a caller
-        // waiting ~6 minutes for an answer that will not come. So: at most ONE retry, and only when the
-        // request never reached a responding backend (connection refused / DNS) — a cheap, likely-fixable
-        // failure. A timeout or a 5xx mid-generation is not retried; the caller gets the error promptly.
-        const int maxRetries = 2;
-        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        // A RAG generation is BLOCKING and can take minutes. Retrying it repeatedly could keep a caller
+        // waiting for an answer that will not come. So it uses the BLOCKING pipeline (#116): at most ONE
+        // retry, and only when the request never reached a responding backend (connection refused / DNS) — a
+        // cheap, likely-fixable failure. A timeout or a 5xx mid-generation is NOT retried; the caller gets
+        // the error promptly. This is why the policy cannot live on the shared HttpClient's handler: the
+        // background path on that same client must retry exactly the failures this one must not.
         {
-            try
             {
-                var response = await _httpClient.PostAsJsonAsync(ragEndpoint, requestBody, cancellationToken).ConfigureAwait(false);
+                var response = await OllamaResilience.Blocking
+                    .ExecuteAsync(async ct => await _httpClient.PostAsJsonAsync(ragEndpoint, requestBody, ct).ConfigureAwait(false), cancellationToken)
+                    .ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
                 var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -188,19 +178,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                 var validNames = RagPromptBuilder.ValidCitationNames(plan.Nodes);
                 return CitationValidator.AnnotateInvalid(responseText, validNames, options.Language);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw; // the caller gave up — don't retry, don't swallow
-            }
-            catch (Exception ex) when (OllamaRetry.IsConnectError(ex) && attempt < maxRetries)
-            {
-                _logger.LogWarning(ex, "Ollama was not reachable for RAG generation on attempt {Attempt}; retrying once.", attempt);
-                await Task.Delay(OllamaRetry.Backoff(attempt), cancellationToken).ConfigureAwait(false);
-            }
         }
-
-        // Unreachable: the last attempt propagates its own exception (the retry filter needs attempt < maxRetries).
-        throw new OllamaResponseException("RAG generation exhausted its retries without a result.");
     }
 
     /// <summary>

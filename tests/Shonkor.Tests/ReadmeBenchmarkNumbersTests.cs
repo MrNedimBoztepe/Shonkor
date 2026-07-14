@@ -121,44 +121,50 @@ public class ReadmeBenchmarkNumbersTests
     }
 
     [Fact]
-    public void RagHeadToHead_MatchesCheckedInMetrics()
+    public void RagHeadToHead_2x2_MatchesCheckedInMetrics()
     {
-        // All three rows are guarded, deliberately — including the vector-only row, where Shonkor LOSES.
-        // That row is the single easiest number to quietly drop once the "as shipped" row started winning,
-        // so it gets exactly the same protection as the flattering one. That is the whole point of the guard.
+        // All FOUR cells of the 2×2 are guarded (#166). Each row has two percent cells: the no-graph column
+        // and the graph column. The unflattering cells — the vector-only diagonal where Shonkor does NOT win,
+        // and the baseline-hybrid cell that shows the keyword arm added nothing — get exactly the same
+        // protection as the +9,1 the page leads with. That symmetry is the whole point of the guard.
         var section = Section(Readme(), "### 3.", "## ✨");
         var m = Metrics("metrics-agent-queries.json").GetProperty("ragBaseline");
         Assert.True(m.ValueKind != JsonValueKind.Null,
             "bench/metrics-agent-queries.json has no ragBaseline — re-run the set with --compare-rag.");
 
-        (string Label, string Key)[] rows =
+        // (row label, [no-graph cell key, graph cell key]) — the 2×2, read left-to-right per row.
+        (string Label, string NoGraphKey, string GraphKey)[] rows =
         [
-            ("chunked-RAG",                     "ragCoverage"),
-            ("Shonkor capsule — vector-only",   "shonkorCoverage"),
-            ("Shonkor capsule — as shipped",    "shonkorHybridCoverage"),
+            ("vector-only seeds", "ragCoverage",       "shonkorCoverage"),
+            ("hybrid seeds",      "ragHybridCoverage", "shonkorHybridCoverage"),
         ];
 
-        foreach (var (label, key) in rows)
+        foreach (var (label, noGraphKey, graphKey) in rows)
         {
-            var published = Row(section, label)[0];
-            var measured = m.GetProperty(key).GetDouble() * 100;
-            Assert.True(Math.Abs(published - measured) < Tolerance,
-                $"README '{label}' coverage ({published:F1} %) != metrics-agent-queries.json:{key} ({measured:F1} %).");
+            var cells = Row(section, label);
+            Assert.True(cells.Length == 2, $"README 2×2 row '{label}' should have 2 percent cells, found {cells.Length}.");
+
+            var noGraph = m.GetProperty(noGraphKey).GetDouble() * 100;
+            var graph = m.GetProperty(graphKey).GetDouble() * 100;
+            Assert.True(Math.Abs(cells[0] - noGraph) < Tolerance,
+                $"README 2×2 '{label}' no-graph cell ({cells[0]:F1} %) != {noGraphKey} ({noGraph:F1} %).");
+            Assert.True(Math.Abs(cells[1] - graph) < Tolerance,
+                $"README 2×2 '{label}' graph cell ({cells[1]:F1} %) != {graphKey} ({graph:F1} %).");
         }
     }
 
     [Fact]
-    public void RagHeadToHead_StillPublishesTheArmWeLose()
+    public void RagHeadToHead_PublishesTheHonestyCaveat()
     {
-        // Structural, not numeric: the vector-only arm must remain in the README. If a future edit deletes the
-        // row because it is unflattering, this fails — publishing only the winning configuration would make
-        // the whole head-to-head worthless, which is the failure #157 was filed to prevent.
+        // The page leads with "+9,1 pp graph contribution". That number is only honest next to the caveat
+        // that the baseline's keyword arm barely fired (so part of the gain is the graph's richer indexed
+        // unit, not pure topology). If a future edit keeps the flattering number and drops the caveat, this
+        // fails — banking the win while hiding the confound is exactly what #166 exists to prevent.
         var section = Section(Readme(), "### 3.", "## ✨");
-        Assert.Contains("vector-only", section);
+        var fired = Metrics("metrics-agent-queries.json").GetProperty("ragBaseline")
+            .GetProperty("ragKeywordFiredQueries").GetInt32();
 
-        var m = Metrics("metrics-agent-queries.json").GetProperty("ragBaseline");
-        Assert.True(m.GetProperty("shonkorCoverage").GetDouble() < m.GetProperty("ragCoverage").GetDouble(),
-            "The vector-only arm no longer loses to the baseline. Good news — but re-read the README prose in " +
-            "section 3, which explains that it does, and update the narrative to match the measurement.");
+        Assert.Contains($"{fired} of 33", section);
+        Assert.Contains("indexed unit", section); // the confound must be named, not just numbered
     }
 }

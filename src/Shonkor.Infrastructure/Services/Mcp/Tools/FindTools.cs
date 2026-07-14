@@ -36,11 +36,12 @@ public sealed class SearchGraphTool : IMcpTool
         var query = args?["query"]?.ToString();
         if (string.IsNullOrWhiteSpace(query))
         {
-            return SendError(id, -32602, "Parameter 'query' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'query' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var limit = Math.Clamp(ReadInt(args?["limit"], 10), 1, MaxResultLimit);
+        var clamps = new ClampReport();
+        var limit = clamps.Clamp(args?["limit"], "limit", 10, 1, MaxResultLimit);
         var verbose = args?["verbose"]?.GetValue<bool>() ?? false;
         var typeFilter = args?["type"]?.ToString();
         var results = await storage.SearchAsync(query, limit, filterType: typeFilter).ConfigureAwait(false);
@@ -63,7 +64,7 @@ public sealed class SearchGraphTool : IMcpTool
                 var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t{r.Node.Summary}" : "";
                 return $"{r.Node.Type}\t{r.Node.Name}\t{loc}{summary}";
             });
-            return SendToolResponse(id, string.Join("\n", lines));
+            return SendToolResponse(id, clamps.Annotate(string.Join("\n", lines)));
         }
 
         // verbose: full structured JSON incl. connections (compact, no indentation).
@@ -87,7 +88,9 @@ public sealed class SearchGraphTool : IMcpTool
             })
         }).ToList();
 
-        return SendToolResponse(id, JsonSerializer.Serialize(formattedResults));
+        // The clamp note rides in a SECOND content block, so content[0].text stays exactly the JSON array
+        // callers already parse (#119) — announcing a cap must not corrupt the payload it describes (#117).
+        return SendToolJsonResponse(id, JsonSerializer.Serialize(formattedResults), clamps.Suffix);
     }
 }
 
@@ -118,11 +121,12 @@ public sealed class LocateTool : IMcpTool
         var query = args?["query"]?.ToString();
         if (string.IsNullOrWhiteSpace(query))
         {
-            return SendError(id, -32602, "Parameter 'query' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'query' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var limit = Math.Clamp(ReadInt(args?["limit"], 15), 1, MaxResultLimit);
+        var clamps = new ClampReport();
+        var limit = clamps.Clamp(args?["limit"], "limit", 15, 1, MaxResultLimit);
         var results = await storage.SearchAsync(query, limit).ConfigureAwait(false);
         if (results.Count == 0)
         {
@@ -138,7 +142,7 @@ public sealed class LocateTool : IMcpTool
             var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $" | {r.Node.Summary}" : "";
             return $"{r.Node.Name} -> {loc}{summary}";
         });
-        return SendToolResponse(id, string.Join("\n", lines));
+        return SendToolResponse(id, clamps.Annotate(string.Join("\n", lines)));
     }
 }
 
@@ -175,7 +179,7 @@ public sealed class SearchSemanticTool : IMcpTool
         var query = args?["query"]?.ToString();
         if (string.IsNullOrWhiteSpace(query))
         {
-            return SendError(id, -32602, "Parameter 'query' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'query' is required", isArgumentError: true);
         }
         if (ctx.EmbeddingService == null)
         {
@@ -183,7 +187,8 @@ public sealed class SearchSemanticTool : IMcpTool
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var limit = Math.Clamp(ReadInt(args?["limit"], 10), 1, MaxResultLimit);
+        var clamps = new ClampReport();
+        var limit = clamps.Clamp(args?["limit"], "limit", 10, 1, MaxResultLimit);
         var minScore = Math.Clamp(ReadDouble(args?["minScore"], DefaultMinScore), 0.0, 1.0);
         var basePath = ctx.GetProjectBasePath(projectName);
 
@@ -213,7 +218,7 @@ public sealed class SearchSemanticTool : IMcpTool
         var footer = results.Count < limit
             ? $"\n\n({results.Count} hit(s) at or above similarity {minScore:0.##}; weaker matches hidden — lower minScore to widen.)"
             : "";
-        return SendToolResponse(id, string.Join("\n", lines) + footer);
+        return SendToolResponse(id, clamps.Annotate(string.Join("\n", lines) + footer));
     }
 }
 
@@ -250,12 +255,13 @@ public sealed class SearchHybridTool : IMcpTool
         var query = args?["query"]?.ToString();
         if (string.IsNullOrWhiteSpace(query))
         {
-            return SendError(id, -32602, "Parameter 'query' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'query' is required", isArgumentError: true);
         }
 
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
-        var limit = Math.Clamp(ReadInt(args?["limit"], 10), 1, MaxResultLimit);
+        var clamps = new ClampReport();
+        var limit = clamps.Clamp(args?["limit"], "limit", 10, 1, MaxResultLimit);
         var basePath = ctx.GetProjectBasePath(projectName);
 
         // Shared hybrid retrieval (FTS + optional vector, RRF-fused) — the same path capsule seeding uses.
@@ -270,6 +276,6 @@ public sealed class SearchHybridTool : IMcpTool
             var summary = !string.IsNullOrEmpty(r.Node.Summary) ? $"\t— {r.Node.Summary}" : "";
             return $"{r.Node.Type}\t{r.Node.Name}\t{ToHandle(r.Node.Id, basePath)}{summary}";
         });
-        return SendToolResponse(id, string.Join("\n", lines));
+        return SendToolResponse(id, clamps.Annotate(string.Join("\n", lines)));
     }
 }

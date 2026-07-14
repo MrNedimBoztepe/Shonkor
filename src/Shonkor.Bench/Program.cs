@@ -296,9 +296,22 @@ var token = await TokenBenchmark.RunAsync(provider, synthesizer, Console.Out);
 Console.WriteLine($"  -> {token.ReductionPct:F1}% reduction over {token.Queries} queries ({token.NaiveTokens:N0} -> {token.CapsuleTokens:N0} tokens)\n");
 
 Console.WriteLine("[2/2] Retrieval precision");
-var (fts, semantic, hybrid) = await RetrievalBenchmark.RunAsync(provider, allNodes, k, Console.Out,
+var (fts, semantic, hybrid, contamination) = await RetrievalBenchmark.RunAsync(provider, allNodes, k, Console.Out,
     golden, setPath is null ? null : Path.GetFileName(setPath));
 Console.WriteLine();
+
+// #136: eval-corpus hygiene is a LOUD gate, not just a silent filter. If an index-excluded meta file
+// (bench/golden, tickets, review) surfaced in retrieval, the shonkor.json exclude has broken and the numbers
+// are re-contaminating — fail with a non-zero exit and name the offenders, like the other bench gates.
+if (contamination.Count > 0)
+{
+    Console.Error.WriteLine(
+        $"[FAIL] Eval re-contamination: {contamination.Count} index-excluded meta file(s) appeared in retrieval " +
+        "results. They must not be in the graph at all — re-check shonkor.json's ExcludePatterns and re-index. " +
+        "The measurement-time filter kept these numbers correct, but the exclude that should prevent them has regressed:");
+    foreach (var file in contamination) Console.Error.WriteLine($"  - {file}");
+    return 2;
+}
 
 var report = new StringBuilder();
 report.AppendLine("# Shonkor Bench Report");
@@ -343,24 +356,32 @@ if (compareRag)
     }
     else
     {
-        report.AppendLine($"Same query embeddings, {rag.Queries} queries, **matched token budget** (the baseline takes as many top chunks from {rag.Chunks} line-window chunks as fit within Shonkor's per-query token count) — so this compares COVERAGE at equal cost. Both sides now measure coverage on the **delivered text** (TICKET-202): the baseline's chunks and Shonkor's budgeted capsule string — symmetric, not the pre-budget subgraph.");
+        report.AppendLine($"Same query embeddings, {rag.Queries} queries, **matched token budget** (the baseline takes as many top chunks from {rag.Chunks} line-window chunks as fit within Shonkor's per-query token count) — so this compares COVERAGE at equal cost. Coverage is measured on the **delivered text** (TICKET-202), symmetric on both sides.");
         report.AppendLine();
-        report.AppendLine("| Retriever | Avg tokens delivered | Coverage of the target symbol |");
-        report.AppendLine("|-----------|---------------------:|------------------------------:|");
-        report.AppendLine($"| chunked-RAG (no graph) | {rag.RagAvgTokens:N0} | {rag.RagCoverage:P1} |");
-        report.AppendLine($"| Shonkor capsule — vector-only seeds (isolates the graph) | {rag.ShonkorAvgTokens:N0} | {rag.ShonkorCoverage:P1} |");
-        report.AppendLine($"| **Shonkor capsule — hybrid seeds (as shipped)** | {rag.ShonkorAvgTokens:N0} | **{rag.ShonkorHybridCoverage:P1}** |");
+        report.AppendLine("A 2×2 (#166): **retrieval strategy** (vector-only vs. hybrid = BM25 + vector, RRF) × **graph** (no / yes). The baseline's hybrid arm gets *exactly Shonkor's retrieval, minus the graph* — so the graph's true contribution is the like-for-like **hybrid diagonal**, not the mixed comparison.");
         report.AppendLine();
-        report.AppendLine($"Seed survival (fraction of semantic seed nodes still present in the delivered capsule after budgeting): **{rag.ShonkorSeedSurvival:P1}**.");
+        report.AppendLine("| | chunked-RAG (no graph) | Shonkor capsule (graph) |");
+        report.AppendLine("|---|---:|---:|");
+        report.AppendLine($"| **vector-only seeds** | {rag.RagCoverage:P1} | {rag.ShonkorCoverage:P1} |");
+        report.AppendLine($"| **hybrid seeds** | {rag.RagHybridCoverage:P1} | **{rag.ShonkorHybridCoverage:P1}** |");
         report.AppendLine();
-        report.AppendLine($"Vector-only misses where the target was **never a seed** (a retrieval miss, not a budget casualty): **{rag.SeedMissedTarget}** of {rag.Queries}.");
+        report.AppendLine($"Avg tokens delivered: baseline {rag.RagAvgTokens:N0}, Shonkor {rag.ShonkorAvgTokens:N0}. Seed survival through the capsule budget: **{rag.ShonkorSeedSurvival:P1}**. Vector-only capsule misses where the target was never a seed: **{rag.SeedMissedTarget}** of {rag.Queries}.");
         report.AppendLine();
-        // The verdict is read off the SHIPPED path (hybrid seeds). The vector-only arm stays in the table
-        // because it isolates the graph's contribution, but it is not what a user runs (#162).
-        var covDelta = (rag.ShonkorHybridCoverage - rag.RagCoverage) * 100;
-        report.AppendLine(covDelta >= 0
-            ? $"→ At ~equal tokens, Shonkor (as shipped, hybrid seeds) covers the target **+{covDelta:F1} pp** more often ({rag.ShonkorHybridCoverage:P0} vs {rag.RagCoverage:P0}) — and delivers it as a structured capsule (call graph + signatures), not raw chunks."
-            : $"→ At ~equal tokens, chunked-RAG covers **{-covDelta:F1} pp** more ({rag.RagCoverage:P0} vs {rag.ShonkorHybridCoverage:P0}); Shonkor's edge here is structure (call graph + signatures), not raw recall.");
+        // The HONEST verdict is the like-for-like diagonal: same retrieval on both sides, graph the only
+        // difference. Reading the graph's contribution off the mixed (Shonkor-hybrid vs baseline-vector)
+        // comparison would credit the graph with the hybrid-retrieval gain (#166).
+        var graphDelta = (rag.ShonkorHybridCoverage - rag.RagHybridCoverage) * 100;
+        var hybridGain = (rag.RagHybridCoverage - rag.RagCoverage) * 100;
+        report.AppendLine($"**The graph's isolated contribution** (hybrid diagonal, same retrieval both sides): **{graphDelta:+0.0;-0.0;0.0} pp** ({rag.ShonkorHybridCoverage:P1} vs {rag.RagHybridCoverage:P1}).");
+        report.AppendLine($"Moving the *baseline* from vector-only to hybrid gains **{hybridGain:+0.0;-0.0;0.0} pp** — but read that with the next line before concluding the keyword arm is worthless.");
+        report.AppendLine();
+        report.AppendLine($"> **Why the baseline's keyword arm barely moves it:** it returned any hit on only **{rag.RagKeywordFiredQueries} of {rag.Queries}** queries. A raw 40-line source chunk does not keyword-match plain-English intent (\"how are api tokens hashed\" finds no chunk containing all those words). Shonkor's *nodes* do — a node carries a **name** and an **AI summary** that read like intent — which is why its hybrid arm gains where the baseline's does not. So the graph diagonal above is not pure topology: part of the gap is that the graph's indexed unit is keyword-matchable and a source chunk is not. That is a real advantage of the representation, named rather than hidden.");
+        report.AppendLine();
+        report.AppendLine(graphDelta > 0.05
+            ? "→ On coverage, the graph adds measurable value even at like-for-like retrieval."
+            : graphDelta < -0.05
+                ? "→ **On coverage, the graph does NOT help** — at like-for-like retrieval the raw chunks cover the target at least as often. Coverage is the wrong axis for the graph's value: the graph's advantage is the **edges** (`references`, `related_tests`, blast radius), which coverage cannot measure. This number should re-anchor the pitch, not be buried."
+                : "→ On coverage, the graph is **neutral** at like-for-like retrieval. Its value is the edges, which coverage does not capture — not raw recall.");
     }
     report.AppendLine();
 }
@@ -436,7 +457,7 @@ static IEmbeddingService? CreateEmbeddingService()
     {
         var config = new ConfigurationBuilder().AddEnvironmentVariables().Build();
         var logger = LoggerFactory.Create(_ => { }).CreateLogger<OllamaEmbeddingService>();
-        return new OllamaEmbeddingService(new HttpClient(), config, logger);
+        return OllamaClientFactory.CreateEmbeddingService(config, logger);
     }
     catch
     {
@@ -450,5 +471,5 @@ static ISemanticAnalyzer CreateSemanticAnalyzer()
     // environment (e.g. SemanticAnalyzer__OllamaModel), defaulting to localhost + qwen2.5-coder.
     var config = new ConfigurationBuilder().AddEnvironmentVariables().Build();
     var logger = LoggerFactory.Create(_ => { }).CreateLogger<OllamaSemanticAnalyzer>();
-    return new OllamaSemanticAnalyzer(new HttpClient(), config, logger);
+    return OllamaClientFactory.CreateSemanticAnalyzer(config, logger);
 }

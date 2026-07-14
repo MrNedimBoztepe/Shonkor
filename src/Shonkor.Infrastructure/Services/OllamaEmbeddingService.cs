@@ -60,44 +60,32 @@ public class OllamaEmbeddingService : IEmbeddingService
 
         var endpoint = $"{_ollamaUrl}/api/embeddings";
 
-        const int maxRetries = 3;
-        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        // No retry loop here (#116). Retry, exponential backoff and jitter are Polly's job — see
+        // OllamaResilience, which every construction path (Web DI, CLI, bench) wraps its HttpClient in.
+        // Two consequences worth naming, because the old hand-rolled loop had to work for them:
+        //   - The OllamaResponseException below is raised AFTER a successful 200, so the retry pipeline has
+        //     already returned and cannot retry it. Deterministic-failure-is-never-retried is now structural.
+        //   - A caller-triggered cancellation propagates out of the pipeline. There is no longer any need to
+        //     tell it apart from an HttpClient timeout by inspecting the token.
+        var response = await OllamaResilience.Background
+            .ExecuteAsync(async ct => await _httpClient.PostAsJsonAsync(endpoint, requestBody, ct).ConfigureAwait(false), cancellationToken)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+
+        var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
+        var embeddingNode = responseJson?["embedding"]?.AsArray();
+
+        if (embeddingNode == null || embeddingNode.Count == 0)
         {
-            try
-            {
-                var response = await _httpClient.PostAsJsonAsync(endpoint, requestBody, cancellationToken).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-
-                var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
-                var embeddingNode = responseJson?["embedding"]?.AsArray();
-
-                if (embeddingNode == null || embeddingNode.Count == 0)
-                {
-                    throw new OllamaResponseException("Ollama returned an empty embedding.");
-                }
-
-                var embedding = new float[embeddingNode.Count];
-                for (int i = 0; i < embeddingNode.Count; i++)
-                {
-                    embedding[i] = (float)embeddingNode[i]!.GetValue<double>();
-                }
-
-                return embedding;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                // The caller cancelled (shutdown, aborted request). Never retry, never swallow.
-                throw;
-            }
-            catch (Exception ex) when (OllamaRetry.IsTransient(ex) && attempt < maxRetries)
-            {
-                _logger.LogWarning(ex, "Transient failure generating embedding via Ollama on attempt {Attempt}; retrying.", attempt);
-                await Task.Delay(OllamaRetry.Backoff(attempt), cancellationToken).ConfigureAwait(false);
-            }
+            throw new OllamaResponseException("Ollama returned an empty embedding.");
         }
 
-        // Unreachable: the final attempt either returns or lets its exception propagate (the retry filter
-        // requires attempt < maxRetries), and a non-transient failure propagates immediately.
-        throw new OllamaResponseException("Embedding generation exhausted its retries without a result.");
+        var embedding = new float[embeddingNode.Count];
+        for (int i = 0; i < embeddingNode.Count; i++)
+        {
+            embedding[i] = (float)embeddingNode[i]!.GetValue<double>();
+        }
+
+        return embedding;
     }
 }

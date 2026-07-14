@@ -5,6 +5,282 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — The blocking RAG path's "never retry a timeout" rule is now pinned (#213)
+- `OllamaResilience.Blocking` exists for exactly one counter-intuitive rule: a **timeout must not be retried**.
+  A timeout is "transient" in every ordinary sense — and the *background* pipeline does retry it — but a RAG
+  generation can legitimately run for minutes with a human watching, so retrying a timeout there **doubles an
+  already minutes-long wait** for an answer that probably is not coming. A connection failure is different:
+  cheap, likely fixable, so it gets exactly one retry.
+- That rule had **no test**. Nothing would have caught a well-meaning edit that made the blocking path retry
+  like the background one — and #179's placement guard would have stayed green, because it only ever measured
+  the background path.
+- Pinned on both levels: at the pipeline (a real `TaskCanceledException` — the shape `HttpClient` actually
+  raises on timeout — produces **1** attempt on `Blocking` and `BackgroundAttempts` on `Background`), and
+  **end to end** (a backend that 503s gets **1** request from `GenerateRAGResponseAsync` but 3 from
+  `AnalyzeNodeAsync` — the *same* service, the *same* `HttpClient`, opposite decisions).
+- That asymmetry is the load-bearing justification for the whole call-site placement (#176/#179): one handler
+  can carry only one policy, so two paths that want different things cannot share one. A test now asserts the
+  two pipelines **actually differ** — if they ever converge, the justification evaporates and we find out.
+- Also closes the gap #213 named: the placement guard now covers **both** typed clients. `ISemanticAnalyzer`'s
+  registration sits on the very next line as `IEmbeddingService`'s, so a handler policy added "to the Ollama
+  clients" would land on both — and only one was being watched.
+- **Mutation-verified:** flipping `Blocking` to retry transient failures fails the timeout guard *and* the
+  end-to-end RAG guard.
+
+### Changed — The "add a resilience handler here" booby-trap in the Web DI registration is now enforced shut (#179)
+- After #176 the Ollama retry policy lives at the **call site** (`OllamaResilience.Background` / `.Blocking`),
+  because it has to cover the CLI and bench too — they build their own `HttpClient`, so a DI-only policy would
+  leave the **MCP stdio server** (the thing agents actually use) with no retry at all. Correct, but it left
+  `Shonkor.Web`'s typed-client registration looking bare — and that is exactly where a reader expects the policy
+  to be, with `AddStandardResilienceHandler()` one line away in the same package.
+- Adding one would be a **bug, not an improvement**: a handler-level policy sits *inside* the call-site
+  pipeline, so every attempt the pipeline makes gets retried again by the handler. **Measured:** adding it takes
+  a failing embedding call from **3 attempts to 12**, and the call from **2 s to 29 s** — retries nested in
+  retries, multiplying the wait against a backend that is already struggling.
+- #179 called a test for this "awkward, because it means testing an absence". It isn't — the absence has a
+  **behavioural** signature. `OllamaResiliencePolicyPlacementTests` boots the real web host against a backend
+  that always 503s and **counts the requests that actually arrive**: exactly `OllamaResilience.BackgroundAttempts`
+  (3). Nest a second policy and the count multiplies and the test fails. **Mutation-verified** by actually adding
+  `AddStandardResilienceHandler()`. So this is enforced, not merely asked for in a comment — though the comment
+  is there too, at the registration, saying why.
+- The three construction paths now have **one visible shape**: `OllamaClientFactory` replaces five hand-assembled
+  `new OllamaEmbeddingService(new HttpClient(), config, NullLogger…)` sites across the CLI and bench. Three
+  different shapes for one thing is what made "just put the policy in the DI registration" look like a complete
+  answer in the first place — from inside `Shonkor.Web`, the registration *is* the only construction site you
+  can see.
+- `OllamaResilience` now exposes its attempt budget (`BackgroundAttempts` / `BlockingAttempts`) instead of
+  hiding it in private constants, so the guard asserts against the policy rather than a number typed twice.
+
+### Changed — The file-symlink escape test no longer passes green while exercising nothing (#182)
+- #104's **file**-symlink containment test cannot build its attack on an unprivileged Windows box (a file
+  symlink needs Developer Mode/admin there; junctions are directory-only). #180 handled that with a bare
+  `return` — so on Windows the test **passed green having checked nothing**, which for a *security* test reads
+  as an all-clear. The same failure mode #180 was careful to avoid for the directory case, reintroduced for the
+  file case by the back door.
+- **Confirmed the coverage actually exists** before trusting it: no `CI_RUNNER` variable is set and the last CI
+  run really did execute on `ubuntu-latest`, where `File.CreateSymbolicLink` needs no privilege. So the escape
+  *is* verified — but only on Linux, and only by assumption.
+- That assumption is now a **test**. `CiWorkflowContractTests` pins that `ci.yml`'s default runner stays a Linux
+  image, that the job actually runs the test project, and that it does so **unfiltered**. Flip the default to a
+  Windows image — or add a `--filter` — and the build fails saying the #104 escape has become untested
+  everywhere. **Mutation-verified** on both.
+- The test itself is now honest about where it does and doesn't run: on Linux/macOS a symlink it cannot create
+  is a **hard failure** (the case must run for real there), and on unprivileged Windows it reports a genuine
+  **skip**, so the gap appears in the test count instead of hiding inside a pass.
+- Correcting #180 on the way: it blamed the plain `return` on `xunit.assert` predating 2.8. Wrong diagnosis —
+  the pinned `xunit.assert` **is** 2.9.3 and still has no `Assert.Skip`, because dynamic skip is a xunit **v3**
+  feature. On v2 it needs `Xunit.SkippableFact`, now a test-only dependency.
+
+### Changed — The zero-copy vector read's endianness assumption is now explicit and guarded (#129)
+- The semantic-search hot path reinterprets each stored embedding blob AS `float[]` in place via
+  `MemoryMarshal.Cast<byte, float>` — zero-copy, no per-row allocation. The blob is packed **native-endian**
+  (`SqliteRowMapper.EmbeddingToBytes` via `Buffer.BlockCopy`) and read back native-endian, so a write→read
+  round-trip on a single host is always self-consistent. But the on-disk format is **not** a fixed
+  little-endian wire format: a `.db` moved between hosts of opposite endianness would reinterpret every float
+  with swapped bytes and return silently-wrong similarity scores — no crash, just garbage.
+- Both reinterpret sites (the search hot path and the one-time normalization migration) now route through a
+  single choke point, `VectorMath.AsFloats`, which pins the assumption in one place. On a big-endian host it
+  throws a `PlatformNotSupportedException` naming the cause instead of returning wrong scores. The check is
+  free on the little-endian hot path: `BitConverter.IsLittleEndian` is a JIT intrinsic that folds to a
+  constant, so the guard branch is eliminated entirely on the platforms Shonkor targets (x64, ARM64).
+- Tested through a seam that exposes the endianness as a parameter (the runtime intrinsic can't be flipped),
+  so the big-endian failure branch is exercised and mutation-verified on a little-endian test host, alongside
+  the little-endian round-trip and the end-to-end `EmbeddingToBytes`→`AsFloats` format agreement.
+
+### Added — Eval re-contamination is now a loud failure, not a silent filter (#136)
+- `IsEvalMetaNode` silently drops index-excluded meta files from the ranked results (#132). That keeps the
+  numbers correct **today**, but if the `shonkor.json` exclude regresses and those files get indexed again,
+  the filter quietly patches over it — the contamination returns invisibly, the exact failure this session
+  keeps closing.
+- The benchmark now **records** any index-excluded meta file (`bench/golden`/`tickets`/`review`) that surfaces
+  in *any* retriever's results and **exits 2**, naming the offenders — like the `--baseline` and
+  `--check-circularity` gates. On a correctly-indexed graph the set is empty (those dirs aren't in it), so the
+  gate is silent in normal operation and only fires on real re-contamination.
+- **Live-verified:** a `tickets/*.md` indexed because its exclude was forgotten surfaces in retrieval and the
+  bench exits 2 naming the file. Unit-tested end-to-end through `RetrievalBenchmark.RunAsync` plus the
+  classifier's boundary (index-excluded vs. the guard-only `bench/*.md`).
+- Noted while building it: the *acute* #110 case — a `bench/golden/*.json` fixture ranking as a circular hit —
+  is structurally **unreachable via real indexing**, because the indexer has no `.json` parser, so those files
+  never become graph nodes. The reachable re-contamination path is `tickets/`/`review/` **markdown**. The gate
+  is generic over `MetaDirectories`, so it covers both.
+
+### Changed — The eval's two meta-exclusion layers can no longer drift apart (#140)
+- De-contamination (#132/#133) put the meta-doc exclusion in **two** places that must agree: `shonkor.json`
+  `ExcludePatterns` keeps `bench/golden`/`tickets`/`review` out of the graph at **index time**, and
+  `RetrievalBenchmark.IsEvalMetaNode` ignores them at **measurement time** (defence in depth). Add a new meta
+  dir to one and forget the other, and the eval quietly re-contaminates (missing from the config) or the
+  config over-excludes — silently, with no failing signal.
+- The guard's directory list is now a single named constant (`RetrievalBenchmark.MetaDirectories`), and
+  **`EvalExcludeSyncTests` bridges it to the config**: every directory the guard treats as meta must also be
+  excluded from indexing in `shonkor.json`. The test does not hardcode the list (that would be a third copy to
+  drift); it reads the constant. The intentional guard-only case (`bench/*.md` — indexed for agents, ignored
+  only by the eval) is explicitly whitelisted. **Mutation-verified:** dropping `review` from the config fails
+  the test with an actionable message.
+
+### Fixed — get_subgraph's size cap no longer rests on an accidental row order (#170)
+- The verbose size cap (#117) drops a **tail prefix** of the node list to stay under `maxChars`, which is only
+  correct if the list is ordered **nearest-first** — otherwise it silently evicts the *seeds* and keeps distant
+  hub nodes, valid JSON and all, with no failing signal (the #157 class).
+- The comment claimed `GetSubgraphAsync` returns nodes breadth-first, but the query had **no `ORDER BY` at
+  all** — the order was an accident of SQLite's row output, not a guarantee. TICKET-215's CTE rework happened
+  to preserve it; the next change might not.
+- The CTE now sorts explicitly (`ORDER BY Depth, Id` — the depth it already computed), so nearest-first is a
+  **property of the query**. The ordering contract is documented on `IGraphSearch.GetSubgraphAsync`, and
+  `SubgraphOrderingContractTests` enforces it: seeds first, then by hop distance, ties by id. **Mutation-
+  verified** — removing the `ORDER BY` fails all three tests, so a future query change that breaks the order
+  fails loudly instead of degrading the cap in silence.
+
+### Changed — The RAG head-to-head is now a clean 2×2; the graph's contribution is isolated (#166)
+- The published win (**+6,1 pp** vs. chunked-RAG) compared **Shonkor-hybrid against baseline-vector-only** —
+  one side had a keyword arm, the other didn't. So it could not tell whether the gap was **the graph** or
+  merely **hybrid retrieval**, a technique the baseline could adopt with no graph at all.
+- `--compare-rag` now gives the baseline the **same retrieval Shonkor gets, minus the graph**: BM25 over the
+  chunk texts (an in-memory SQLite **FTS5** index — the *same* engine the product uses, not a hand-rolled
+  scorer) RRF-fused with the vector ranking. The report is a **2×2** (retrieval strategy × graph), and the
+  graph's contribution reads off the **like-for-like hybrid diagonal**.
+- **Measured, and it refutes the ticket's own fear:** the graph's isolated contribution is **+9,1 pp**
+  (93,9 % vs 84,8 %, hybrid on both sides), not the ≤0 a skeptic might have expected. But the honest caveat is
+  published next to it: adding the keyword arm to the *baseline* changed nothing (it fired on only **10 of 33**
+  queries — a raw 40-line source chunk doesn't keyword-match plain-English intent), while Shonkor's **nodes**
+  do, because they carry a **name** and an **AI summary** that read like intent. So part of the gain is the
+  graph's *indexed unit* being keyword-matchable, not pure topology — named, not hidden.
+- README §3, the sales deck and `bench/metrics-agent-queries.json` re-pinned to the 2×2. The #156 guard now
+  checks all **four** cells (including the ones where Shonkor does *not* win) plus the keyword-fired caveat, so
+  the flattering number can't be published without the confound beside it.
+- All README numbers re-measured on a freshly re-indexed graph (2.225 nodes) for consistency — exact-name and
+  intent retrieval, token reduction (73,8 %), and the 2×2 now all come from one reproducible run.
+
+### Changed — Topology audit + safety net for nested Markdown CONTAINS (#175)
+- #112 nested Markdown sections (`File → h1 → h2 → h3`); `outline` had silently broken on it and was fixed,
+  but **no test would have caught it**. This audits every other consumer of `CONTAINS` topology and
+  file-seeded traversal, and adds the failing-test surface that was missing.
+- **Data integrity is safe** — verified statically *and empirically* (re-indexing a doc shrunk from 6 to 4
+  sections leaves exactly 4 nodes, no orphans). Cleanup is **`FilePath`-scoped, not `CONTAINS`-walk-scoped**,
+  and every section carries its file's path at every nesting depth, so re-index and delete remove all nested
+  sections. `PruneOrphanConcepts` is `Concept`/`RELATES_TO`-only; `GraphAnalytics` and every MCP analysis tool
+  (`architecture`, `audit`, `hotspots`, `clusters`, `references`, `blast_radius`, …) exclude `CONTAINS`
+  entirely — all **unaffected**.
+- **One behaviour-change class, not a bug:** a `###` is now 3+ hops from its file, so file-seeded traversals
+  at the default 1–2 hops (`generate_capsule`, `/api/capsule`, `/api/rag/query`, dashboard graph expansion,
+  the references panel) reach fewer deep sections than under the flat shape. Each still returns a *correct*
+  N-hop subgraph and the caller can raise `hops`; #112 measured net-positive on retrieval. Left as-is here and
+  filed for a deliberate, measured decision rather than reflexively "fixed" inside an audit.
+- **New `MarkdownTopologyContractTests`** pins the load-bearing invariants: cleanup leaves no orphan sections,
+  delete removes every depth, a full `CONTAINS` walk reaches every section, and — pinned *deliberately* — a
+  fixed 2-hop file seed under-reaches `###`. The next change to the topology, the hop defaults, or the cleanup
+  scoping now fails a test **visibly**, instead of degrading in silence the way `outline` did.
+
+### Fixed — Symlink-aware path containment, enforced centrally (#104, #105)
+- **The path guard was decorative against symlinks (#104).** `TryResolveContainedPath` compared paths with
+  `Path.GetFullPath`, which normalizes **lexically** (collapses `..`) but does **not** follow symlinks. A link
+  inside the indexed tree pointing outside it is therefore lexically contained, passes the gate, and is read
+  straight through — defeating the control TICKET-209 exists to provide. In multi-tenant / SaaS mode, a tenant
+  who can commit a symlink could read the host filesystem via `get_source` / `outline` / `check_edit`.
+  Containment now resolves symlinks **component by component** first (the escape hides in a linked *directory*,
+  where the leaf file is not itself a link), and hands back the **real** resolved path so a caller opens the
+  file the gate approved.
+- **Containment is enforced once, in the dispatcher (#105).** It was applied per tool — six copies, and
+  nothing stopping the seventh from forgetting. A tool now declares `IMcpTool.PathArguments`; the dispatcher
+  resolves + contains each (arrays element by element) and aborts with `path_outside_root` before the tool
+  runs. Crucially it **cannot be forgotten**: a test cross-checks every tool's *schema* against its declared
+  path arguments, so a tool advertising a `path`/`paths`/`file` it forgot to declare **fails the build**
+  rather than silently bypassing the guard. Aliases count.
+- Verified **without silently-skipped tests**: Windows blocks unprivileged symlink creation, so the
+  directory-escape case is built with a **junction** (needs no elevation, resolves the same) and runs for real
+  everywhere — plus a live junction-escape through the real stdio server, rejected `-32602` / `path_outside_root`.
+
+### Changed — Ollama retry is Polly's job now (#116)
+- `OllamaEmbeddingService` and `OllamaSemanticAnalyzer` carried **hand-written retry loops** with their own
+  exponential backoff and jitter. That is exactly what `Microsoft.Extensions.Http.Resilience` (Polly) exists
+  to provide, is maintained, and does better. The loops and `OllamaRetry.Backoff` are gone.
+- **What stays ours is the judgement, not the mechanism.** `OllamaRetry` is now purely the *predicate* — what
+  counts as transient for **this** backend. No library can know that Ollama answers `200` with an empty
+  embedding while a model is still loading. Polly owns when to wait, how long, and how often.
+- **Two rules the old classifier enforced are now true by construction**, not by code: an
+  `OllamaResponseException` is raised *after* a successful `200`, so the retry pipeline has already returned
+  and cannot retry it; and a caller-triggered cancellation aborts the pipeline instead of having to be told
+  apart from an HttpClient timeout by inspecting the token.
+- **The ticket's proposed design does not work, and this says why.** It asked for the policy to live in the
+  typed-client registration. That would (a) have covered only `Shonkor.Web` — `Shonkor.CLI` (**the MCP stdio
+  server agents actually use**) and `Shonkor.Bench` construct `new HttpClient()` directly and would have been
+  left with **no retry at all**; and (b) is unsatisfiable anyway, because the two operations need *different*
+  policies on the *same* client: background work retries transient failures, while the blocking RAG path must
+  retry a connection failure but **never a timeout** — retrying a minutes-long generation would double a human's
+  wait. So the pipelines live in `OllamaResilience` and each call site selects the one it needs.
+- **The enrichment worker's circuit breaker is kept, deliberately.** It is a *polling-cadence* backoff, not an
+  HTTP breaker: Polly's breaker would fail each call instantly and the worker would then spin through the
+  pending queue **faster** against a dead backend. Complementary, not redundant.
+- The `Backoff` unit test is replaced by tests that drive the **real pipelines** against a fake handler —
+  including the one that matters most: *the blocking path never retries a timeout*. Verified live against a
+  running Ollama (retrieval numbers unchanged) and against a dead one (fails fast, does not hang).
+
+### Changed — The MCP tool contract no longer lies by omission (#117, #118, #119, #120)
+Four ways the tool surface could leave an agent **confidently wrong**. Each is a different flavour of the
+same fault: the tool knew something the caller could not find out.
+
+- **Clamps announce themselves (#119).** `limit ≤ 100`, `hops ≤ 5`, `maxHops ≤ 10` were applied **silently** —
+  a caller asking for `limit=100000` got 100 results and no hint its request had been reduced, so an agent
+  could reasonably conclude *"only 100 nodes matched"* when 100 of thousands were returned. Every other cap in
+  the codebase announces itself; this one didn't. The note appears **only when the clamp actually bites**
+  (never on a default, never on a no-op), so the common path stays noise-free — the fear that kept this
+  unshipped was unfounded.
+- **`get_subgraph verbose` stays parseable (#117).** Its JSON was capped by **characters**, which is honest
+  about truncating but returns a document the caller cannot `JSON.parse` — a dangling brace is not an answer.
+  The cap is now **structural**: whole nodes/edges are dropped (tail-first, since `GetSubgraphAsync` is
+  breadth-first from the seeds), edges into dropped nodes go with them so the graph stays referentially
+  intact, and the payload reports `{ truncated, omitted: { nodes, edges }, reason }`. Valid JSON, explicit
+  omission.
+- **A negative that is a *failure* is told apart from a negative that is an *answer* (#118).** The line is
+  **whether the subject exists**: `get_source` on a symbol that is not in the graph is the agent's mistake — a
+  typo or a hallucination — and now fails with `isError` and a recovery hint. But *"nothing references
+  `Widget3`"* or *"no path from A to B"* are **real findings** and stay ordinary answers; flagging them
+  `isError` would teach the model that a correct negative is a malfunction and invite pointless retries.
+- **Failures carry a stable, machine-readable identity (#120).** TICKET-209 made relay errors generic and
+  TICKET-210 moved execution failures into `isError` — both right, and both left the surface **prose-only**, so
+  a client wanting to branch on *why* a call failed had to string-match English. Codes now ride in
+  `error.data.code` (protocol errors) and `result._meta.code` (`isError` results):
+  `missing_parameter`, `path_outside_root`, `project_not_found`, `symbol_not_found`, `file_not_indexed`,
+  `backend_unavailable`, `tool_failed`. The human message is unchanged and unconstrained — the code is
+  additive, not a replacement.
+
+### Fixed — Section budgets are measured in tokens, not characters (#111)
+- The parser split sections at **4000 characters** and the embedder truncated bodies at **1500 characters** —
+  two different constants standing in for the same thing: the backend's **token** window. The proxy holds for
+  English prose (~4 chars/token) and **fails silently** elsewhere. In **CJK** a character is roughly a token,
+  so a 4000-char section is ~4000 tokens — double `nomic-embed-text`'s window. It was handed over whole, the
+  backend truncated it, and the tail of the section was embedded into **nothing**. No error, no signal; the
+  section was simply half-searchable.
+- `TokenBudget` is now the single place that answers "does this fit?", and **parser and embedder share it** —
+  they can no longer disagree about the same limit. The estimate is script-aware (CJK ≈ 1 token/char,
+  alphanumeric runs ≈ 4 chars/token, punctuation ≈ 1 token each, so fenced code and tables come out heavy) and
+  deliberately **conservative**: over-counting splits a section early, which is cheap; under-counting hands the
+  backend a document it silently truncates, which is invisible.
+- **Why an estimate and not a tokenizer:** an exact tokenizer needs the vocabulary of the *actual* embedding
+  model, and the model is **user-configurable** (`EmbeddingService:OllamaModel`). Shipping one model's vocab
+  would produce a tokenizer that is exact for the **wrong** model the moment a user swaps it — and an
+  exact-*looking* wrong answer is worse than an honest approximation, because nothing signals the mismatch.
+- English prose is calibrated to land exactly where it did: `doc-sections` FTS Recall@10 stays **1,000**.
+
+### Changed — Markdown sections nest by heading level (#112)
+- `CONTAINS` followed a flat `File → section` fan-out, so a `###` was a **sibling** of the `##` it sits under.
+  A query matching a child's detail could not reach the parent's framing, and vice versa — for arc42-style
+  docs, where the meaningful unit is often the chapter, the answer was split across nodes nothing linked.
+- Sections now nest: `File → h1 → h2 → h3`. `outline` renders the real heading tree, and `get_subgraph` on a
+  chapter reaches its subsections in one hop.
+- **The tension the ticket posed, resolved explicitly:** nesting the *content* would mean a parent storing its
+  children's text (duplicated in FTS, double-counted by BM25) **or** a parent's line range no longer matching
+  its content (breaking the exactness that makes citations trustworthy). Neither is acceptable, so **only the
+  edges nest**. A section's `Content` and `StartLine`–`EndLine` are unchanged. Structure moves; text does not.
+  Node ids are index-based and unchanged, so **no scheme bump**.
+- `outline` now walks `CONTAINS` breadth-first instead of pulling a fixed 2-hop subgraph — a nested `###` sits
+  three hops from the file and was simply **missed**, and raising the hop count on a generic subgraph would
+  have dragged in the file's whole reference neighbourhood at every level.
+- **Measured:** plain-English intent Recall@10 improves **0,788 → 0,818** (hybrid) and **0,697 → 0,727**
+  (vector) — linking child detail to parent framing is what #112 predicted. `doc-sections` Recall@10 holds at
+  **1,000**. Exact-name hybrid P@1 slips **0,945 → 0,930**, inside its confidence interval (±0,035); reported
+  rather than buried. README, arc42 §1.4 and the sales deck re-pinned to the new run — the #156 guard would
+  have failed the build otherwise, which is exactly what it is for.
+
 ### Fixed — The benchmark was handicapping Shonkor against itself (#162)
 - `--compare-rag` seeded Shonkor's capsule from **vector search alone**, while every shipped path
   (`search_hybrid`, `generate_capsule`, `/api/search/hybrid`, `/api/capsule`) seeds from **`HybridRetrieval`**

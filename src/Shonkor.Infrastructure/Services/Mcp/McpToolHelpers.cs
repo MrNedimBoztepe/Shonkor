@@ -47,6 +47,47 @@ public static class McpToolHelpers
         return text[..maxChars].TrimEnd() + $"\n… (truncated to {maxChars} chars; {hint})";
     }
 
+    /// <summary>
+    /// A bound that <b>remembers when it bit</b> (#119).
+    /// <para>
+    /// The bounds themselves are not new — TICKET-210 capped <c>limit ≤ 100</c>, <c>hops ≤ 5</c>,
+    /// <c>maxHops ≤ 10</c>. They were applied <i>silently</i>: a caller asking for <c>limit=100000</c> got 100
+    /// results and no hint that its request had been reduced, so an agent could reasonably conclude "only 100
+    /// nodes matched" when 100 of thousands were returned. Every other cap in this codebase announces itself
+    /// (<c>get_source</c>, <c>get_subgraph</c>, <c>generate_capsule</c>); this one lied by omission.
+    /// </para>
+    /// <para>
+    /// The note is emitted <b>only when the clamp actually bites</b>, so the ordinary call stays noise-free —
+    /// which was the (unfounded) fear that kept this unshipped.
+    /// </para>
+    /// </summary>
+    public sealed class ClampReport
+    {
+        private readonly List<string> _notes = new();
+
+        /// <summary>Clamps <paramref name="arg"/> into [<paramref name="min"/>, <paramref name="max"/>], recording any reduction.</summary>
+        public int Clamp(JsonNode? arg, string name, int fallback, int min, int max)
+        {
+            var requested = ReadInt(arg, fallback);
+            var clamped = Math.Clamp(requested, min, max);
+
+            // Only report an explicit request we overrode — never a defaulted value, and never a no-op clamp.
+            if (arg is not null && requested != clamped)
+            {
+                _notes.Add(requested > max
+                    ? $"{name} clamped to {max} (you requested {requested})"
+                    : $"{name} raised to {min} (you requested {requested})");
+            }
+            return clamped;
+        }
+
+        /// <summary>Empty on the common path; a trailing warning line when a bound was actually applied.</summary>
+        public string Suffix => _notes.Count == 0 ? "" : $"\n\n⚠ {string.Join("; ", _notes)}";
+
+        /// <summary>Appends <see cref="Suffix"/> to a tool's rendered text.</summary>
+        public string Annotate(string text) => text + Suffix;
+    }
+
     /// <summary>Node types that count as a "declaration" when resolving a symbol to its definition.</summary>
     public static readonly string[] DeclarationTypes =
         { "Class", "Interface", "Record", "Struct", "Enum", "Method", "Property", "Constructor" };
@@ -251,19 +292,81 @@ public static class McpToolHelpers
             return false;
         }
 
+        // #104: GetFullPath normalizes LEXICALLY — it collapses "..", but it does not follow symlinks. A link
+        // inside the tree pointing outside it is therefore lexically contained, passes this gate, and is then
+        // read straight through. Resolve both sides to their real locations BEFORE comparing, or the guard is
+        // decorative.
+        var realFull = ResolveSymlinks(full);
+        var realRoot = ResolveSymlinks(rootFull);
+
         // GetRelativePath returns "." when equal to the root, a "..\\…" prefix when the target escapes it,
         // and a rooted path when on another drive — all of which mean "outside", so admit only paths whose
         // relative form neither starts with ".." nor is itself rooted.
-        var rel = System.IO.Path.GetRelativePath(rootFull, full);
+        var rel = System.IO.Path.GetRelativePath(realRoot, realFull);
         if (rel == ".." || rel.StartsWith(".." + System.IO.Path.DirectorySeparatorChar, StringComparison.Ordinal)
             || rel.StartsWith("../", StringComparison.Ordinal) || System.IO.Path.IsPathRooted(rel))
         {
+            // Name the CONFIGURED root, not the symlink-resolved one: the caller needs to know what IS
+            // allowed (TICKET-209 chose this deliberately — a bare "denied" just makes an agent guess again),
+            // and it is the configured root they reason about. Leaking the root's own link target would tell
+            // them something they did not ask for and cannot use.
             error = $"Path '{raw}' resolves outside the project root '{rootFull}' — only files within the project may be accessed.";
             return false;
         }
 
-        fullPath = full;
+        // Hand back the REAL path, not the lexical one: a caller that then opens it must open the same file
+        // this gate approved. Returning the pre-resolution path would re-open the very gap just closed.
+        fullPath = realFull;
         return true;
+    }
+
+    /// <summary>
+    /// Returns <paramref name="full"/> with every symlink on the way resolved to its real target (#104).
+    ///
+    /// <para>
+    /// Resolution is <b>component by component</b>, and that is the whole point. Resolving only the leaf is
+    /// not enough: if <c>&lt;root&gt;/docs</c> is a link to <c>/etc</c>, then <c>&lt;root&gt;/docs/passwd</c>
+    /// is a perfectly ordinary file — <b>it</b> is not a link, so a leaf-only check finds nothing to resolve
+    /// and happily reports the path as contained. The escape hides in the <i>directory</i>, not the file.
+    /// </para>
+    ///
+    /// <para>
+    /// Components that do not exist yet are left as-is: there is no link to follow, and a tool may legitimately
+    /// name a file it is about to create. A component we cannot stat (permissions) is also left lexical —
+    /// failing closed on an unreadable directory would break ordinary use, and the containment check that
+    /// follows still runs on whatever we did resolve.
+    /// </para>
+    /// </summary>
+    public static string ResolveSymlinks(string full)
+    {
+        if (string.IsNullOrEmpty(full)) return full;
+
+        var root = System.IO.Path.GetPathRoot(full) ?? string.Empty;
+        var rest = full[root.Length..]
+            .Split(new[] { System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar },
+                   StringSplitOptions.RemoveEmptyEntries);
+
+        var current = root.Length > 0 ? root : System.IO.Path.DirectorySeparatorChar.ToString();
+
+        foreach (var part in rest)
+        {
+            current = System.IO.Path.Combine(current, part);
+            try
+            {
+                FileSystemInfo? info = Directory.Exists(current) ? new DirectoryInfo(current)
+                                     : File.Exists(current) ? new FileInfo(current)
+                                     : null;
+                if (info?.ResolveLinkTarget(returnFinalTarget: true) is { } target)
+                {
+                    current = target.FullName;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                // Cannot stat it — keep the lexical form and let the containment check below judge that.
+            }
+        }
+        return current;
     }
 
     /// <summary>
@@ -320,6 +423,24 @@ public static class McpToolHelpers
 
     public static string SendToolResponse(JsonElement id, string text) =>
         SendResponse(id, new { content = new[] { new { type = "text", text } } });
+
+    /// <summary>
+    /// A tool response whose payload is <b>JSON</b>, plus an optional out-of-band note (#119).
+    /// <para>
+    /// The note goes in a <b>second content block</b> rather than being appended to the payload. Appending
+    /// prose to a JSON document is precisely the bug #117 is about — it stops being parseable. And wrapping
+    /// the payload in an envelope to carry the note would change a shape existing callers already parse. A
+    /// second block costs neither: <c>content[0].text</c> stays exactly the JSON it was, and the note still
+    /// reaches the model.
+    /// </para>
+    /// </summary>
+    public static string SendToolJsonResponse(JsonElement id, string json, string note = "")
+    {
+        var blocks = string.IsNullOrWhiteSpace(note)
+            ? new[] { new { type = "text", text = json } }
+            : new[] { new { type = "text", text = json }, new { type = "text", text = note.Trim() } };
+        return SendResponse(id, new { content = blocks });
+    }
 
     public static string SendError(JsonElement id, int code, string message) =>
         JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code, message } });

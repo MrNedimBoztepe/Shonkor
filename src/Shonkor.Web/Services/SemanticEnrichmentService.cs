@@ -87,6 +87,13 @@ public class SemanticEnrichmentService : BackgroundService
             // Circuit breaker: while the backend is unreachable, back off exponentially instead of
             // re-polling every 30s (which would otherwise busy-loop against a dead Ollama). Reset to
             // the normal cadence as soon as it responds again.
+            //
+            // KEPT deliberately after the Polly migration (#116), not replaced by Polly's circuit breaker.
+            // They solve different problems and do not subsume each other: Polly's breaker short-circuits
+            // individual HTTP CALLS, which would make each node fail instantly — and this worker would then
+            // spin through the whole pending queue FASTER than before, burning CPU against a dead backend.
+            // What is needed here is a slower POLLING CADENCE, which is a property of the worker loop, not
+            // of any one request. Adding Polly's breaker on top would be complementary, not a replacement.
             TimeSpan delay;
             if (backendUnavailable)
             {

@@ -4,6 +4,7 @@ using System.Numerics.Tensors;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 using Shonkor.Core.Services;
@@ -38,16 +39,20 @@ internal static class RagBaselineBenchmark
         public float[]? Embedding { get; set; }
     }
 
+    /// <param name="RagCoverage">Baseline coverage, chunks ranked VECTOR-ONLY.</param>
+    /// <param name="RagHybridCoverage">Baseline coverage, chunks ranked HYBRID (BM25 + vector, RRF) — the baseline given Shonkor's retrieval minus the graph (#166).</param>
     /// <param name="ShonkorCoverage">Coverage when seeded VECTOR-ONLY — isolates the graph+capsule, both sides from identical retrieval.</param>
     /// <param name="ShonkorHybridCoverage">Coverage when seeded via <see cref="HybridRetrieval"/> — the path the product actually ships (#162).</param>
     /// <param name="SeedMissedTarget">Cases the capsule missed where the target was never a seed — i.e. a retrieval miss, not a budget casualty.</param>
     public sealed record ComparisonResult(
         int Queries, int Chunks,
         double RagAvgTokens, double RagCoverage,
+        double RagHybridCoverage,
         double ShonkorAvgTokens, double ShonkorCoverage,
         double ShonkorSeedSurvival,
         double ShonkorHybridCoverage,
-        int SeedMissedTarget)
+        int SeedMissedTarget,
+        int RagKeywordFiredQueries)
     {
         public double TokenSavingPct => RagAvgTokens > 0 ? (1.0 - ShonkorAvgTokens / RagAvgTokens) * 100 : 0;
     }
@@ -74,8 +79,12 @@ internal static class RagBaselineBenchmark
         // normalizes on write, so this is the same arithmetic — not a second, subtly different similarity.
         foreach (var ch in embedded) VectorMath.NormalizeL2(ch.Embedding!);
 
-        double ragTok = 0, ragCov = 0, shTok = 0, shCov = 0, shSeedSurv = 0, shHybridCov = 0;
+        // Keyword index over the chunks (#166), so the baseline's hybrid arm uses the SAME BM25 as the product.
+        using var chunkFts = BuildChunkFts(embedded);
+
+        double ragTok = 0, ragCov = 0, ragHybridCov = 0, shTok = 0, shCov = 0, shSeedSurv = 0, shHybridCov = 0;
         var seedMissedTarget = 0;
+        var ragKeywordFired = 0; // #166: how often the baseline's keyword arm returned ANY hit at all
         var n = 0;
         foreach (var c in cases)
         {
@@ -133,29 +142,31 @@ internal static class RagBaselineBenchmark
                 new CapsuleOptions { SeedIds = hybridSeeds, MaxContentChars = BudgetChars, MaxNodes = 40 });
             shHybridCov += expectedNodes.Any(node => CapsuleMentions(hybridCapsule, node)) ? 1 : 0;
 
-            // Baseline: take top chunks by similarity up to the SAME token budget, then compare coverage.
-            var ranked = embedded
-                .Select(ch => (ch, sim: Score(qn, ch.Embedding!)))
-                .OrderByDescending(x => x.sim);
-            double used = 0;
-            var picked = new List<Chunk>();
-            foreach (var (ch, _) in ranked)
-            {
-                var t = ch.Text.Length / CharsPerToken;
-                if (picked.Count > 0 && used + t > shTokQ) break; // stay within Shonkor's budget (keep ≥1)
-                picked.Add(ch);
-                used += t;
-                if (picked.Count >= 40) break;
-            }
-            ragTok += used;
-            ragCov += picked.Any(ch => CoversExpected(ch, expectedNodes)) ? 1 : 0;
+            // Baseline arm 1 — VECTOR-ONLY: rank chunks by similarity, take up to the SAME token budget.
+            var vectorRank = embedded
+                .Select((ch, i) => (i, sim: Score(qn, ch.Embedding!)))
+                .OrderByDescending(x => x.sim).Select(x => x.i).ToList();
+            var (vecChunks, vecTokens) = PickWithinBudget(embedded, vectorRank, shTokQ);
+            ragTok += vecTokens;
+            ragCov += vecChunks.Any(ch => CoversExpected(ch, expectedNodes)) ? 1 : 0;
+
+            // Baseline arm 2 — HYBRID (#166): the baseline gets the retrieval Shonkor gets, minus the graph.
+            // Keyword (BM25 over the chunk texts) RRF-fused with the vector ranking, then the same budgeted
+            // pick. This is the like-for-like counterpart to Shonkor-hybrid: the ONLY remaining difference
+            // between ragHybridCov and shHybridCov is the graph. If they are equal, the graph adds ~0 on
+            // coverage and the whole Shonkor-vs-baseline gap was hybrid retrieval, not the graph.
+            var keywordRank = KeywordRankChunks(chunkFts, c.Query);
+            if (keywordRank.Count > 0) ragKeywordFired++;
+            var fusedRank = RrfFuse(vectorRank, keywordRank);
+            var (hybChunks, _) = PickWithinBudget(embedded, fusedRank, shTokQ);
+            ragHybridCov += hybChunks.Any(ch => CoversExpected(ch, expectedNodes)) ? 1 : 0;
             n++;
         }
 
         return n == 0
             ? null
-            : new ComparisonResult(n, embedded.Count, ragTok / n, ragCov / n, shTok / n, shCov / n, shSeedSurv / n,
-                shHybridCov / n, seedMissedTarget);
+            : new ComparisonResult(n, embedded.Count, ragTok / n, ragCov / n, ragHybridCov / n,
+                shTok / n, shCov / n, shSeedSurv / n, shHybridCov / n, seedMissedTarget, ragKeywordFired);
     }
 
     /// <summary>True when <paramref name="node"/>'s name appears as a whole word in the capsule text.</summary>
@@ -259,6 +270,111 @@ internal static class RagBaselineBenchmark
     /// baseline was ranked by arithmetic the product does not use.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Walks a ranked chunk order and takes chunks up to <paramref name="budgetTokens"/> (keeping at least
+    /// one, and at most 40) — the shared budgeted-pick both baseline arms use, so the vector and hybrid arms
+    /// differ ONLY in their ranking, never in how the budget is applied.
+    /// </summary>
+    private static (List<Chunk> Chunks, double Tokens) PickWithinBudget(
+        IReadOnlyList<Chunk> chunks, List<int> order, double budgetTokens)
+    {
+        double used = 0;
+        var picked = new List<Chunk>();
+        foreach (var i in order)
+        {
+            var ch = chunks[i];
+            var t = ch.Text.Length / CharsPerToken;
+            if (picked.Count > 0 && used + t > budgetTokens) break;
+            picked.Add(ch);
+            used += t;
+            if (picked.Count >= 40) break;
+        }
+        return (picked, used);
+    }
+
+    /// <summary>
+    /// Builds an in-memory SQLite **FTS5** index over the chunk texts (#166), so the baseline can get a
+    /// keyword arm that is the SAME BM25 the product uses — not a hand-rolled scorer (the #163 trap). Row i+1
+    /// is chunk <c>embedded[i]</c>. The connection is kept open for the whole run and disposed by the caller.
+    /// </summary>
+    private static SqliteConnection BuildChunkFts(IReadOnlyList<Chunk> chunks)
+    {
+        var conn = new SqliteConnection("Data Source=:memory:");
+        conn.Open();
+        using (var create = conn.CreateCommand())
+        {
+            create.CommandText = "CREATE VIRTUAL TABLE chunks USING fts5(text);";
+            create.ExecuteNonQuery();
+        }
+        using var tx = conn.BeginTransaction();
+        using (var insert = conn.CreateCommand())
+        {
+            insert.CommandText = "INSERT INTO chunks(rowid, text) VALUES (@r, @t);";
+            var pr = insert.Parameters.Add("@r", SqliteType.Integer);
+            var pt = insert.Parameters.Add("@t", SqliteType.Text);
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                pr.Value = i + 1;
+                pt.Value = chunks[i].Text;
+                insert.ExecuteNonQuery();
+            }
+        }
+        tx.Commit();
+        return conn;
+    }
+
+    /// <summary>
+    /// Ranks chunks by BM25 for <paramref name="query"/>, best first, returning chunk indices into the
+    /// embedded list. Mirrors the product's FTS path exactly, LIKE fallback and all: FTS5 <c>MATCH</c> ordered
+    /// by <c>bm25()</c>, and on an FTS syntax error (colons, slashes, operators) it falls back to <c>LIKE</c>
+    /// over the query's word tokens — the same degradation <c>SqliteGraphStorageProvider</c> does.
+    /// </summary>
+    private static List<int> KeywordRankChunks(SqliteConnection conn, string query)
+    {
+        var order = new List<int>();
+        try
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT rowid FROM chunks WHERE chunks MATCH @q ORDER BY bm25(chunks);";
+            cmd.Parameters.AddWithValue("@q", query);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) order.Add((int)reader.GetInt64(0) - 1);
+        }
+        catch (SqliteException)
+        {
+            order.Clear();
+            var terms = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .Where(t => t.Length > 2).Select(t => t.Trim()).Distinct().ToList();
+            if (terms.Count == 0) return order;
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT rowid FROM chunks WHERE " +
+                string.Join(" OR ", terms.Select((_, i) => $"text LIKE @t{i}")) + ";";
+            for (var i = 0; i < terms.Count; i++) cmd.Parameters.AddWithValue($"@t{i}", $"%{terms[i]}%");
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) order.Add((int)reader.GetInt64(0) - 1);
+        }
+        return order;
+    }
+
+    /// <summary>
+    /// Reciprocal-rank fusion of two ranked chunk-index lists (#166), the SAME algorithm
+    /// <see cref="HybridFusion"/> applies to Shonkor's node ranking: score(i) = Σ 1/(k + rank). So the
+    /// baseline's keyword+vector fusion is like-for-like with the product's — the only remaining difference
+    /// between the two hybrid rows is the graph.
+    /// </summary>
+    private static List<int> RrfFuse(List<int> vectorRank, List<int> keywordRank, int k = 60)
+    {
+        var score = new Dictionary<int, double>();
+        void Accumulate(List<int> ranked)
+        {
+            for (var rank = 0; rank < ranked.Count; rank++)
+                score[ranked[rank]] = score.GetValueOrDefault(ranked[rank]) + 1.0 / (k + rank + 1);
+        }
+        Accumulate(vectorRank);
+        Accumulate(keywordRank);
+        return score.OrderByDescending(kv => kv.Value).Select(kv => kv.Key).ToList();
+    }
+
     private static float Score(ReadOnlySpan<float> normalizedQuery, ReadOnlySpan<float> normalizedChunk) =>
         normalizedQuery.Length != normalizedChunk.Length ? 0f : TensorPrimitives.Dot(normalizedQuery, normalizedChunk);
 

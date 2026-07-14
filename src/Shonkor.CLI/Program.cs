@@ -329,7 +329,7 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
         var maxParallelism = Math.Max(1, int.TryParse(config["SemanticEnrichment:MaxParallelism"], out var mp) ? mp : 4);
 
         using var httpClient = new HttpClient();
-        var embeddingService = new OllamaEmbeddingService(httpClient, config, NullLogger<OllamaEmbeddingService>.Instance);
+        var embeddingService = OllamaClientFactory.CreateEmbeddingService(config, httpClient: httpClient);
 
         // Probe once so an unreachable OR stalled backend fails fast (bounded), instead of per-node or a
         // ~minutes-long hang on a backend that accepts the connection but never responds.
@@ -620,7 +620,7 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
             return null;
         }
 
-        return new OllamaEmbeddingService(sharedClient, config, NullLogger<OllamaEmbeddingService>.Instance);
+        return OllamaClientFactory.CreateEmbeddingService(config, httpClient: sharedClient);
     }
 
     private static async Task<int> RunMcpServerAsync(string[] args)

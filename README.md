@@ -31,7 +31,7 @@ The result: ask *"how are API tokens hashed?"* and you get `TokenHasher.cs`. Ask
 Every figure below comes from one reproducible harness (`src/Shonkor.Bench`). **Reproduce them exactly** — this is the graph the numbers are measured on, no hidden enrichment step:
 
 ```powershell
-shonkor index . --embed                                                  # → 231 files, 2.071 nodes, 5.152 edges
+shonkor index . --embed                                                  # → 241 files, 2.225 nodes, 5.546 edges
 dotnet run --project src/Shonkor.Bench -- shonkor.db                     # token reduction + exact-name retrieval
 dotnet run --project src/Shonkor.Bench -- shonkor.db --set bench/golden/agent-queries.json --compare-rag
 ```
@@ -48,51 +48,46 @@ Two metrics, both simple:
 
 | Search | Top hit correct | Found in top 10 |
 |---|--:|--:|
-| Keyword (FTS5) | 89,0 % | 99,1 % |
-| Vector only | 90,5 % | 98,8 % |
-| **Hybrid** (keyword + vector) | **94,5 %** | **99,8 %** |
+| Keyword (FTS5) | 90,0 % | 99,2 % |
+| Vector only | 89,0 % | 99,3 % |
+| **Hybrid** (keyword + vector) | **93,5 %** | **99,8 %** |
 
 **You describe what you mean** — *"where do we hash API tokens?"* *(33 hand-labeled queries)*
 
 | Search | Top hit correct | Found in top 10 |
 |---|--:|--:|
 | Keyword (FTS5) | 9,1 % | 18,2 % |
-| Vector only | 48,5 % | 69,7 % |
-| **Hybrid** (keyword + vector) | **48,5 %** | **78,8 %** |
+| Vector only | 48,5 % | 72,7 % |
+| **Hybrid** (keyword + vector) | **45,5 %** | **81,8 %** |
 
 **What this means, in one line:** keyword search is excellent when you know the name and **falls apart when you don't** — it finds the answer in the top ten less than **1 time in 5**. Fuse it with vector similarity (Reciprocal Rank Fusion) and that becomes **4 times in 5**.
 
-**18 % → 79 % recall** on the questions people actually ask. And hybrid doesn't trade that off: it is *also* the best on exact names (**94,5 %** top-hit vs. 89,0 % for keyword alone). You never pick a mode — you get the better one.
+**18 % → 82 % recall** on the questions people actually ask. And hybrid doesn't trade that off: it is *also* the best on exact names (**93,5 %** top-hit vs. 90,0 % for keyword alone). You never pick a mode — you get the better one.
 
 *(Both sets are machine-checked for circularity, so a query can never secretly contain its own answer — see `--check-circularity`.)*
 
 ### 2. How much context does it save?
 
-**481.539 → 115.978 tokens across 7 queries — 75,9 % fewer.**
+**458.972 → 120.126 tokens across 7 queries — 73,8 % fewer.**
 
 **What this means:** Shonkor finds the relevant part of your graph, then instead of dumping every file it touched, it sends a **budgeted capsule** — the direct hits in full, the surrounding context ranked by structural closeness, and hub nodes capped so one popular class can't blow up the prompt.
 
-> **Measured honestly.** That 75,9 % is against dumping *the same retrieved subgraph* in full — **not** against your whole repo. A "we save 95 % vs. your entire codebase" claim compares against a prompt nobody would ever send, and we won't make it. Every number here is DB-dependent and will differ on your codebase — which is exactly why the harness ships with the tool instead of only the results.
+> **Measured honestly.** That 73,8 % is against dumping *the same retrieved subgraph* in full — **not** against your whole repo. A "we save 95 % vs. your entire codebase" claim compares against a prompt nobody would ever send, and we won't make it. Every number here is DB-dependent and will differ on your codebase — which is exactly why the harness ships with the tool instead of only the results.
 
 ### 3. Does it beat plain vector RAG?
 
-Head-to-head against **chunked RAG with no graph**, at a **matched token budget** — the baseline takes as many top text chunks as fit into Shonkor's token count, so this compares *coverage at equal cost*:
+Head-to-head against **chunked RAG with no graph**, at a **matched token budget**, as a clean **2×2** — retrieval strategy (vector-only vs. hybrid) × graph (no / yes). The baseline's hybrid arm gets *exactly Shonkor's retrieval, minus the graph*, so the graph's contribution reads off the **like-for-like diagonal**, not a mixed comparison:
 
-| At ~equal tokens | Tokens delivered | Covers the target symbol |
+| Covers the target symbol | chunked-RAG (no graph) | Shonkor capsule (graph) |
 |---|--:|--:|
-| chunked-RAG (no graph) | 8.660 | 87,9 % |
-| Shonkor capsule — *vector-only seeds* | 8.940 | 84,8 % |
-| **Shonkor capsule — as shipped** | 8.940 | **93,9 %** |
+| **vector-only seeds** | 84,8 % | 81,8 % |
+| **hybrid seeds** | 84,8 % | **93,9 %** |
 
-**+6,1 pp** over the no-graph baseline — and there's a story in the middle row worth telling.
+**The graph's isolated contribution is +9,1 pp** (93,9 % vs 84,8 %, same retrieval on both sides). Not the +6,1 we could have banked from the mixed comparison, and not the ≤0 a skeptic might have feared — a real, measured, like-for-like gain. (Tokens: baseline 9.067, Shonkor 9.372 — matched.)
 
-That row is Shonkor seeded by **vector search alone**, and it *loses* by 3,1 pp. It is in the table because it isolates the graph's contribution — both sides then start from identical retrieval. But it is **not what the product does**: the shipped path seeds from **hybrid** retrieval (the same RRF you saw in section 1). Our own benchmark had been handicapping Shonkor against itself, and it took repairing the metric to notice.
+> **The honest caveat, because a benchmark you only trust when it flatters you isn't one:** adding the keyword arm to the *baseline* changed nothing (84,8 → 84,8), because it returned any hit on only **10 of 33** queries. A raw 40-line source chunk doesn't keyword-match plain-English intent — *"how are api tokens hashed"* matches no chunk containing all those words. Shonkor's **nodes** do: each carries a **name** and an **AI summary** that read like intent. So part of the +9,1 is that the graph's *indexed unit* is keyword-matchable where a source chunk is not — a real advantage of the representation, named rather than hidden inside a topology claim.
 
-The diagnosis is measured, not argued: **100 %** of seeds survive the capsule budget, and in **5 of 33** vector-only misses the target was **never a seed at all**. The budget wasn't dropping the answer — retrieval never found it. Better seeding fixed it.
-
-> **The asymmetry we're not hiding:** the baseline is vector-only, and Shonkor's winning row is hybrid. That's the conventional "naive RAG" setup, but a fair critic would say: give the chunks a keyword arm too. They'd be right, and it's [an open ticket](https://github.com/MrNedimBoztepe/Shonkor/issues). Until it's measured, read this as *"the graph capsule beats naive chunked RAG"* — not as *"vector retrieval is beaten"*.
-
-And coverage is the *low* bar anyway — it only asks whether the target's text is somewhere in the blob. What it cannot see is what surrounds it: the capsule ships the **call graph, exact signatures, and the edges**. So the real reason isn't the 6 points. It's the question chunks **cannot answer at any budget**: *"what breaks if I change this?"* A chunk retriever has no edges. It doesn't know.
+And coverage is the *low* bar anyway — it only asks whether the target's text is somewhere in the blob. What it can't see is the **edges** the capsule ships: the call graph, exact signatures, the blast radius. That's the question chunks cannot answer **at any budget**: *"what breaks if I change this?"* A chunk retriever has none. It doesn't know.
 
 ---
 

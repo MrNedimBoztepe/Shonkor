@@ -1,5 +1,5 @@
 {
-  "tokenReductionPct": 75.91513875303974,
+  "tokenReductionPct": 73.82716156976896,
   "tokenQueries": 7,
   "retrieval": {
     "graph": {
@@ -12,28 +12,30 @@
     "semantic": {
       "cases": 33,
       "precisionAt1": 0.48484848484848486,
-      "precisionAtK": 0.28181818181818186,
-      "recallAtK": 0.696969696969697,
-      "mrr": 0.5704545454545454
+      "precisionAtK": 0.2848484848484848,
+      "recallAtK": 0.7272727272727273,
+      "mrr": 0.5732323232323232
     },
     "hybrid": {
       "cases": 33,
-      "precisionAt1": 0.48484848484848486,
-      "precisionAtK": 0.27878787878787875,
-      "recallAtK": 0.7878787878787878,
-      "mrr": 0.5982323232323231
+      "precisionAt1": 0.45454545454545453,
+      "precisionAtK": 0.2787878787878787,
+      "recallAtK": 0.8181818181818182,
+      "mrr": 0.5889730639730639
     }
   },
   "ragBaseline": {
     "queries": 33,
-    "chunks": 1121,
-    "ragAvgTokens": 8659.85606060606,
-    "ragCoverage": 0.8787878787878788,
-    "shonkorAvgTokens": 8939.848484848484,
-    "shonkorCoverage": 0.8484848484848485,
+    "chunks": 1189,
+    "ragAvgTokens": 9067.10606060606,
+    "ragCoverage": 0.8484848484848485,
+    "ragHybridCoverage": 0.8484848484848485,
+    "shonkorAvgTokens": 9372.128787878788,
+    "shonkorCoverage": 0.8181818181818182,
     "shonkorSeedSurvival": 1,
     "shonkorHybridCoverage": 0.9393939393939394,
-    "seedMissedTarget": 5,
-    "tokenSavingPct": -3.2332226111253526
+    "seedMissedTarget": 6,
+    "ragKeywordFiredQueries": 10,
+    "tokenSavingPct": -3.3640582257878693
   }
 }

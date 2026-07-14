@@ -8,11 +8,29 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- nomic-embed-text's tokenizer is the bert-base-uncased WordPiece vocab; #173 validates that
+         TokenBudget.Estimate never under-counts it. Copied next to the test binary so BertTokenizer.Create
+         can read it. Apache-2.0 (Google BERT / HuggingFace). -->
+    <None Include="Fixtures\bert-base-uncased-vocab.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
+    <!-- Real tokenizers, test-only: the oracle TokenBudget.Estimate is validated against (#173). BertTokenizer
+         reads the vendored bert-base-uncased vocab (nomic-embed-text's); cl100k is a second, independent
+         tokenizer so the result does not hinge on one vocabulary's quirks. Deliberately NOT a dependency of the
+         shipped code — the embedding model is user-configurable, so shipping one model's vocab would be exactly
+         wrong for any other (see the TokenBudget class doc). -->
+    <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
+    <PackageReference Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" Version="2.0.0" />
+    <!-- Pinned above the 9.0.4 that Microsoft.ML.Tokenizers pulls in transitively: that version carries a
+         high-severity advisory (GHSA-73j8-2gch-69rq). -->
+    <PackageReference Include="Microsoft.Bcl.Memory" Version="9.0.14" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.61" />
   </ItemGroup>
 
   <ItemGroup>

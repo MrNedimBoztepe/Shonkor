@@ -429,9 +429,10 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             if (blob == null || blob.Length == 0) continue;
             if (blob.Length / 4 != query.Length) continue; // dimension mismatch — skip
 
-            // Reinterpret the little-endian blob AS floats in place — no per-row allocation. (Correct on the
-            // little-endian platforms Shonkor runs on, matching how EmbeddingToBytes packs the bytes.)
-            var nodeVector = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(blob);
+            // Reinterpret the stored blob AS floats in place — no per-row allocation. VectorMath.AsFloats is
+            // the single choke point that pins the native-endian assumption (loud fail on a big-endian host,
+            // free on the little-endian hot path — see #129), matching how EmbeddingToBytes packs the bytes.
+            var nodeVector = VectorMath.AsFloats(blob);
             var score = (double)System.Numerics.Tensors.TensorPrimitives.Dot(query, nodeVector);
 
             // Skip anything with non-positive similarity: NaN (shouldn't occur with dot, defensive), and a
@@ -536,9 +537,10 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
                 JOIN Subgraph s ON e.TargetId = s.Id
                 WHERE s.Depth < @hops
             )
-            SELECT DISTINCT n.*
+            SELECT n.*
             FROM Nodes n
-            JOIN (SELECT Id, MIN(Depth) AS Depth FROM Subgraph GROUP BY Id) s ON n.Id = s.Id;
+            JOIN (SELECT Id, MIN(Depth) AS Depth FROM Subgraph GROUP BY Id) s ON n.Id = s.Id
+            ORDER BY s.Depth, n.Id;
             """;
 
         command.Parameters.AddWithValue("@hops", maxHops);
