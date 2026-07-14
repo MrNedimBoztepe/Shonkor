@@ -32,6 +32,14 @@ public interface IGraphSearch
     /// <summary>
     /// Generates a subgraph by expanding outward from the specified seed nodes,
     /// by the given number of hops along edges in either direction.
+    /// <para>
+    /// <b>Ordering contract (#170):</b> the returned nodes are ordered <b>nearest-first</b> — seeds (hop 0)
+    /// first, then by shortest-path hop distance from any seed, ties broken by <c>Id</c> for determinism.
+    /// A consumer that truncates the result (e.g. <c>get_subgraph verbose</c>'s size cap, which drops a
+    /// tail prefix to stay parseable) relies on this order to drop the *furthest* material, not random rows.
+    /// This is enforced by <c>GetSubgraphAsync_ReturnsNodesNearestFirst</c>; a change to the underlying
+    /// query's ordering must keep that test green or the truncation silently starts dropping the wrong nodes.
+    /// </para>
     /// </summary>
     Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> GetSubgraphAsync(IEnumerable<string> seedNodeIds, int hops = 1, CancellationToken cancellationToken = default);
 

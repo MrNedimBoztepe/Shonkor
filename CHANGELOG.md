@@ -5,6 +5,19 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — get_subgraph's size cap no longer rests on an accidental row order (#170)
+- The verbose size cap (#117) drops a **tail prefix** of the node list to stay under `maxChars`, which is only
+  correct if the list is ordered **nearest-first** — otherwise it silently evicts the *seeds* and keeps distant
+  hub nodes, valid JSON and all, with no failing signal (the #157 class).
+- The comment claimed `GetSubgraphAsync` returns nodes breadth-first, but the query had **no `ORDER BY` at
+  all** — the order was an accident of SQLite's row output, not a guarantee. TICKET-215's CTE rework happened
+  to preserve it; the next change might not.
+- The CTE now sorts explicitly (`ORDER BY Depth, Id` — the depth it already computed), so nearest-first is a
+  **property of the query**. The ordering contract is documented on `IGraphSearch.GetSubgraphAsync`, and
+  `SubgraphOrderingContractTests` enforces it: seeds first, then by hop distance, ties by id. **Mutation-
+  verified** — removing the `ORDER BY` fails all three tests, so a future query change that breaks the order
+  fails loudly instead of degrading the cap in silence.
+
 ### Changed — The RAG head-to-head is now a clean 2×2; the graph's contribution is isolated (#166)
 - The published win (**+6,1 pp** vs. chunked-RAG) compared **Shonkor-hybrid against baseline-vector-only** —
   one side had a keyword arm, the other didn't. So it could not tell whether the gap was **the graph** or
