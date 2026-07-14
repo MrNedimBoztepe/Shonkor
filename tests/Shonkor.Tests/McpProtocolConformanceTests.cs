@@ -190,8 +190,14 @@ public class McpProtocolConformanceTests
         Assert.Contains("raise maxChars", text);
     }
 
+    /// <summary>
+    /// #117: the verbose branch emits JSON, so its cap must be STRUCTURAL. TICKET-210 capped it by characters
+    /// — honest about truncating, but it handed back a document the caller could not <c>JSON.parse</c>. A
+    /// dangling brace is not an answer. Dropping whole nodes/edges keeps the payload valid and states the
+    /// omission outright.
+    /// </summary>
     [Fact]
-    public async Task GetSubgraph_VerboseJson_IsCapped_NoLongerBypassesTheLimit()
+    public async Task GetSubgraph_VerboseJson_StaysParseable_AndReportsWhatItDropped()
     {
         var handler = await HandlerAsync(async storage =>
         {
@@ -204,11 +210,55 @@ public class McpProtocolConformanceTests
                 new GraphEdge { SourceId = $"v::{i}", TargetId = "v::0", Relationship = "REFERENCES_TYPE" }));
         });
 
-        // The verbose branch previously ignored maxChars entirely.
         var text = ResultText(Parse(await handler.ProcessJsonRpcMessageAsync(
-            ToolCall("get_subgraph", new { seeds = new[] { "v::0" }, hops = 1, verbose = true, maxChars = 200 }))));
+            ToolCall("get_subgraph", new { seeds = new[] { "v::0" }, hops = 1, verbose = true, maxChars = 600 }))));
 
-        Assert.Contains("truncated to 200 chars", text);
-        Assert.True(text.Length < 400, $"verbose output must respect maxChars, got {text.Length} chars");
+        Assert.True(text.Length <= 600, $"verbose output must respect maxChars, got {text.Length} chars");
+
+        // The whole point: it still parses. The old character cap produced a severed document.
+        using var doc = JsonDocument.Parse(text);
+        var root = doc.RootElement;
+
+        Assert.True(root.GetProperty("truncated").GetBoolean(), "this subgraph cannot fit in 600 chars");
+        Assert.Equal("maxChars", root.GetProperty("reason").GetString());
+
+        var omitted = root.GetProperty("omitted");
+        Assert.True(omitted.GetProperty("nodes").GetInt32() > 0, "omitted node count must be reported, not implied");
+
+        // Referential integrity: every surviving edge points at surviving nodes. Dropping a node without its
+        // edges would leave the caller holding edges into nodes that are not in the document.
+        var keptIds = root.GetProperty("nodes").EnumerateArray()
+            .Select(n => n.GetProperty("Id").GetString()).ToHashSet(StringComparer.Ordinal);
+        foreach (var e in root.GetProperty("edges").EnumerateArray())
+        {
+            Assert.Contains(e.GetProperty("SourceId").GetString(), keptIds);
+            Assert.Contains(e.GetProperty("TargetId").GetString(), keptIds);
+        }
+    }
+
+    /// <summary>#117: an uncapped verbose call must report nothing omitted — the cap only speaks when it bites.</summary>
+    [Fact]
+    public async Task GetSubgraph_VerboseJson_WhenItFits_ReportsNoOmission()
+    {
+        var handler = await HandlerAsync(async storage =>
+        {
+            await storage.UpsertNodesAsync(new[]
+            {
+                new GraphNode { Id = "v::0", Name = "Root", Type = "Class", FilePath = "/x/Root.cs", Content = "c" },
+                new GraphNode { Id = "v::1", Name = "Leaf", Type = "Class", FilePath = "/x/Leaf.cs", Content = "c" }
+            });
+            await storage.UpsertEdgesAsync(new[]
+            {
+                new GraphEdge { SourceId = "v::1", TargetId = "v::0", Relationship = "REFERENCES_TYPE" }
+            });
+        });
+
+        var text = ResultText(Parse(await handler.ProcessJsonRpcMessageAsync(
+            ToolCall("get_subgraph", new { seeds = new[] { "v::0" }, hops = 1, verbose = true }))));
+
+        using var doc = JsonDocument.Parse(text);
+        Assert.False(doc.RootElement.GetProperty("truncated").GetBoolean());
+        Assert.Equal(0, doc.RootElement.GetProperty("omitted").GetProperty("nodes").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("omitted").GetProperty("edges").GetInt32());
     }
 }

@@ -302,7 +302,7 @@ public sealed class VerifyExistsTool : IMcpTool
         var symbol = ReadSymbol(args);
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return SendError(id, -32602, "Parameter 'symbol' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'symbol' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
@@ -429,7 +429,7 @@ public sealed class RecordTool : IMcpTool
         var name = args?["name"]?.ToString();
         if (string.IsNullOrWhiteSpace(name))
         {
-            return SendError(id, -32602, "Parameter 'name' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'name' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
@@ -442,7 +442,7 @@ public sealed class RecordTool : IMcpTool
             case "decision":
                 if (string.IsNullOrWhiteSpace(content))
                 {
-                    return SendError(id, -32602, "A 'decision' requires 'content' (the rationale/alternatives).");
+                    throw new McpToolException(McpErrorCode.MissingParameter, "A 'decision' requires 'content' (the rationale/alternatives).", isArgumentError: true);
                 }
                 return await ctx.RecordNodeAsync(id, storage, "decision", "Decision", name, content,
                     new Dictionary<string, string> { ["created"] = UtcNow() },
@@ -453,7 +453,7 @@ public sealed class RecordTool : IMcpTool
             case "milestone":
                 if (string.IsNullOrWhiteSpace(status))
                 {
-                    return SendError(id, -32602, "A 'milestone' requires 'status'.");
+                    throw new McpToolException(McpErrorCode.MissingParameter, "A 'milestone' requires 'status'.", isArgumentError: true);
                 }
                 return await ctx.RecordNodeAsync(id, storage, "milestone", "Milestone", name, $"Status: {status}",
                     new Dictionary<string, string> { ["status"] = status, ["updated"] = UtcNow() },
@@ -479,7 +479,7 @@ public sealed class RecordTool : IMcpTool
                     .ConfigureAwait(false);
 
             default:
-                return SendError(id, -32602, "Parameter 'type' must be one of: decision, milestone, task, question.");
+                throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'type' must be one of: decision, milestone, task, question.", isArgumentError: true);
         }
     }
 }

@@ -46,7 +46,7 @@ public sealed class BlastRadiusTool : IMcpTool
         var target = args?["nodeOrFile"]?.ToString() ?? args?["symbol"]?.ToString() ?? args?["query"]?.ToString();
         if (string.IsNullOrWhiteSpace(target))
         {
-            return SendError(id, -32602, "Parameter 'nodeOrFile' is required");
+            throw new McpToolException(McpErrorCode.MissingParameter, "Parameter 'nodeOrFile' is required", isArgumentError: true);
         }
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
