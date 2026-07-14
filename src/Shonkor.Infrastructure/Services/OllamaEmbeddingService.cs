@@ -36,7 +36,12 @@ public class OllamaEmbeddingService : IEmbeddingService
         // Do NOT set _httpClient.BaseAddress here — mutating a shared HttpClient after construction
         // is not thread-safe and would affect any other service using the same instance.
         // Instead we build the full URL per request (see below).
-        _httpClient.Timeout = TimeSpan.FromMinutes(1);
+        //
+        // The timeout used to be assigned unconditionally, which silently overwrote whatever the caller had
+        // configured — including via AddHttpClient, the idiomatic place to set one (#215). It is now
+        // EmbeddingService:TimeoutSeconds, defaulting to the minute it was hard-coded at, and a caller who
+        // set a timeout deliberately keeps it.
+        OllamaClientFactory.ApplyTimeout(_httpClient, configuration, "EmbeddingService", TimeSpan.FromMinutes(1));
     }
 
     public Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default)

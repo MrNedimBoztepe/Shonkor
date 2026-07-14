@@ -70,13 +70,51 @@ public static class OllamaRetry
     /// A connection-level failure: the request never reached a responding server. Used by the BLOCKING RAG
     /// path, which must not retry a slow/timed-out generation (that would double an already minutes-long
     /// wait) but may cheaply retry a backend that was simply not listening yet.
+    ///
+    /// <para>
+    /// <b>A timeout is not a connection failure, even though the socket layer reports one on the way out
+    /// (#215).</b> When <see cref="HttpClient"/>'s timeout elapses it tears the connection down, so the real
+    /// exception chain is:
+    /// </para>
+    /// <code>
+    /// TaskCanceledException → TimeoutException → TaskCanceledException → IOException → SocketException
+    /// </code>
+    /// <para>
+    /// This method used to scan that chain for <i>any</i> <see cref="SocketException"/> — and so answered
+    /// <c>true</c> for a timeout. The blocking pipeline therefore retried the one failure it exists to never
+    /// retry, doubling a minutes-long wait for a human. It was invisible because the unit test that "covered"
+    /// the rule constructed a bare <c>TaskCanceledException</c>, which is not the shape <c>HttpClient</c>
+    /// actually throws; only driving a real socket timeout end-to-end exposed it.
+    /// </para>
+    /// <para>
+    /// So a cancellation or timeout anywhere in the chain settles it first: whatever the socket said on the way
+    /// down, we <i>did</i> reach the backend — it just did not answer in time. Only a failure with no
+    /// cancellation in it is a genuine "never got there".
+    /// </para>
     /// </summary>
     public static bool IsConnectError(Exception ex)
     {
+        if (IsTimeoutOrCancellation(ex)) return false;
+
         for (var current = ex; current is not null; current = current.InnerException)
         {
             if (current is SocketException) return true;
             if (current is HttpRequestException { StatusCode: null }) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the failure is a timeout or a cancellation — i.e. the attempt was <i>abandoned</i> rather than
+    /// having failed to reach the backend. <see cref="TaskCanceledException"/> derives from
+    /// <see cref="OperationCanceledException"/>, so both an <c>HttpClient</c> timeout and a caller-triggered
+    /// cancellation are caught here.
+    /// </summary>
+    private static bool IsTimeoutOrCancellation(Exception ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is OperationCanceledException or TimeoutException) return true;
         }
         return false;
     }

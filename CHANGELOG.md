@@ -5,6 +5,37 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — The blocking RAG path was retrying timeouts after all: a real timeout looked like a connect error (#215)
+- This ticket set out to make the Ollama request timeout **configurable**. Doing so made the real timeout path
+  testable for the first time — and the first end-to-end test **failed**, exposing a live bug.
+- `OllamaResilience.Blocking` exists for one rule: **never retry a timeout** on the RAG path, because retrying a
+  generation that already ran to timeout just doubles a wait a human is sitting through. `OllamaRetry.IsConnectError`
+  decided what counted as a retryable connection failure by scanning the exception chain for a `SocketException`.
+- But when `HttpClient`'s timeout elapses it **tears the connection down**, so the real chain is
+  `TaskCanceledException → TimeoutException → TaskCanceledException → IOException → SocketException`. The scan
+  found that buried socket error and answered "connection failure" — so **the blocking path retried the one
+  failure it exists never to retry**. Measured against a backend that accepts and never answers: **2 attempts,
+  not 1**.
+- It stayed invisible because the test that "covered" the rule (#213) built a **bare `TaskCanceledException`** —
+  not the shape `HttpClient` actually throws. The fixture was easier than reality, so the guard passed while the
+  rule was broken in production. That fixture now carries the real chain, reproduced from a live socket timeout.
+- **Fix:** a cancellation or timeout anywhere in the chain settles the question first — whatever the socket said
+  on the way out, we *did* reach the backend, it just did not answer in time. A genuine connect failure (no
+  cancellation in it) still gets its one cheap retry. The background path still retries timeouts: that asymmetry
+  is the whole point.
+- **Mutation-verified at three levels:** reintroducing the bug fails the classifier unit test, the pipeline test,
+  *and* the end-to-end real-timeout test.
+
+### Added — Ollama request timeouts are configurable and no longer overwrite the caller's (#215)
+- Both services assigned `HttpClient.Timeout` unconditionally in their constructor (1 min for embeddings, 2 for
+  generation). So an operator could not tune it — a large model on slow hardware gets cut off mid-answer, and
+  someone who would rather Ask AI failed fast could not say so — and configuring it the idiomatic way, via
+  `AddHttpClient(c => c.Timeout = …)`, **silently did nothing**.
+- Now `SemanticAnalyzer:TimeoutSeconds` / `EmbeddingService:TimeoutSeconds`, defaulting to exactly the values
+  that were hard-coded, so nothing changes for anyone who configures nothing. A timeout the caller set
+  deliberately is respected rather than discarded, and an unusable value (zero, negative, a typo) falls back to
+  the default instead of throwing.
+
 ### Added — The blocking RAG path's "never retry a timeout" rule is now pinned (#213)
 - `OllamaResilience.Blocking` exists for exactly one counter-intuitive rule: a **timeout must not be retried**.
   A timeout is "transient" in every ordinary sense — and the *background* pipeline does retry it — but a RAG

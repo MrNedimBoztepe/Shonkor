@@ -31,6 +31,42 @@ namespace Shonkor.Infrastructure.Services;
 public static class OllamaClientFactory
 {
     /// <summary>
+    /// <see cref="HttpClient"/>'s own default timeout (100 s). Used as the sentinel for "the caller did not
+    /// choose a timeout" — see <see cref="ApplyTimeout"/>.
+    /// </summary>
+    public static readonly TimeSpan UnconfiguredHttpClientTimeout = TimeSpan.FromSeconds(100);
+
+    /// <summary>
+    /// Settles the request timeout for an Ollama client, in this order of precedence (#215):
+    ///
+    /// <list type="number">
+    ///   <item><b>A timeout the caller already set on the client.</b> That is a deliberate decision — from a
+    ///   DI registration, a test, or a host with its own idea of how long to wait — and silently overwriting
+    ///   it, which is what both services used to do, is surprising: <c>AddHttpClient</c> is the idiomatic place
+    ///   to configure a timeout, and configuring it there had no effect.</item>
+    ///   <item><b><c>{section}:TimeoutSeconds</c> from configuration.</b> A local LLM on slow hardware may
+    ///   legitimately need longer than the default; someone who wants RAG to fail fast may want far less. The
+    ///   value was hard-coded, so neither was possible without a rebuild.</item>
+    ///   <item><b><paramref name="fallback"/></b> — the value that was hard-coded before, so nothing changes
+    ///   for anyone who configures nothing.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="section">Config section, e.g. <c>SemanticAnalyzer</c> or <c>EmbeddingService</c>.</param>
+    /// <param name="fallback">The previously hard-coded value, used when nothing else says otherwise.</param>
+    public static void ApplyTimeout(HttpClient httpClient, IConfiguration configuration, string section, TimeSpan fallback)
+    {
+        ArgumentNullException.ThrowIfNull(httpClient);
+
+        // The caller made a choice — leave it alone.
+        if (httpClient.Timeout != UnconfiguredHttpClientTimeout) return;
+
+        var configured = configuration[$"{section}:TimeoutSeconds"];
+        httpClient.Timeout = double.TryParse(configured, out var seconds) && seconds > 0
+            ? TimeSpan.FromSeconds(seconds)
+            : fallback;
+    }
+
+    /// <summary>
     /// An embedding service over its own <see cref="HttpClient"/>, or over <paramref name="httpClient"/> when
     /// the caller already owns one it wants shared (the CLI's MCP path reuses a single client across probes
     /// and requests, and owns its lifetime).
