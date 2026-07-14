@@ -156,7 +156,7 @@ public sealed class GraphIndexScanner
                     return;
                 }
 
-                var content = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
+                var content = await SourceText.ReadAsync(filePath, ct).ConfigureAwait(false);
                 var contentHash = ComputeSha256Hash(content);
 
                 // Incremental Hash Check: skip if hash matches DB (unless the id scheme is stale, in which
@@ -384,7 +384,7 @@ public sealed class GraphIndexScanner
                     continue;
                 }
 
-                var content = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
+                var content = await SourceText.ReadAsync(filePath, cancellationToken).ConfigureAwait(false);
                 if (ComputeSha256Hash(content) != storedHash)
                 {
                     changed.Add(filePath);
@@ -554,7 +554,7 @@ public sealed class GraphIndexScanner
         if (!inGraph && onDisk) return FreshnessState.Untracked;
         if (!inGraph) return FreshnessState.Untracked; // neither on disk nor in graph → treat as untracked
 
-        var content = await File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        var content = await SourceText.ReadAsync(fullPath, cancellationToken).ConfigureAwait(false);
         return ComputeSha256Hash(content) == storedHash ? FreshnessState.Fresh : FreshnessState.Stale;
     }
 
@@ -623,7 +623,7 @@ public sealed class GraphIndexScanner
             return Cleared();
         }
 
-        var content = await File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        var content = await SourceText.ReadAsync(fullPath, cancellationToken).ConfigureAwait(false);
         var contentHash = ComputeSha256Hash(content);
 
         var nodes = new List<GraphNode>();

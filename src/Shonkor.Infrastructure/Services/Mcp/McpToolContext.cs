@@ -165,7 +165,7 @@ public sealed class McpToolContext
         {
             if (!System.IO.File.Exists(def.FilePath))
                 return $"\n⚠ '{def.Name}' is in the graph but its file is GONE from disk — run reindex_file.";
-            var content = await System.IO.File.ReadAllTextAsync(def.FilePath, ct).ConfigureAwait(false);
+            var content = await Shonkor.Core.Services.SourceText.ReadAsync(def.FilePath, ct).ConfigureAwait(false);
             var hash = Convert.ToHexString(
                 System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
             if (hash != storedHash)
