@@ -5,6 +5,31 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — A generation that died mid-answer was also mistaken for a connection failure, and re-run (#218)
+- #218 asked whether `IsTransient` had the mirror flaw of the #215 bug (it classifies on the **outermost**
+  exception only, so a wrapped transient failure could go silently unretried). **It does not** — every failure a
+  real backend produces arrives as an `HttpRequestException` or a `TaskCanceledException` at the top of the
+  chain, and all are correctly transient. That is now measured rather than assumed.
+- The audit turned up a **second bug in `IsConnectError`**, of the same family as #215 and through a different
+  door. A `200 OK` whose body dies half-way — the backend answered, **the model was already generating**, and
+  the connection dropped — surfaces as `HttpRequestException → IOException → SocketException`: the same wreckage
+  a refused connection leaves. The chain-scan saw the socket error and said "connection failure", so the
+  **blocking RAG path re-ran a generation that had already cost minutes**. Exactly what that predicate exists to
+  prevent.
+- The status code cannot separate them (both carry `null`). .NET's `HttpRequestException.HttpRequestError` can,
+  and it is the signal worth trusting: it names *why* the request failed instead of leaving us to infer it from
+  wreckage at the bottom of a chain. Only `ConnectionError` / `NameResolutionError` / `SecureConnectionError` /
+  `ProxyTunnelError` — "no working connection was ever established" — are retried by the blocking path.
+- Ambiguity now resolves toward **not** retrying: .NET reports `Unknown` for both a pre-response reset and a
+  mid-body death, so they are indistinguishable. Failing to retry costs the caller one prompt error they can act
+  on; retrying wrongly costs them a second multi-minute generation they are sitting through. On a coin-flip the
+  RAG path is the impatient one. The background path retries all of these regardless — that asymmetry is the
+  point.
+- Every failure is now provoked over a **real socket** (refused, timeout, reset-before-response, 200-then-die)
+  and the classifier asserted against what actually comes out. Four existing tests had to be corrected in the
+  process: their hand-built `HttpRequestException`s never set `HttpRequestError`, so they defaulted to `Unknown`
+  — the same "fixture easier than reality" that let #215 hide. **Mutation-verified.**
+
 ### Fixed — The blocking RAG path was retrying timeouts after all: a real timeout looked like a connect error (#215)
 - This ticket set out to make the Ollama request timeout **configurable**. Doing so made the real timeout path
   testable for the first time — and the first end-to-end test **failed**, exposing a live bug.
