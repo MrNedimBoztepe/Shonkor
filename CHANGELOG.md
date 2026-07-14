@@ -5,6 +5,30 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — The exact-citation invariant was false on Windows, and the same file hashed differently per OS (#239)
+- The repo has no `.gitattributes`, `.editorconfig` says `end_of_line = crlf`, and `core.autocrlf` is on — so the
+  same source file is **CRLF on Windows and LF on Linux**, on disk. Everything downstream read the raw text and
+  quietly inherited that.
+- **The citation invariant was broken.** The product's claim is that a node's `StartLine..EndLine` slices back to
+  exactly its `Content` — that is what makes a cited line range verifiable. The markdown parser splits on `'\n'`,
+  so under CRLF every line kept a trailing `'\r'` and a `TrimEnd()` stripped it from the **last line only**.
+  Measured on a real file: slice `"# Doc\r\n\r\nIntro.\r"` against stored content `"# Doc\r\n\r\nIntro."` — off by
+  one CR, on **every section**, on the platform most of the development happens on.
+- **The test that pins that invariant could never catch it**, because its fixture is an **LF string literal**,
+  never a file read from disk. It encoded the assumption it existed to test — the same "fixture easier than
+  reality" that hid #215 and #237. Every test in `LineEndingTests` now writes a **real file** and reads it back.
+- **`ContentHash` was over raw text**, so the same logical file hashed differently per OS: an index built on
+  Windows and read on Linux (a Docker volume mount, an image-baked index) reported **every file as stale** —
+  `freshness` claimed the whole project had drifted, the incremental hash-skip never fired, and every analysis
+  result carried an "edited since indexing" warning. CI could not see it: each leg indexes its own checkout.
+- Text is now normalised to `\n` **once, at the read** (`SourceText.ReadAsync`), before anything hashes or parses
+  it. Line endings stop being a property of the machine that did the indexing.
+- **The pinned benchmark numbers do not move, and that was measured rather than assumed:** the graph is identical
+  (2416 nodes / 5979 edges), FTS is whitespace-insensitive, and `nomic-embed-text` embeds the CRLF and LF forms
+  of the same text to **bit-identical vectors** (max |diff| = 0, cosine 1.0 across all 768 dims) — the tokenizer
+  normalises whitespace, so a `\r` never reaches a token. Existing indexes still need one re-index, because the
+  stored hashes change.
+
 ### Fixed — CI never ran on the PRs that introduce the code, and only ever tested one of two platforms (#209)
 - **CI did not run on feature PRs at all.** The triggers named only `main`, but every feature PR targets
   **`develop`** — so CI fired when develop was promoted to main, and **never on the pull request that introduced
