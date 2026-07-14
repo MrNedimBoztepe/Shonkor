@@ -73,7 +73,8 @@ public class OllamaBlockingPolicyTests
                         new SocketException()))));
 
     /// <summary>What a refused connection / DNS failure looks like: HttpRequestException with no status.</summary>
-    private static Exception ConnectFailure() => new HttpRequestException("connection refused", new SocketException(), null);
+    private static Exception ConnectFailure() =>
+        new HttpRequestException(HttpRequestError.ConnectionError, "connection refused", new SocketException());
 
     [Fact]
     public async Task Blocking_DoesNotRetryATimeout_BecauseAHumanIsWaiting()

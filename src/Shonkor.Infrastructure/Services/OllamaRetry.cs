@@ -92,17 +92,58 @@ public static class OllamaRetry
     /// cancellation in it is a genuine "never got there".
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// <b>Second finding, same family (#218).</b> After #215 removed the timeout confusion, the chain scan was
+    /// still too generous: a <c>200 OK</c> whose body dies half-way through — the backend answered, the model
+    /// was already generating, and the connection dropped mid-stream — also surfaces as
+    /// <c>HttpRequestException → IOException → SocketException</c>. The scan saw the socket error and said
+    /// "connection failure", so the blocking path re-ran a generation that had already cost minutes. That is
+    /// the precise thing this predicate exists to prevent, arriving by a different door.
+    /// <para>
+    /// The status code cannot separate them (both carry <c>null</c>), but .NET's
+    /// <see cref="HttpRequestException.HttpRequestError"/> can, and it is the signal actually worth trusting:
+    /// it names <i>why</i> the request failed rather than leaving us to infer it from wreckage at the bottom of
+    /// an exception chain. Only the errors that mean <b>no working connection was ever established</b> count.
+    /// </para>
+    /// <para>
+    /// Anything else — including <c>Unknown</c> — is treated as "we got somewhere", and the blocking path does
+    /// not retry it. That asymmetry is deliberate: failing to retry costs the caller one prompt error they can
+    /// act on, while retrying wrongly costs them a second multi-minute generation they are sitting through. On
+    /// an ambiguous failure, the RAG path should be the impatient one.
+    /// </para>
+    /// </remarks>
     public static bool IsConnectError(Exception ex)
     {
         if (IsTimeoutOrCancellation(ex)) return false;
 
         for (var current = ex; current is not null; current = current.InnerException)
         {
+            if (current is HttpRequestException http)
+            {
+                return NeverReachedTheBackend(http.HttpRequestError);
+            }
+
+            // A bare SocketException, with no HttpRequestException wrapping it and no cancellation in play,
+            // means the transport failed before HTTP got involved at all.
             if (current is SocketException) return true;
-            if (current is HttpRequestException { StatusCode: null }) return true;
         }
         return false;
     }
+
+    /// <summary>
+    /// The <see cref="HttpRequestError"/> values that mean the request <b>never reached a responding server</b>
+    /// — the only class of failure the blocking RAG path may cheaply retry. Everything else (a response that
+    /// arrived and then went wrong, or an unclassified transport error) means the backend was engaged, and
+    /// re-running the generation would double a wait the caller is already enduring.
+    /// </summary>
+    private static bool NeverReachedTheBackend(HttpRequestError error) => error switch
+    {
+        HttpRequestError.ConnectionError => true,      // refused, unreachable, reset while connecting
+        HttpRequestError.NameResolutionError => true,  // DNS did not resolve
+        HttpRequestError.SecureConnectionError => true,// TLS handshake failed
+        HttpRequestError.ProxyTunnelError => true,     // never got through the proxy
+        _ => false                                     // Unknown, ResponseEnded, InvalidResponse, …
+    };
 
     /// <summary>
     /// Whether the failure is a timeout or a cancellation — i.e. the attempt was <i>abandoned</i> rather than
