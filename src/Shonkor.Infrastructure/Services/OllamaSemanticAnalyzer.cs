@@ -164,10 +164,40 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         // cheap, likely-fixable failure. A timeout or a 5xx mid-generation is NOT retried; the caller gets
         // the error promptly. This is why the policy cannot live on the shared HttpClient's handler: the
         // background path on that same client must retry exactly the failures this one must not.
+        //
+        // ONLY THE HEADERS ARE READ INSIDE THE PIPELINE (#221). That is what makes "never re-run a generation
+        // that already started" true rather than merely intended:
+        //
+        //   * an exception INSIDE the pipeline now means we never got a response at all — the only thing the
+        //     blocking policy may retry;
+        //   * reading the BODY happens after the pipeline has returned, so a connection that dies mid-answer
+        //     CANNOT be retried. Not by rule — by construction, the same mechanism that already makes an
+        //     unusable payload unretriable (#222).
+        //
+        // #218 tried to draw that line from the exception instead, using HttpRequestException.HttpRequestError.
+        // That was wrong, and the Windows-only measurement behind it hid the fact: on Linux a mid-body death
+        // reports ConnectionError — identical to a refused connection — so the blocking path re-ran a
+        // minutes-long generation on the platform this actually ships on. Measured on Ubuntu 24.04:
+        //
+        //     failure                Windows          Linux
+        //     connection refused     ConnectionError  ConnectionError
+        //     reset before response  Unknown          ConnectionError
+        //     200 then dies mid-body Unknown          ConnectionError   <-- indistinguishable
+        //
+        // The exception cannot tell us whether a response arrived. The call site can, so it does.
         {
             {
-                var response = await OllamaResilience.Blocking
-                    .ExecuteAsync(async ct => await _httpClient.PostAsJsonAsync(ragEndpoint, requestBody, ct).ConfigureAwait(false), cancellationToken)
+                using var response = await OllamaResilience.Blocking
+                    .ExecuteAsync(async ct =>
+                    {
+                        var request = new HttpRequestMessage(HttpMethod.Post, ragEndpoint)
+                        {
+                            Content = JsonContent.Create(requestBody)
+                        };
+                        return await _httpClient
+                            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                            .ConfigureAwait(false);
+                    }, cancellationToken)
                     .ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 

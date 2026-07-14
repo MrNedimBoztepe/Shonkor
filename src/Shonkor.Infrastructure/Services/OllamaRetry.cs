@@ -93,23 +93,36 @@ public static class OllamaRetry
     /// </para>
     /// </summary>
     /// <remarks>
-    /// <b>Second finding, same family (#218).</b> After #215 removed the timeout confusion, the chain scan was
-    /// still too generous: a <c>200 OK</c> whose body dies half-way through — the backend answered, the model
-    /// was already generating, and the connection dropped mid-stream — also surfaces as
-    /// <c>HttpRequestException → IOException → SocketException</c>. The scan saw the socket error and said
-    /// "connection failure", so the blocking path re-ran a generation that had already cost minutes. That is
-    /// the precise thing this predicate exists to prevent, arriving by a different door.
+    /// <b>What this predicate can and cannot know (#218, then #221).</b>
     /// <para>
-    /// The status code cannot separate them (both carry <c>null</c>), but .NET's
-    /// <see cref="HttpRequestException.HttpRequestError"/> can, and it is the signal actually worth trusting:
-    /// it names <i>why</i> the request failed rather than leaving us to infer it from wreckage at the bottom of
-    /// an exception chain. Only the errors that mean <b>no working connection was ever established</b> count.
+    /// #218 found that a <c>200 OK</c> whose body dies half-way — the backend answered, the model was already
+    /// generating, the connection dropped — surfaces as
+    /// <c>HttpRequestException → IOException → SocketException</c>: the same wreckage a refused connection
+    /// leaves. It tried to separate the two with <see cref="HttpRequestException.HttpRequestError"/>, which on
+    /// Windows reports <c>ConnectionError</c> for a refusal and <c>Unknown</c> for a mid-body death.
     /// </para>
     /// <para>
-    /// Anything else — including <c>Unknown</c> — is treated as "we got somewhere", and the blocking path does
-    /// not retry it. That asymmetry is deliberate: failing to retry costs the caller one prompt error they can
-    /// act on, while retrying wrongly costs them a second multi-minute generation they are sitting through. On
-    /// an ambiguous failure, the RAG path should be the impatient one.
+    /// <b>That was measured on one platform, and it does not hold on the other.</b> On Ubuntu 24.04 a mid-body
+    /// death <i>also</i> reports <c>ConnectionError</c> — indistinguishable from a refusal:
+    /// </para>
+    /// <code>
+    /// failure                  Windows           Linux
+    /// connection refused       ConnectionError   ConnectionError
+    /// reset before response    Unknown           ConnectionError
+    /// 200 then dies mid-body   Unknown           ConnectionError   &lt;-- same as a refusal
+    /// </code>
+    /// <para>
+    /// So the exception <b>cannot</b> tell us whether a response arrived, on any portable basis — and #218's fix
+    /// therefore did nothing at all on the platform this actually ships on. The line is now drawn where it is
+    /// genuinely knowable: the blocking RAG path reads only the <b>headers</b> inside its retry pipeline
+    /// (<c>HttpCompletionOption.ResponseHeadersRead</c>), so a body that dies mid-answer fails <i>after</i> the
+    /// pipeline has returned and cannot be retried <b>by construction</b> (#221) — the same mechanism that
+    /// already makes an unusable payload unretriable (#222).
+    /// </para>
+    /// <para>
+    /// This predicate is consequently only ever asked about failures that happened <b>before a response
+    /// arrived</b>, and for those the values below agree across platforms. It classifies pre-response transport
+    /// failures; it is not, as #218 believed, an oracle for "did we reach the backend".
     /// </para>
     /// </remarks>
     public static bool IsConnectError(Exception ex)

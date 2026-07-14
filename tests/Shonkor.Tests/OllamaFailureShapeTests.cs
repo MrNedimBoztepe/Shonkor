@@ -92,44 +92,49 @@ public class OllamaFailureShapeTests
     }
 
     /// <summary>
-    /// <b>The bug #218 found.</b> The backend answered <c>200 OK</c> and started sending — the model was
-    /// already generating — and then the connection died. That surfaces as
-    /// <c>HttpRequestException → IOException → SocketException</c>: the same wreckage a refused connection
-    /// leaves, and the old chain-scan called it a connection failure.
+    /// <b>The lesson #221 had to learn the hard way.</b> #218 asserted here that a mid-body death is
+    /// <i>not</i> an <c>IsConnectError</c> — and that assertion passed on Windows and <b>failed on Linux</b> the
+    /// first time CI ran on both (#209).
     /// <para>
-    /// So the blocking RAG path retried it: a second full generation, minutes long, for a caller already
-    /// waiting. Precisely the outcome the predicate exists to prevent, arriving through a different door than
-    /// #215's timeout did.
+    /// The reason is that .NET does not classify these portably. A <c>200 OK</c> that dies half-way reports
+    /// <c>HttpRequestError.Unknown</c> on Windows but <c>ConnectionError</c> on Linux — identical to a refused
+    /// connection. So the exception simply <b>cannot</b> tell us whether a response arrived, and #218's fix did
+    /// nothing at all on the platform this ships on.
+    /// </para>
+    /// <para>
+    /// This test therefore no longer asks the classifier a question it cannot portably answer. It asserts the
+    /// thing that actually matters and <i>is</i> portable: <b>the RAG path does not re-run a generation that
+    /// already started</b> — which #221 made true by construction, by reading only the headers inside the retry
+    /// pipeline. See <c>OllamaBlockingPolicyTests</c> for the request-count guard; here we only pin the shape.
     /// </para>
     /// </summary>
     [Fact]
-    public async Task MidBodyFailure_IsNotAConnectError_TheBackendAlreadyAnswered()
+    public async Task MidBodyFailure_IsTransient_ButItsConnectErrorVerdictIsNotPortable_SoNothingReliesOnIt()
     {
         using var backend = new MisbehavingBackend(MisbehavingBackend.Mode.DieMidBody);
 
         var ex = await Provoke(backend.Url, TimeSpan.FromSeconds(5));
 
-        Assert.False(OllamaRetry.IsConnectError(ex),
-            "a 200 OK that dies mid-body means the backend responded and the model was generating — re-running " +
-            "that is exactly the multi-minute retry the blocking path must never make");
-        Assert.True(OllamaRetry.IsTransient(ex),
-            "background work may still retry it — a dropped body is worth another attempt when nobody is waiting");
+        // Background work retries it on every platform — a dropped body is worth another attempt when nobody
+        // is waiting, and this verdict IS portable.
+        Assert.True(OllamaRetry.IsTransient(ex));
+
+        // IsConnectError's answer here is platform-dependent (Unknown on Windows, ConnectionError on Linux),
+        // which is exactly why the blocking path no longer depends on it for this case: the body is read
+        // OUTSIDE the retry pipeline, so a mid-body death cannot be retried whatever the classifier thinks.
+        // Asserting a verdict either way would just re-pin a platform accident.
     }
 
     [Fact]
-    public async Task AResetBeforeAnyResponse_IsNotRetriedByTheRagPath_BecauseItCannotBeToldApartFromMidBody()
+    public async Task AResetBeforeAnyResponse_IsTransient_AndReachesTheClassifierAsATransportFailure()
     {
-        // Honest about the limit: .NET reports HttpRequestError.Unknown for BOTH a pre-response reset and a
-        // mid-body death, so they are indistinguishable here. The blocking path therefore treats the ambiguous
-        // case as "do not retry" — failing to retry costs the caller one prompt error they can act on, while
-        // retrying wrongly costs them a second multi-minute generation. On a coin-flip, the RAG path is the
-        // impatient one. (The background path retries it either way.)
         using var backend = new MisbehavingBackend(MisbehavingBackend.Mode.ResetBeforeResponding);
 
         var ex = await Provoke(backend.Url, TimeSpan.FromSeconds(5));
 
-        Assert.False(OllamaRetry.IsConnectError(ex));
         Assert.True(OllamaRetry.IsTransient(ex));
+        // Same caveat as above: whether .NET calls this ConnectionError or Unknown depends on the platform.
+        // Nothing depends on that any more.
     }
 
     /// <summary>
