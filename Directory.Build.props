@@ -7,6 +7,17 @@
     <Authors>Shonkor</Authors>
   </PropertyGroup>
 
+  <!-- A warning that nothing acts on is a warning that trains you to ignore the build output (#209).
+       CI reported CS8604 on every run and went green anyway, so it survived for as long as nobody read
+       the log — and the next real warning would have hidden in exactly the same place.
+
+       The solution was ALREADY warning-clean apart from that one (2 occurrences of a single diagnostic),
+       so this costs nothing today and keeps it true tomorrow. It applies to local builds as well as CI on
+       purpose: a gate that only exists in CI teaches you to discover problems late. -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
   <!-- Security override: Microsoft.Data.Sqlite transitively pulls the native
        SQLitePCLRaw.lib.e_sqlite3 2.1.11, which bundles a SQLite < 3.50.2 that is
        affected by CVE-2025-6965 (GHSA-2m69-gcr7-jv3q, NU1903). The native lib
