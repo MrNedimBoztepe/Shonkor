@@ -102,7 +102,26 @@ public class McpPathContainmentTests
         Assert.Contains("outside the project root", error);
     }
 
-    [Fact]
+    /// <summary>
+    /// The FILE-symlink escape. A file symlink genuinely needs Developer Mode or admin on Windows (junctions
+    /// are directory-only), so on an unprivileged Windows box this case cannot be built at all.
+    /// <para>
+    /// #180 handled that with a bare <c>return</c> — which made the test <b>pass green while exercising
+    /// nothing</b>, and a security test that quietly exercises nothing reads as an all-clear (#182). Two
+    /// changes fix that:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>On Linux/macOS — where <c>File.CreateSymbolicLink</c> needs no privilege, and where CI runs
+    ///   (see <see cref="CiWorkflowContractTests"/>) — failing to create the link is a <b>hard failure</b>.
+    ///   The case must run for real there; it is never allowed to opt out.</item>
+    ///   <item>On Windows without the privilege, it now reports a real <b>skip</b>, so the degradation shows up
+    ///   in the test count instead of hiding inside a green pass. (#180 attributed the plain <c>return</c> to
+    ///   xunit.assert being older than 2.8. That was the wrong diagnosis: the pinned xunit.assert <i>is</i>
+    ///   2.9.3 and still has no <c>Assert.Skip</c> — dynamic skip is a xunit <b>v3</b> feature. On v2 it needs
+    ///   the <c>Xunit.SkippableFact</c> package, which is why that is now a test-only dependency.)</item>
+    /// </list>
+    /// </summary>
+    [SkippableFact]
     public void SymlinkedFile_PointingOutsideTheRoot_IsRejected()
     {
         var ws = NewWorkspace();
@@ -110,15 +129,30 @@ public class McpPathContainmentTests
         var secret = Path.Combine(outside, "secret.txt");
         File.WriteAllText(secret, "secrets");
 
-        // A FILE symlink genuinely needs elevation on Windows (junctions are directory-only), so this
-        // secondary case may not be buildable here. That is acceptable: the directory-escape test above —
-        // the sneakier variant #104 explicitly calls out — runs for real everywhere via a junction, so the
-        // fix is never left wholly unverified. If a file symlink CAN be made, assert the guard catches it.
         var link = Path.Combine(ws, "innocent.cs");
-        try { File.CreateSymbolicLink(link, secret); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException) { return; }
+        try
+        {
+            File.CreateSymbolicLink(link, secret);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            // Unprivileged Windows is the ONLY excuse. Anywhere else — notably the Linux CI runner, where this
+            // case is the one that actually covers the file-symlink escape — a link we cannot create means the
+            // guard is going unverified, and we FAIL rather than quietly pass.
+            Assert.True(OperatingSystem.IsWindows(),
+                $"file symlinks must be creatable on this platform — the #104 escape is otherwise untested " +
+                $"here, and this test would be an all-clear that checked nothing: {ex.Message}");
 
-        Assert.False(McpToolHelpers.TryResolveContainedPath("innocent.cs", ws, out _, out _));
+            Skip.If(true,
+                "Windows without Developer Mode/admin: a FILE symlink cannot be created, so this escape is NOT " +
+                "exercised on this machine. It runs for real on the Linux CI runner — CiWorkflowContractTests " +
+                "pins that the default runner stays Linux. The directory-escape variant above still runs " +
+                "everywhere via a junction.");
+            return;
+        }
+
+        Assert.False(McpToolHelpers.TryResolveContainedPath("innocent.cs", ws, out _, out _),
+            "a file symlink pointing outside the project root must be rejected");
     }
 
     [Fact]

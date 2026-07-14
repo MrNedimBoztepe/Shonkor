@@ -5,6 +5,26 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — The file-symlink escape test no longer passes green while exercising nothing (#182)
+- #104's **file**-symlink containment test cannot build its attack on an unprivileged Windows box (a file
+  symlink needs Developer Mode/admin there; junctions are directory-only). #180 handled that with a bare
+  `return` — so on Windows the test **passed green having checked nothing**, which for a *security* test reads
+  as an all-clear. The same failure mode #180 was careful to avoid for the directory case, reintroduced for the
+  file case by the back door.
+- **Confirmed the coverage actually exists** before trusting it: no `CI_RUNNER` variable is set and the last CI
+  run really did execute on `ubuntu-latest`, where `File.CreateSymbolicLink` needs no privilege. So the escape
+  *is* verified — but only on Linux, and only by assumption.
+- That assumption is now a **test**. `CiWorkflowContractTests` pins that `ci.yml`'s default runner stays a Linux
+  image, that the job actually runs the test project, and that it does so **unfiltered**. Flip the default to a
+  Windows image — or add a `--filter` — and the build fails saying the #104 escape has become untested
+  everywhere. **Mutation-verified** on both.
+- The test itself is now honest about where it does and doesn't run: on Linux/macOS a symlink it cannot create
+  is a **hard failure** (the case must run for real there), and on unprivileged Windows it reports a genuine
+  **skip**, so the gap appears in the test count instead of hiding inside a pass.
+- Correcting #180 on the way: it blamed the plain `return` on `xunit.assert` predating 2.8. Wrong diagnosis —
+  the pinned `xunit.assert` **is** 2.9.3 and still has no `Assert.Skip`, because dynamic skip is a xunit **v3**
+  feature. On v2 it needs `Xunit.SkippableFact`, now a test-only dependency.
+
 ### Changed — The zero-copy vector read's endianness assumption is now explicit and guarded (#129)
 - The semantic-search hot path reinterprets each stored embedding blob AS `float[]` in place via
   `MemoryMarshal.Cast<byte, float>` — zero-copy, no per-row allocation. The blob is packed **native-endian**
