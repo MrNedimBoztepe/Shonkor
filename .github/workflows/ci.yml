@@ -67,5 +67,13 @@ jobs:
       - name: Build (Release)
         run: dotnet build Shonkor.slnx --configuration Release --no-restore
 
-      - name: Test
-        run: dotnet test tests/Shonkor.Tests/Shonkor.Tests.csproj --configuration Release --no-build --verbosity normal
+      - name: Test (with the expected-error marker gate, #255)
+        shell: bash
+        run: |
+          # Capture the run so the marker gate can scan it, without losing dotnet test's exit code.
+          dotnet test tests/Shonkor.Tests/Shonkor.Tests.csproj --configuration Release --no-build --verbosity normal 2>&1 | tee test-output.log
+          test_rc=${PIPESTATUS[0]}
+          # Fail the job if a deliberate error was logged without an [EXPECTED ERROR] marker (#236/#255).
+          bash scripts/gate-expected-errors.sh test-output.log || exit 1
+          # A real test failure must still fail the job even when the gate is happy.
+          exit "$test_rc"
