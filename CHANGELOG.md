@@ -5,6 +5,184 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — The streaming path's no-retry rule is pinned, and its stated reason was wrong (#224)
+- The last of the three "safe by construction" claims in the resilience code to be checked. The other two:
+  #215/#218 (the retry classifiers) were **broken**; #222 (deterministic failures are never retried) **held**,
+  but was protected twice over rather than once. This one is a third outcome again — **the claim is true, and
+  the stated reason is not why.**
+- The comment said: *"a stream can't be safely restarted once bytes are on the wire"*. That sentence is true and
+  it protects nothing. `StreamRAGResponseAsync` sends with `HttpCompletionOption.ResponseHeadersRead`, so a
+  retry pipeline placed around that send could only ever see failures from **before the headers arrived** —
+  where nothing has been yielded and a restart would be perfectly safe. A failure *after* bytes are flowing
+  happens once the send has already returned, and is unretriable **by construction**, exactly like #222's
+  deterministic failures and #221's mid-body deaths. **The absence of a pipeline is not the safety mechanism;
+  the completion option is.**
+- So the tests pin the property that is actually load-bearing — **a token is never emitted twice, and the
+  backend is never asked to generate the same answer again** — rather than the incidental "there is no pipeline
+  here". A guard tied to the absence of a pipeline would fail the moment someone added a *safe* pre-connection
+  retry, which is a change worth allowing rather than forbidding.
+- **Mutation-verified:** wrapping the stream in `OllamaResilience.Background` — the "make it consistent with the
+  other two paths" tidy-up the ticket warned about — takes a 5xx from **1 request to 3**, and the guard fails.
+
+### Fixed — The exact-citation invariant was false on Windows, and the same file hashed differently per OS (#239)
+- The repo has no `.gitattributes`, `.editorconfig` says `end_of_line = crlf`, and `core.autocrlf` is on — so the
+  same source file is **CRLF on Windows and LF on Linux**, on disk. Everything downstream read the raw text and
+  quietly inherited that.
+- **The citation invariant was broken.** The product's claim is that a node's `StartLine..EndLine` slices back to
+  exactly its `Content` — that is what makes a cited line range verifiable. The markdown parser splits on `'\n'`,
+  so under CRLF every line kept a trailing `'\r'` and a `TrimEnd()` stripped it from the **last line only**.
+  Measured on a real file: slice `"# Doc\r\n\r\nIntro.\r"` against stored content `"# Doc\r\n\r\nIntro."` — off by
+  one CR, on **every section**, on the platform most of the development happens on.
+- **The test that pins that invariant could never catch it**, because its fixture is an **LF string literal**,
+  never a file read from disk. It encoded the assumption it existed to test — the same "fixture easier than
+  reality" that hid #215 and #237. Every test in `LineEndingTests` now writes a **real file** and reads it back.
+- **`ContentHash` was over raw text**, so the same logical file hashed differently per OS: an index built on
+  Windows and read on Linux (a Docker volume mount, an image-baked index) reported **every file as stale** —
+  `freshness` claimed the whole project had drifted, the incremental hash-skip never fired, and every analysis
+  result carried an "edited since indexing" warning. CI could not see it: each leg indexes its own checkout.
+- Text is now normalised to `\n` **once, at the read** (`SourceText.ReadAsync`), before anything hashes or parses
+  it. Line endings stop being a property of the machine that did the indexing.
+- **The pinned benchmark numbers do not move, and that was measured rather than assumed:** the graph is identical
+  (2416 nodes / 5979 edges), FTS is whitespace-insensitive, and `nomic-embed-text` embeds the CRLF and LF forms
+  of the same text to **bit-identical vectors** (max |diff| = 0, cosine 1.0 across all 768 dims) — the tokenizer
+  normalises whitespace, so a `\r` never reaches a token. Existing indexes still need one re-index, because the
+  stored hashes change.
+
+### Fixed — CI never ran on the PRs that introduce the code, and only ever tested one of two platforms (#209)
+- **CI did not run on feature PRs at all.** The triggers named only `main`, but every feature PR targets
+  **`develop`** — so CI fired when develop was promoted to main, and **never on the pull request that introduced
+  the change**. Verified against the run history: not one feature branch had a check. A gate that does not run
+  on the change is not a gate, and it quietly voided the guarantee #182 had just established. Both triggers now
+  include `develop`.
+- **Path containment is a security guard whose two halves are platform-specific, and CI tested one of them.**
+  On **Linux**, `File.CreateSymbolicLink` needs no privilege, so the file-symlink escape (#104) runs for real —
+  it must *skip* on Windows, which makes Linux the only place it is ever exercised. On **Windows**, the
+  junction-based directory escape (how the attack is actually built there), drive-letter paths, and the
+  case-**insensitive** comparison `TryResolveContainedPath` depends on — none of which Linux exercises at all.
+  CI ran Linux only, so half the guard was verified on nobody's machine but a developer's.
+- The job is now a **matrix over `ubuntu-latest` and `windows-latest`**, with `fail-fast: false` so a
+  Windows-only break cannot mask a Linux-only one. The Linux leg keeps its self-hosted override — it is the
+  *fallback* that is load-bearing, not the override.
+- `CiWorkflowContractTests` pins all of it: CI triggers on `develop`, both legs exist, the matrix does not
+  fail fast, and the suite runs unfiltered. **Mutation-verified** — dropping the develop trigger, the Windows
+  leg, or `fail-fast: false` each fails its guard.
+
+### Fixed — A hung Ollama backend served an empty answer with a 200 OK (#227)
+- The streaming counterpart of #225, and it hid better — because most of it was already handled. Measured what
+  the **user** actually sees for every way a stream can fail: a reset, a mid-body death and a 503 all correctly
+  produced a **500** with a visible marker.
+- One did not. A backend that **hung** produced a **`200 OK` with an empty body** — a failure rendered as a
+  successful, blank answer. Cause: an `HttpClient` timeout arrives as a `TaskCanceledException`, and the
+  endpoint's `catch (OperationCanceledException)` — meant for "the client disconnected" — swallowed it. **The
+  same confusion #215 found in the retry classifier: a timeout is not a cancellation, it only looks like one.**
+- The catch is now filtered on `context.RequestAborted.IsCancellationRequested`, so a genuine client disconnect
+  still returns quietly (nobody is listening) while **our own** timeout falls through to the failure handler and
+  becomes a logged 500 with a marker.
+- Also applied #225's rule to the streaming path: a stream that runs to `done=true` having emitted **no tokens**
+  is a backend malfunction, not a blank answer, and now throws rather than completing successfully with nothing.
+- **The partial-answer case turned out to be already correct**, and is now pinned rather than assumed: a stream
+  that delivers real tokens and then dies without Ollama's terminal `done` line keeps the tokens (they are real)
+  and appends an *"Answer incomplete"* marker — so a truncated answer cannot be read as a finished one. That was
+  the failure this ticket was originally filed about; the ticket's premise was wrong, and the real bug was the
+  silent one next to it. **Mutation-verified**, both fixes.
+
+### Fixed — A broken Ollama backend presented itself to users as a model that politely declined (#225)
+- On a `200 OK` carrying an unusable payload, `GenerateRAGResponseAsync` **returned the string**
+  `"No answer could be generated."` — travelling back through the same channel as a real answer, arriving at
+  `/api/ask` as a **200 OK**, and rendering in the dashboard as though the model had weighed the question and
+  declined. It had not. The backend was broken: a misconfigured model, a wrong response schema, a bad Ollama
+  build. Nothing was logged as a failure and nothing was measured, so a backend malfunctioning on **every**
+  query presented as a system that politely refuses to answer anything.
+- The codebase already had a real "no answer" path, and it is nothing like that one: `GroundingPrep` abstains
+  **deterministically, without calling the LLM at all**, and says so (`grounded = false`). Conflating a broken
+  backend with a considered abstention is exactly what made the failure invisible.
+- It now **throws**, as `AnalyzeNodeAsync` already did for the identical condition — so the three Ollama call
+  paths finally agree on what a `200`-with-garbage means, instead of the answer depending on which method you
+  happened to call. The endpoints already turn that into a logged **500** (`Fail` → `Results.Problem`), which is
+  what an infrastructure failure should look like. An empty/whitespace answer is treated the same way: a model
+  that produces nothing is malfunctioning, and a blank answer is indistinguishable from a broken backend.
+- Guarded at both levels: the service throws and is hit **exactly once** (a deterministic failure, per #222, on
+  the path a human is waiting on), and `/api/ask` returns a 500 rather than a 200 carrying prose. The
+  deterministic abstention is asserted **beside** it — still a 200, still `grounded = false`, still zero backend
+  calls — because the whole point is that the two must not look alike. **Mutation-verified:** restoring the
+  string fails all four guards.
+
+### Added — "Deterministic failures are never retried" was a comment; it is now a test (#222)
+- Both Ollama services asserted a safety property in prose: an `OllamaResponseException` (a `200 OK` carrying an
+  unusable payload) is raised *after* the pipeline returns, so it **cannot** be retried —
+  "deterministic-failure-is-never-retried is now **structural**". The property matters: a backend answering
+  `200` with garbage answers identically every time, so retrying triples the load on something that cannot
+  succeed, and the only symptom is that indexing got slow.
+- #215 and #218 both began as exactly this — a correct-sounding claim, argued in prose, that nothing was
+  checking — and **both turned out to be broken** once someone looked. So this one was checked.
+- **It holds.** A backend returning `200` with an empty embedding, a missing field, or malformed JSON is hit
+  **exactly once**; a `4xx` likewise; and a `503` on the same call path is still retried `BackgroundAttempts`
+  times, which proves the guard is measuring a live pipeline rather than a broken one.
+- **The comment understated it, though.** Mutating each mechanism in turn: move the validation *inside* the
+  pipeline and it is *still* not retried (the classifier refuses it — an unusable payload is not transient);
+  make the classifier call it transient and it is *still* not retried (placement saves it). Only **both**
+  together break it (3 requests instead of 1). So there are **two independent** protections, either sufficient —
+  not the single one the word "structural" implied. Worth knowing before someone simplifies one away on the
+  grounds that the other is doing the work.
+- The tests therefore pin the **outcome** (exactly one request reaches the backend), not either mechanism: a
+  guard tied to placement would fail on a harmless rearrangement and pass if the classifier silently changed.
+
+### Fixed — A generation that died mid-answer was also mistaken for a connection failure, and re-run (#218)
+- #218 asked whether `IsTransient` had the mirror flaw of the #215 bug (it classifies on the **outermost**
+  exception only, so a wrapped transient failure could go silently unretried). **It does not** — every failure a
+  real backend produces arrives as an `HttpRequestException` or a `TaskCanceledException` at the top of the
+  chain, and all are correctly transient. That is now measured rather than assumed.
+- The audit turned up a **second bug in `IsConnectError`**, of the same family as #215 and through a different
+  door. A `200 OK` whose body dies half-way — the backend answered, **the model was already generating**, and
+  the connection dropped — surfaces as `HttpRequestException → IOException → SocketException`: the same wreckage
+  a refused connection leaves. The chain-scan saw the socket error and said "connection failure", so the
+  **blocking RAG path re-ran a generation that had already cost minutes**. Exactly what that predicate exists to
+  prevent.
+- The status code cannot separate them (both carry `null`). .NET's `HttpRequestException.HttpRequestError` can,
+  and it is the signal worth trusting: it names *why* the request failed instead of leaving us to infer it from
+  wreckage at the bottom of a chain. Only `ConnectionError` / `NameResolutionError` / `SecureConnectionError` /
+  `ProxyTunnelError` — "no working connection was ever established" — are retried by the blocking path.
+- Ambiguity now resolves toward **not** retrying: .NET reports `Unknown` for both a pre-response reset and a
+  mid-body death, so they are indistinguishable. Failing to retry costs the caller one prompt error they can act
+  on; retrying wrongly costs them a second multi-minute generation they are sitting through. On a coin-flip the
+  RAG path is the impatient one. The background path retries all of these regardless — that asymmetry is the
+  point.
+- Every failure is now provoked over a **real socket** (refused, timeout, reset-before-response, 200-then-die)
+  and the classifier asserted against what actually comes out. Four existing tests had to be corrected in the
+  process: their hand-built `HttpRequestException`s never set `HttpRequestError`, so they defaulted to `Unknown`
+  — the same "fixture easier than reality" that let #215 hide. **Mutation-verified.**
+
+### Fixed — The blocking RAG path was retrying timeouts after all: a real timeout looked like a connect error (#215)
+- This ticket set out to make the Ollama request timeout **configurable**. Doing so made the real timeout path
+  testable for the first time — and the first end-to-end test **failed**, exposing a live bug.
+- `OllamaResilience.Blocking` exists for one rule: **never retry a timeout** on the RAG path, because retrying a
+  generation that already ran to timeout just doubles a wait a human is sitting through. `OllamaRetry.IsConnectError`
+  decided what counted as a retryable connection failure by scanning the exception chain for a `SocketException`.
+- But when `HttpClient`'s timeout elapses it **tears the connection down**, so the real chain is
+  `TaskCanceledException → TimeoutException → TaskCanceledException → IOException → SocketException`. The scan
+  found that buried socket error and answered "connection failure" — so **the blocking path retried the one
+  failure it exists never to retry**. Measured against a backend that accepts and never answers: **2 attempts,
+  not 1**.
+- It stayed invisible because the test that "covered" the rule (#213) built a **bare `TaskCanceledException`** —
+  not the shape `HttpClient` actually throws. The fixture was easier than reality, so the guard passed while the
+  rule was broken in production. That fixture now carries the real chain, reproduced from a live socket timeout.
+- **Fix:** a cancellation or timeout anywhere in the chain settles the question first — whatever the socket said
+  on the way out, we *did* reach the backend, it just did not answer in time. A genuine connect failure (no
+  cancellation in it) still gets its one cheap retry. The background path still retries timeouts: that asymmetry
+  is the whole point.
+- **Mutation-verified at three levels:** reintroducing the bug fails the classifier unit test, the pipeline test,
+  *and* the end-to-end real-timeout test.
+
+### Added — Ollama request timeouts are configurable and no longer overwrite the caller's (#215)
+- Both services assigned `HttpClient.Timeout` unconditionally in their constructor (1 min for embeddings, 2 for
+  generation). So an operator could not tune it — a large model on slow hardware gets cut off mid-answer, and
+  someone who would rather Ask AI failed fast could not say so — and configuring it the idiomatic way, via
+  `AddHttpClient(c => c.Timeout = …)`, **silently did nothing**.
+- Now `SemanticAnalyzer:TimeoutSeconds` / `EmbeddingService:TimeoutSeconds`, defaulting to exactly the values
+  that were hard-coded, so nothing changes for anyone who configures nothing. A timeout the caller set
+  deliberately is respected rather than discarded, and an unusable value (zero, negative, a typo) falls back to
+  the default instead of throwing.
+
 ### Added — The blocking RAG path's "never retry a timeout" rule is now pinned (#213)
 - `OllamaResilience.Blocking` exists for exactly one counter-intuitive rule: a **timeout must not be retried**.
   A timeout is "transient" in every ordinary sense — and the *background* pipeline does retry it — but a RAG

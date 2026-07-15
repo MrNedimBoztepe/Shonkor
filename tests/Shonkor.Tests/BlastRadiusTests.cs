@@ -186,7 +186,9 @@ public class BlastRadiusTests
     public async Task NoDerivedScores_InOutput()
     {
         var handler = await SetupAsync();
-        using var doc = JsonDocument.Parse(await handler.ProcessJsonRpcMessageAsync(ToolCall(new { nodeOrFile = "A" }))!);
+        // The `!` belongs on the AWAITED result, not on the Task: ProcessJsonRpcMessageAsync returns
+        // Task<string?>, so suppressing the task's nullability said nothing about the string (CS8604).
+        using var doc = JsonDocument.Parse((await handler.ProcessJsonRpcMessageAsync(ToolCall(new { nodeOrFile = "A" })))!);
         var text = doc.RootElement.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
 
         foreach (var banned in new[] { "impactScore", "\"score\"", "centrality", "grade", "\"level\"" })

@@ -32,7 +32,11 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         // Do NOT set _httpClient.BaseAddress here — mutating a shared HttpClient after construction
         // is not thread-safe and would affect any other service using the same instance.
         // Instead we build the full URL per request (see below).
-        _httpClient.Timeout = TimeSpan.FromMinutes(2); // Local LLM generation can take a bit
+        // Local LLM generation can take a bit — but "a bit" is not the same on every machine, and this was
+        // hard-coded at two minutes while also silently overwriting any timeout the caller had configured
+        // (#215). It is now SemanticAnalyzer:TimeoutSeconds, still defaulting to two minutes: a big model on
+        // slow hardware can be given longer, and someone who wants RAG to fail fast can ask for less.
+        OllamaClientFactory.ApplyTimeout(_httpClient, configuration, "SemanticAnalyzer", TimeSpan.FromMinutes(2));
     }
 
     public async Task<SemanticAnalysisResult> AnalyzeNodeAsync(GraphNode node, CancellationToken cancellationToken = default)
@@ -160,16 +164,70 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         // cheap, likely-fixable failure. A timeout or a 5xx mid-generation is NOT retried; the caller gets
         // the error promptly. This is why the policy cannot live on the shared HttpClient's handler: the
         // background path on that same client must retry exactly the failures this one must not.
+        //
+        // ONLY THE HEADERS ARE READ INSIDE THE PIPELINE (#221). That is what makes "never re-run a generation
+        // that already started" true rather than merely intended:
+        //
+        //   * an exception INSIDE the pipeline now means we never got a response at all — the only thing the
+        //     blocking policy may retry;
+        //   * reading the BODY happens after the pipeline has returned, so a connection that dies mid-answer
+        //     CANNOT be retried. Not by rule — by construction, the same mechanism that already makes an
+        //     unusable payload unretriable (#222).
+        //
+        // #218 tried to draw that line from the exception instead, using HttpRequestException.HttpRequestError.
+        // That was wrong, and the Windows-only measurement behind it hid the fact: on Linux a mid-body death
+        // reports ConnectionError — identical to a refused connection — so the blocking path re-ran a
+        // minutes-long generation on the platform this actually ships on. Measured on Ubuntu 24.04:
+        //
+        //     failure                Windows          Linux
+        //     connection refused     ConnectionError  ConnectionError
+        //     reset before response  Unknown          ConnectionError
+        //     200 then dies mid-body Unknown          ConnectionError   <-- indistinguishable
+        //
+        // The exception cannot tell us whether a response arrived. The call site can, so it does.
         {
             {
-                var response = await OllamaResilience.Blocking
-                    .ExecuteAsync(async ct => await _httpClient.PostAsJsonAsync(ragEndpoint, requestBody, ct).ConfigureAwait(false), cancellationToken)
+                using var response = await OllamaResilience.Blocking
+                    .ExecuteAsync(async ct =>
+                    {
+                        var request = new HttpRequestMessage(HttpMethod.Post, ragEndpoint)
+                        {
+                            Content = JsonContent.Create(requestBody)
+                        };
+                        return await _httpClient
+                            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                            .ConfigureAwait(false);
+                    }, cancellationToken)
                     .ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
                 var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
                 var responseText = responseJson?["response"]?.ToString();
-                if (responseText is null) return "No answer could be generated.";
+
+                // A 200 OK with no usable answer in it is a BACKEND FAILURE, and is now reported as one (#225).
+                //
+                // It used to `return "No answer could be generated."` — a string, handed back through the same
+                // channel as a real answer and rendered to the user as though the model had considered the
+                // question and declined. It had not: the payload was unusable (a misconfigured model, a wrong
+                // response schema, a broken Ollama build). Nothing was logged as a failure and nothing was
+                // measured, so a backend malfunctioning on EVERY query presented as a system that politely
+                // refuses to answer anything.
+                //
+                // The codebase already has a real "no answer" path, and it is nothing like this one:
+                // GroundingPrep.NoEvidence abstains DETERMINISTICALLY, without calling the LLM at all, and says
+                // so (`grounded = false`). Conflating a broken backend with a considered abstention is what made
+                // the failure invisible.
+                //
+                // So this now throws, exactly as AnalyzeNodeAsync does for the identical condition — the three
+                // Ollama call paths finally agree on what a 200-with-garbage means. The endpoints already turn
+                // it into a logged 500 (EndpointHelpers.Fail → Results.Problem), which is what an infrastructure
+                // failure should look like.
+                if (string.IsNullOrWhiteSpace(responseText))
+                {
+                    throw new OllamaResponseException(
+                        "Ollama returned a 200 OK with no usable answer. The backend is misconfigured or " +
+                        "malfunctioning — this is not the model declining to answer.");
+                }
 
                 WarnIfPromptTruncated(responseJson, options.NumCtx);
 
@@ -183,12 +241,28 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
     /// <summary>
     /// Streams the grounded RAG answer token-by-token from Ollama (<c>stream=true</c>, NDJSON), so the UI
-    /// shows first tokens immediately instead of waiting for the whole generation (TICKET-104). Uses the
-    /// same grounded prompt as <see cref="GenerateRAGResponseAsync"/>. No retry loop — a stream can't be
-    /// safely restarted once bytes are on the wire; a failure after headers are sent surfaces to the caller,
-    /// which can only mark the partial answer (it cannot transparently fall back to the blocking path).
-    /// If the stream ends before Ollama's terminal <c>done</c> line (e.g. the backend is killed mid-answer),
-    /// a truncation marker is emitted so the answer isn't silently presented as complete.
+    /// shows first tokens immediately instead of waiting for the whole generation (TICKET-104). Uses the same
+    /// grounded prompt as <see cref="GenerateRAGResponseAsync"/>. If the stream ends before Ollama's terminal
+    /// <c>done</c> line (e.g. the backend is killed mid-answer), a truncation marker is emitted so the answer
+    /// isn't silently presented as complete.
+    ///
+    /// <para>
+    /// <b>The retry is scoped to the pre-header send (#224 established why that is safe; #243 acted on it).</b>
+    /// The send uses <c>HttpCompletionOption.ResponseHeadersRead</c>, so a pipeline around it can only ever see
+    /// failures from <i>before the headers arrived</i> — where nothing has been yielded and a restart is
+    /// indistinguishable from a first attempt. A failure <i>after</i> bytes are flowing happens once the send
+    /// has already returned, so it is unretriable <b>by construction</b>, exactly like the deterministic
+    /// failures of #222 and the mid-body deaths of #221. The completion option is the safety mechanism, not the
+    /// absence of a pipeline — so a pipeline that only touches the pre-header phase is safe to add, and it gives
+    /// the user-facing streaming path the same cheap connection recovery the blocking path always had.
+    /// </para>
+    /// <para>
+    /// The property <c>StreamingNoRetryTests</c> pins still holds: <b>a token is never emitted twice, and the
+    /// backend is never asked to generate the same answer again.</b> The pipeline is
+    /// <c>OllamaResilience.Blocking</c> — one retry, <i>connection failures only</i> — so a 5xx is a response the
+    /// pipeline returns and <c>EnsureSuccessStatusCode</c> throws outside it (not retried, matching the blocking
+    /// path), and a body-phase failure is out of the pipeline's reach.
+    /// </para>
     /// </summary>
     public IAsyncEnumerable<string> StreamRAGResponseAsync(
         string query,
@@ -211,14 +285,29 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             options = new { temperature = 0, seed = 42, num_ctx = options.NumCtx }
         };
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_ollamaUrl}/api/generate")
+        // Retry ONLY the pre-header send, and only for a genuine connection failure (#243). This is now safe
+        // to reason about because of #224: ResponseHeadersRead returns the moment the headers arrive, so a
+        // failure the pipeline can see is always one from BEFORE any byte was yielded — nothing has streamed,
+        // so restarting is indistinguishable from a first attempt. A failure while reading the BODY happens
+        // after ExecuteAsync has already returned, and is therefore never retried, which is the property
+        // StreamingNoRetryTests pins. So the user-facing streaming path finally gets the same cheap recovery
+        // the blocking path always had — a backend that was merely not listening yet no longer fails the answer
+        // outright — without any risk of a replayed token. Uses OllamaResilience.Blocking (one retry, connect
+        // errors only): a 5xx is a response, so the pipeline returns it and EnsureSuccessStatusCode below throws
+        // it OUTSIDE the retry, exactly as the blocking path treats a mid-generation 5xx.
+        //
+        // The request is built INSIDE the callback because an HttpRequestMessage can be sent only once; each
+        // attempt needs a fresh one.
+        using var response = await OllamaResilience.Blocking.ExecuteAsync(async ct =>
         {
-            Content = JsonContent.Create(requestBody)
-        };
-
-        using var response = await _httpClient
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{_ollamaUrl}/api/generate")
+            {
+                Content = JsonContent.Create(requestBody)
+            };
+            return await _httpClient
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                .ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
@@ -269,6 +358,18 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                 completed = true;
                 break;
             }
+        }
+
+        // A stream that ran to done=true having emitted NOTHING is a backend malfunction, not a blank answer —
+        // the same rule the blocking path now applies (#225), and for the same reason: an empty answer is
+        // indistinguishable from a broken model, so presenting it as an answer hides the failure. Nothing has
+        // been yielded at this point, so the response has not started and the endpoint can still return a
+        // proper 500 rather than a successful, empty one (#227).
+        if (completed && full.Length == 0)
+        {
+            throw new OllamaResponseException(
+                "Ollama streamed a complete response containing no tokens. The backend is misconfigured or " +
+                "malfunctioning — this is not the model declining to answer.");
         }
 
         if (completed)

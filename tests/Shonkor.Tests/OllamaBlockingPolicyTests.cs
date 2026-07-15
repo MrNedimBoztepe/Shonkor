@@ -54,11 +54,27 @@ public class OllamaBlockingPolicyTests
         return attempts;
     }
 
-    /// <summary>What HttpClient throws when ITS timeout elapses: a TaskCanceledException, no caller cancellation.</summary>
-    private static Exception ClientTimeout() => new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout");
+    /// <summary>
+    /// What <see cref="HttpClient"/> throws when ITS timeout elapses — the <b>real</b> chain, reproduced from a
+    /// live socket timeout.
+    /// <para>
+    /// This used to be a bare <c>TaskCanceledException</c>, and that was the bug (#215): tearing the connection
+    /// down on timeout buries a <see cref="SocketException"/> at the bottom of the chain, and
+    /// <c>IsConnectError</c> scanned for exactly that — so it called a timeout a connection failure and the
+    /// blocking path retried it. The simplified fixture made the guard pass while the rule was broken in
+    /// production. A test fixture that is easier than reality is not a test.
+    /// </para>
+    /// </summary>
+    private static Exception ClientTimeout() =>
+        new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 2 seconds elapsing.",
+            new TimeoutException("The operation was canceled.",
+                new TaskCanceledException("The operation was canceled.",
+                    new IOException("Unable to read data from the transport connection.",
+                        new SocketException()))));
 
     /// <summary>What a refused connection / DNS failure looks like: HttpRequestException with no status.</summary>
-    private static Exception ConnectFailure() => new HttpRequestException("connection refused", new SocketException(), null);
+    private static Exception ConnectFailure() =>
+        new HttpRequestException(HttpRequestError.ConnectionError, "connection refused", new SocketException());
 
     [Fact]
     public async Task Blocking_DoesNotRetryATimeout_BecauseAHumanIsWaiting()

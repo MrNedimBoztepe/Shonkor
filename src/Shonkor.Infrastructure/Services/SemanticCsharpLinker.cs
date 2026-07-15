@@ -63,8 +63,8 @@ public static class SemanticCsharpLinker
         var files = new List<(string Path, string Code)>();
         foreach (var path in Directory.EnumerateFiles(directoryPath, "*.cs", SearchOption.AllDirectories))
         {
-            if (path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
-                path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            if (path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", FilePaths.Comparison) ||
+                path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", FilePaths.Comparison))
             {
                 continue;
             }

@@ -8,6 +8,8 @@ using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
 using Microsoft.Extensions.Logging;
 
+using Shonkor.Core.Services;
+
 namespace Shonkor.Infrastructure.Services;
 
 /// <summary>
@@ -154,7 +156,7 @@ public sealed class GraphIndexScanner
                     return;
                 }
 
-                var content = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
+                var content = await SourceText.ReadAsync(filePath, ct).ConfigureAwait(false);
                 var contentHash = ComputeSha256Hash(content);
 
                 // Incremental Hash Check: skip if hash matches DB (unless the id scheme is stale, in which
@@ -199,11 +201,14 @@ public sealed class GraphIndexScanner
 
         // 3.5 Gather stale files (previously indexed but no longer matched / excluded / deleted)
         var indexedFiles = await _storage.GetAllIndexedFilePathsAsync(cancellationToken).ConfigureAwait(false);
-        var candidateFilesSet = new HashSet<string>(candidateFiles, StringComparer.OrdinalIgnoreCase);
+        // Path-keyed set: case-insensitive here collapsed Handler.cs and handler.cs into one entry on Linux,
+        // so staleness was computed against a set missing real files and a deleted file was never cleared
+        // (a ghost node surviving every rescan). This set drives DeleteByFilePathsAsync (#235).
+        var candidateFilesSet = new HashSet<string>(candidateFiles, FilePaths.Comparer);
         var dirPrefix = NormalizedDirPrefix(directoryPath);
         foreach (var indexedFile in indexedFiles)
         {
-            if (indexedFile.StartsWith(dirPrefix, StringComparison.OrdinalIgnoreCase) && !candidateFilesSet.Contains(indexedFile))
+            if (indexedFile.StartsWith(dirPrefix, FilePaths.Comparison) && !candidateFilesSet.Contains(indexedFile))
             {
                 filesToClear.Add(indexedFile);
             }
@@ -352,7 +357,7 @@ public sealed class GraphIndexScanner
 
         var parserMap = BuildParserMap();
         var candidateFiles = EnumerateCandidateFiles(directoryPath, excludePatterns, parserMap);
-        var candidateSet = new HashSet<string>(candidateFiles, StringComparer.OrdinalIgnoreCase);
+        var candidateSet = new HashSet<string>(candidateFiles, FilePaths.Comparer);
 
         var storedHashes = await _storage.GetContentHashesAsync(candidateFiles, cancellationToken).ConfigureAwait(false);
 
@@ -379,7 +384,7 @@ public sealed class GraphIndexScanner
                     continue;
                 }
 
-                var content = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
+                var content = await SourceText.ReadAsync(filePath, cancellationToken).ConfigureAwait(false);
                 if (ComputeSha256Hash(content) != storedHash)
                 {
                     changed.Add(filePath);
@@ -397,7 +402,7 @@ public sealed class GraphIndexScanner
         var dirPrefix = NormalizedDirPrefix(directoryPath);
         foreach (var indexedFile in indexedFiles)
         {
-            if (indexedFile.StartsWith(dirPrefix, StringComparison.OrdinalIgnoreCase)
+            if (indexedFile.StartsWith(dirPrefix, FilePaths.Comparison)
                 && !candidateSet.Contains(indexedFile))
             {
                 deleted.Add(indexedFile);
@@ -457,7 +462,7 @@ public sealed class GraphIndexScanner
         // files that are now exclude-matched — re-scanning them would resurrect excluded content).
         var removeSet = forceRemovePaths is null
             ? null
-            : forceRemovePaths.Where(p => !string.IsNullOrWhiteSpace(p)).Select(Resolve).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            : forceRemovePaths.Where(p => !string.IsNullOrWhiteSpace(p)).Select(Resolve).ToHashSet(FilePaths.Comparer);
 
         // Capture the type names the changed files define BEFORE re-indexing, so a rename/delete in semantic
         // mode can still relink the referencers of the old name (their incoming edges would otherwise dangle).
@@ -515,7 +520,7 @@ public sealed class GraphIndexScanner
                 relinkNames.Add(name);
         }
 
-        var relinkSet = new HashSet<string>(changedFullPaths, StringComparer.OrdinalIgnoreCase);
+        var relinkSet = new HashSet<string>(changedFullPaths, FilePaths.Comparer);
         if (relinkNames.Count > 0)
         {
             foreach (var referencer in await _storage.GetReferencingFilePathsAsync(relinkNames, cancellationToken).ConfigureAwait(false))
@@ -549,7 +554,7 @@ public sealed class GraphIndexScanner
         if (!inGraph && onDisk) return FreshnessState.Untracked;
         if (!inGraph) return FreshnessState.Untracked; // neither on disk nor in graph → treat as untracked
 
-        var content = await File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        var content = await SourceText.ReadAsync(fullPath, cancellationToken).ConfigureAwait(false);
         return ComputeSha256Hash(content) == storedHash ? FreshnessState.Fresh : FreshnessState.Stale;
     }
 
@@ -618,7 +623,7 @@ public sealed class GraphIndexScanner
             return Cleared();
         }
 
-        var content = await File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        var content = await SourceText.ReadAsync(fullPath, cancellationToken).ConfigureAwait(false);
         var contentHash = ComputeSha256Hash(content);
 
         var nodes = new List<GraphNode>();
@@ -727,7 +732,7 @@ public sealed class GraphIndexScanner
         foreach (var referencer in referencers)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (string.Equals(referencer, excludeFile, StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(referencer, excludeFile, FilePaths.Comparison)) continue;
             await CrossTechLinker.RelinkFileReferenceTypesAsync(_storage, referencer, cancellationToken).ConfigureAwait(false);
         }
     }

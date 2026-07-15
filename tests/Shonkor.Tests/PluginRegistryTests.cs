@@ -172,4 +172,60 @@ public class PluginRegistryTests
             try { Directory.Delete(ws, recursive: true); } catch { }
         }
     }
+
+    /// <summary>
+    /// The <b>backslash</b> escape (#240). The test above only ever tried <c>../escaped.txt</c>, so the
+    /// Windows-flavoured attack — a zip entry named <c>..\escaped.txt</c> — was never exercised in a
+    /// <b>security</b> check.
+    ///
+    /// <para>
+    /// It is not the same string on both platforms, and asserting one answer for both would be asserting that
+    /// one of them is wrong:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><b>Windows</b> — <c>\</c> is a path separator, so <c>..\escaped.txt</c> <b>escapes</b> the target
+    ///   directory and must be rejected.</item>
+    ///   <item><b>Linux</b> — <c>\</c> is an ordinary filename character, so <c>..\escaped.txt</c> is a single,
+    ///   oddly-named file that is <b>contained</b>. Rejecting it would be wrong; extracting it is correct, and
+    ///   it must land inside the target and nowhere else.</item>
+    /// </list>
+    /// <para>
+    /// A containment check that merely stripped <c>/</c> would pass the original test on both platforms and
+    /// still be exploitable on Windows. This pins that the real guard (<c>GetFullPath</c> + a separator
+    /// boundary) gets both cases right.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Install_HandlesTheBackslashEntry_AsThePlatformDefinesIt()
+    {
+        var ws = NewWorkspace();
+        try
+        {
+            var registry = new PluginRegistry(ws);
+            var zip = MakeZip(ws, ValidManifest, extraUnsafeEntry: @"..\escaped.txt");
+
+            var r = registry.InstallFromZip(zip);
+
+            // Wherever it lands, it must NEVER land outside the workspace.
+            var parent = Directory.GetParent(ws)!.FullName;
+            Assert.False(File.Exists(Path.Combine(parent, "escaped.txt")),
+                @"a zip entry named '..\escaped.txt' escaped the target directory");
+
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.False(r.Success);
+                Assert.Contains("Unsafe", r.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                // On Linux the backslash is just a character: the entry is contained, so install proceeds and
+                // the file sits INSIDE the workspace under its literal, odd name.
+                Assert.True(r.Success, $"expected the contained entry to install on this platform: {r.Message}");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
 }
