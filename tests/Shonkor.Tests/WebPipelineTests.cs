@@ -67,8 +67,8 @@ public class WebPipelineTests : IClassFixture<WebPipelineTests.AppFactory>
         Assert.Contains("default-src 'self'", csp, StringComparison.Ordinal);
         Assert.Contains("object-src 'none'", csp, StringComparison.Ordinal);
         Assert.Contains("frame-ancestors 'none'", csp, StringComparison.Ordinal);
-        // The CDN hosts the shells actually load must be allow-listed, or the dashboard would break under CSP.
-        Assert.Contains("https://cdn.jsdelivr.net", csp, StringComparison.Ordinal);
+        // The CDN host ATLAS actually loads (cdnjs, for d3) must be allow-listed, or the dashboard breaks under CSP.
+        Assert.Contains("https://cdnjs.cloudflare.com", csp, StringComparison.Ordinal);
 
         Assert.Equal("nosniff", Assert.Single(res.Headers.GetValues("X-Content-Type-Options")));
         Assert.Equal("DENY", Assert.Single(res.Headers.GetValues("X-Frame-Options")));

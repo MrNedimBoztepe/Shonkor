@@ -120,16 +120,17 @@ if (!app.Environment.IsDevelopment()
 // --- Middleware pipeline ---
 
 // Security headers on every response (#260). The CSP is deliberately a SOURCE ALLOW-LIST, not a strict
-// nonce/hash policy: the dashboard has ~19 inline event handlers, ~70 inline style attributes and an inline
-// ATLAS script, so keeping 'unsafe-inline' avoids a large, UI-breaking refactor for little gain — inline
-// XSS is already handled by escapeHtml + DOMPurify. What the allow-list DOES buy is real: an injected
-// <script src> or stylesheet from an unlisted host is blocked, and the object/base/framing vectors are shut
-// (frame-ancestors 'none' also gives clickjacking protection). Hosts listed are exactly the CDNs the two
-// shells load (cdnjs, unpkg, jsdelivr) plus Google Fonts (googleapis for CSS, gstatic for the font files).
+// nonce/hash policy: the ATLAS shell still has inline event handlers, inline style attributes and an inline
+// script, so keeping 'unsafe-inline' avoids a UI-breaking refactor for little gain — inline XSS is already
+// handled by escapeHtml. What the allow-list DOES buy is real: an injected <script src> or stylesheet from an
+// unlisted host is blocked, and the object/base/framing vectors are shut (frame-ancestors 'none' also gives
+// clickjacking protection). Hosts are exactly what ATLAS loads: cdnjs (d3) and Google Fonts (googleapis for
+// the CSS, gstatic for the font files). The legacy dashboard's unpkg/jsdelivr/Prism deps were dropped with it
+// (#262).
 const string contentSecurityPolicy =
     "default-src 'self'; " +
-    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://unpkg.com https://cdn.jsdelivr.net; " +
-    "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; " +
+    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src 'self' https://fonts.gstatic.com; " +
     "img-src 'self' data:; " +
     "connect-src 'self'; " +
@@ -146,8 +147,7 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
-// ATLAS is the primary UI: redirect the bare root to it. The legacy dashboard stays reachable at
-// /index.html. This runs before UseDefaultFiles so "/" never resolves to the old shell.
+// ATLAS is the only UI: redirect the bare root to it. (The legacy /index.html dashboard was removed in #262.)
 app.Use(async (ctx, next) =>
 {
     if (ctx.Request.Path == "/")
@@ -164,14 +164,11 @@ app.Use(async (ctx, next) =>
 // matched files, so only unmatched requests (the /api/* endpoints) reach the ApiKeyMiddleware below.
 app.UseDefaultFiles();
 
-var contentTypeProvider = new FileExtensionContentTypeProvider();
-contentTypeProvider.Mappings[".po"] = "text/plain";
 app.UseStaticFiles(new StaticFileOptions
 {
-    ContentTypeProvider = contentTypeProvider,
-    // Never cache HTML: the shell references versioned assets (app.js?v=, app.css?v=), so the browser
-    // must always re-fetch index.html to learn the current versions. Otherwise a stale cached shell
-    // keeps loading old JS/CSS (e.g. an old API path) even after an update.
+    // Never cache HTML: the ATLAS shell references versioned assets, so the browser must always re-fetch the
+    // shell to learn the current versions. Otherwise a stale cached shell keeps loading old JS/CSS after an
+    // update.
     OnPrepareResponse = ctx =>
     {
         var path = ctx.File.Name;

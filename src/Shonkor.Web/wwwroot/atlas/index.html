@@ -211,6 +211,29 @@
   #ai-set .af{display:flex; gap:8px; margin-top:5px}
   #ai-set .af input{flex:1; font-family:var(--sans); font-size:13px; border:1px solid var(--line-2); background:var(--paper); padding:8px 11px; outline:none}
   #ai-set .af input:focus{border-color:var(--ink-2)}
+  /* admin (orgs / users & tokens) — reuses the settings .af input-row shape */
+  #set-body .af{display:flex; gap:8px; margin-top:6px}
+  #set-body .af input, #set-body .af select{flex:1; font-family:var(--sans); font-size:13px; border:1px solid var(--line-2); background:var(--paper); padding:8px 11px; outline:none}
+  #set-body .af input:focus, #set-body .af select:focus{border-color:var(--ink-2)}
+  #set-body .af button{font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; background:var(--teal); color:var(--paper); border:none; padding:0 16px; cursor:pointer}
+  #set-body .af button.ghost{background:var(--paper); color:var(--ink-2); border:1px solid var(--line-2)}
+  .admrow{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 11px; border:1px solid var(--line-2); background:var(--paper); margin-bottom:6px; font-size:13px; font-family:var(--sans)}
+  .admrow .danger{font-family:var(--mono); font-size:10px; letter-spacing:.04em; text-transform:uppercase; border:1px solid var(--line-2); background:var(--paper); color:var(--ink-2); padding:5px 10px; cursor:pointer}
+  .admrow .danger:hover{color:var(--err); border-color:var(--err)}
+  .admtoken{margin-top:12px; padding:12px; border:1px solid var(--teal); background:rgba(0,0,0,.02); font-family:var(--sans); font-size:12px}
+  .admtoken input{width:100%; margin-top:8px; font-family:var(--mono); font-size:12px; border:1px solid var(--line-2); background:var(--paper); padding:8px; color:var(--ink)}
+  /* folder browser modal */
+  .bmodal{position:fixed; inset:0; background:rgba(20,16,10,.42); display:flex; align-items:center; justify-content:center; z-index:9999}
+  .bpanel{width:min(560px,92vw); max-height:80vh; display:flex; flex-direction:column; background:var(--paper); border:1px solid var(--line-2); box-shadow:0 18px 60px rgba(0,0,0,.28)}
+  .bhead{display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid var(--line-2); font-family:var(--serif); font-size:16px; color:var(--ink)}
+  .bhead button, .bpath button{font-family:var(--mono); background:var(--paper); border:1px solid var(--line-2); color:var(--ink-2); cursor:pointer; padding:4px 10px}
+  .bpath{display:flex; gap:8px; padding:10px 14px; border-bottom:1px solid var(--line-2)}
+  .bpath input{flex:1; font-family:var(--mono); font-size:12px; border:1px solid var(--line-2); background:var(--paper); padding:6px 9px; color:var(--ink-2)}
+  .blist{flex:1; overflow:auto; padding:6px; min-height:120px}
+  .bitem{display:flex; align-items:center; gap:8px; padding:7px 10px; font-family:var(--sans); font-size:13px; color:var(--ink); cursor:pointer; border:1px solid transparent}
+  .bitem:hover{background:rgba(0,0,0,.045); border-color:var(--line-2)}
+  .bfoot{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 14px; border-top:1px solid var(--line-2)}
+  .bfoot button{font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; background:var(--teal); color:var(--paper); border:none; padding:8px 16px; cursor:pointer}
   .airow{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--line-2)}
   .airow label{font-family:var(--sans); font-size:13px; color:var(--ink-2)}
   .airow select,.airow input{font-family:var(--sans); font-size:13px; border:1px solid var(--line-2); background:var(--paper); padding:6px 9px; outline:none; min-width:170px}
@@ -997,7 +1020,8 @@ let _setTab='projects';
 const SET_SECTIONS=[
   {t:'projects', label:'Projects', icon:'<rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="9" width="8" height="11" rx="1"/><path d="M7 11v4h6"/>'},
   {t:'ai',       label:'AI',       icon:'<path d="M4 5h16v11H9l-4 4v-4H4z"/><path d="M8.5 10.5h.2 M12 10.5h.2 M15.5 10.5h.2"/>'},
-  {t:'plugins',  label:'Plugins',  icon:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="13" y="13" width="6" height="6" rx="1"/><path d="M10 7h5v6"/>'}
+  {t:'plugins',  label:'Plugins',  icon:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="13" y="13" width="6" height="6" rx="1"/><path d="M10 7h5v6"/>'},
+  {t:'admin',    label:'Admin',    icon:'<path d="M12 3l7 3v5c0 4-3 6.5-7 8-4-1.5-7-4-7-8V6z"/><circle cx="12" cy="10" r="1.8"/><path d="M9 15.5c0-1.6 6-1.6 6 0"/>'}
 ];
 function renderSettings(body){
   body.innerHTML = `<div class="setwrap">
@@ -1008,7 +1032,7 @@ function renderSettings(body){
   </div>`;
   body.querySelectorAll('#set-nav button').forEach(b=>b.onclick=()=>{ _setTab=b.getAttribute('data-t'); renderSettings(body); });
   const sb=$('#set-body');
-  if(_setTab==='plugins') renderPlugins(sb); else if(_setTab==='ai') renderSettingsAi(sb); else renderSettingsProjects(sb);
+  if(_setTab==='plugins') renderPlugins(sb); else if(_setTab==='ai') renderSettingsAi(sb); else if(_setTab==='admin') renderSettingsAdmin(sb); else renderSettingsProjects(sb);
 }
 /* AI / Ollama settings — edits appsettings.Local.json via loopback-only /api/settings. */
 async function renderSettingsAi(c){
@@ -1047,17 +1071,128 @@ async function renderSettingsAi(c){
     }catch(e){ $('#ai-status').textContent='Save failed.'; }
   };
 }
+/* Admin — organizations, users & tokens (B2B SaaS). Ported from the legacy dashboard; API is /api/admin/*. */
+let _admOrgs=[];
+async function renderSettingsAdmin(c){
+  c.innerHTML = `
+    <div class="secthead">Organizations</div>
+    <div class="af"><input id="adm-org" placeholder="New organization name"><button id="adm-org-add">Create</button></div>
+    <div id="adm-orgs"><div class="sempty">Loading…</div></div>
+    <div class="secthead" style="margin-top:20px">Users &amp; tokens</div>
+    <div class="seglbl">Create a user and generate a Personal Access Token — it is shown once.</div>
+    <div class="af" style="flex-wrap:wrap; margin-top:8px">
+      <select id="adm-user-org"><option value="">Organization…</option></select>
+      <input id="adm-user-name" placeholder="Username (e.g. jdoe)">
+      <input id="adm-user-gh" placeholder="GitHub username (optional)">
+      <button id="adm-user-add">Generate token</button>
+    </div>
+    <div id="adm-token" class="admtoken" hidden></div>
+    <div class="seglbl" style="margin-top:14px">View users for organization</div>
+    <div class="af"><select id="adm-filter-org"><option value="">Select organization…</option></select></div>
+    <div id="adm-users"><div class="sempty">Pick an organization.</div></div>`;
+  $('#adm-org-add').onclick=admCreateOrg;
+  $('#adm-org').onkeydown=e=>{ if(e.key==='Enter') admCreateOrg(); };
+  $('#adm-user-add').onclick=admCreateUser;
+  $('#adm-filter-org').onchange=e=>admLoadUsers(e.target.value);
+  await admLoadOrgs();
+}
+async function admLoadOrgs(){
+  try{ const r=await fetch('/api/admin/orgs'); if(!r.ok) throw new Error(r.status); _admOrgs=await r.json(); }
+  catch(e){ $('#adm-orgs').innerHTML='<div class="sempty">Admin API unavailable.</div>'; return; }
+  const orgOpts=_admOrgs.map(o=>`<option value="${escapeHtml(o.id)}">${escapeHtml(o.name)}</option>`).join('');
+  const fo=$('#adm-filter-org'), fv=fo.value;
+  $('#adm-user-org').innerHTML='<option value="">Organization…</option>'+orgOpts;
+  fo.innerHTML='<option value="">Select organization…</option>'+orgOpts; if(fv) fo.value=fv;
+  $('#adm-orgs').innerHTML = _admOrgs.length
+    ? _admOrgs.map(o=>`<div class="admrow"><span>${escapeHtml(o.name)}</span><span class="seglbl">${escapeHtml(o.id)}</span></div>`).join('')
+    : '<div class="sempty">No organizations yet.</div>';
+}
+async function admCreateOrg(){
+  const name=$('#adm-org').value.trim(); if(!name) return;
+  try{ const r=await fetch('/api/admin/orgs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    if(r.ok){ $('#adm-org').value=''; toast('Organization created'); admLoadOrgs(); } else toast('Create failed');
+  }catch(e){ toast('Create failed'); }
+}
+async function admCreateUser(){
+  const organizationId=$('#adm-user-org').value, username=$('#adm-user-name').value.trim(), githubUsername=$('#adm-user-gh').value.trim();
+  if(!organizationId||!username){ toast('Organization and username are required'); return; }
+  try{
+    const r=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({organizationId,username,githubUsername})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){
+      $('#adm-user-name').value=''; $('#adm-user-gh').value='';
+      const t=$('#adm-token'); t.hidden=false;
+      t.innerHTML=`<b>Token generated — copy it now, it will not be shown again.</b><input readonly value="${escapeHtml(j.apiToken||'')}" onclick="this.select()">`;
+      toast('User created');
+      if($('#adm-filter-org').value===organizationId) admLoadUsers(organizationId);
+    } else toast(typeof j==='string'?j:'Create failed');
+  }catch(e){ toast('Create failed'); }
+}
+async function admLoadUsers(orgId){
+  const el=$('#adm-users'); if(!orgId){ el.innerHTML='<div class="sempty">Pick an organization.</div>'; return; }
+  el.innerHTML='<div class="sempty">Loading…</div>';
+  try{
+    const r=await fetch('/api/admin/users/'+encodeURIComponent(orgId)); if(!r.ok) throw new Error(r.status);
+    const users=await r.json();
+    el.innerHTML = users.length
+      ? users.map(u=>`<div class="admrow"><span>${escapeHtml(u.username)}<span class="seglbl"> · ${escapeHtml(u.gitHubUsername||'no github')}</span></span><button class="danger" data-uid="${escapeHtml(u.id)}">delete</button></div>`).join('')
+      : '<div class="sempty">No users in this organization.</div>';
+    el.querySelectorAll('button[data-uid]').forEach(b=>b.onclick=()=>admDeleteUser(b.getAttribute('data-uid'), orgId));
+  }catch(e){ el.innerHTML='<div class="sempty">Failed to load users.</div>'; }
+}
+async function admDeleteUser(userId, orgId){
+  if(!confirm('Delete this user? Their token is revoked immediately.')) return;
+  try{ const r=await fetch('/api/admin/users/'+encodeURIComponent(userId),{method:'DELETE'});
+    if(r.ok){ toast('User deleted'); admLoadUsers(orgId); } else toast('Delete failed');
+  }catch(e){ toast('Delete failed'); }
+}
+/* Folder browser for the add-project path (loopback + dev-only /api/browse; a 403 just means "type the path"). */
+async function openBrowse(){
+  let m=$('#browse-modal');
+  if(!m){
+    m=document.createElement('div'); m.id='browse-modal'; m.className='bmodal';
+    m.innerHTML=`<div class="bpanel">
+      <div class="bhead"><b>Choose a directory</b><button id="b-close" title="Close">✕</button></div>
+      <div class="bpath"><button id="b-up" title="Up one level">↑</button><input id="b-cur" readonly placeholder="drives"></div>
+      <div class="blist" id="b-list"></div>
+      <div class="bfoot"><span class="seglbl" id="b-sel">None selected</span><button id="b-pick">Use this folder</button></div>
+    </div>`;
+    document.body.appendChild(m);
+    m.onclick=e=>{ if(e.target===m) m.remove(); };
+    $('#b-close').onclick=()=>m.remove();
+    $('#b-up').onclick=()=>browseGo($('#b-up').dataset.parent||'');
+    $('#b-pick').onclick=()=>{ const p=$('#b-cur').value; if(p){ $('#ap-path').value=p; m.remove(); toast('Path set'); } else toast('Open a folder first'); };
+  }
+  browseGo('');
+}
+async function browseGo(path){
+  const list=$('#b-list'); if(!list) return; list.innerHTML='<div class="sempty">Loading…</div>';
+  try{
+    const r=await fetch('/api/browse?path='+encodeURIComponent(path));
+    if(r.status===403){ list.innerHTML='<div class="sempty">Folder browsing is available only on the local machine (loopback, Development). Type the absolute path instead.</div>'; return; }
+    if(!r.ok){ list.innerHTML='<div class="sempty">Access denied or invalid path.</div>'; return; }
+    const d=await r.json(); const cur=d.currentPath||'';
+    $('#b-cur').value=cur; $('#b-sel').textContent=cur||'None selected';
+    $('#b-up').dataset.parent=d.parentPath||''; $('#b-up').disabled=!cur;
+    const items = cur ? (d.folders||[]).map(n=>({label:n, path:cur.replace(/[\\/]+$/,'')+'/'+n}))
+                      : (d.drives||[]).map(dr=>({label:dr, path:dr}));
+    if(!items.length){ list.innerHTML='<div class="sempty">'+(cur?'No subfolders.':'No drives found.')+'</div>'; return; }
+    list.innerHTML=items.map(it=>`<div class="bitem" data-p="${escapeHtml(it.path)}"><svg viewBox="0 0 24 24" width="13" height="13"><path d="M3 6h6l2 2h10v11H3z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>${escapeHtml(it.label)}</div>`).join('');
+    list.querySelectorAll('.bitem').forEach(el=>el.onclick=()=>browseGo(el.getAttribute('data-p')));
+  }catch(e){ list.innerHTML='<div class="sempty">Browser API failed.</div>'; }
+}
 function semLabel(v){ return v===true?'Semantic (exact)':v===false?'Syntactic (fast)':'Global default'; }
 function renderSettingsProjects(c){
   c.innerHTML = `
     <div class="addprj">
       <div class="secthead" style="margin:0">Add a project</div>
       <div class="seglbl" style="margin-top:2px">Point Shonkor at a source directory to index it into its own graph.</div>
-      <div class="af"><input id="ap-name" placeholder="Name (e.g. MyApp)"><input id="ap-path" placeholder="Absolute path to the source root"><button id="ap-go">Add</button></div>
+      <div class="af"><input id="ap-name" placeholder="Name (e.g. MyApp)"><input id="ap-path" placeholder="Absolute path to the source root"><button id="ap-browse" class="ghost" title="Browse folders">Browse</button><button id="ap-go">Add</button></div>
     </div>
     <div class="secthead">Projects <span class="seglbl">${(state.projects||[]).length}</span></div>
     <div id="prj-list"><div class="sempty">Loading…</div></div>`;
   c.querySelector('#ap-go').onclick=addProject;
+  c.querySelector('#ap-browse').onclick=openBrowse;
   c.querySelector('#ap-path').onkeydown=e=>{ if(e.key==='Enter') addProject(); };
   paintProjects();
 }
