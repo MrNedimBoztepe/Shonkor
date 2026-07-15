@@ -21,6 +21,15 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
     private readonly string _ollamaUrl;
     private readonly string _ollamaModel;
 
+    /// <summary>
+    /// How long a streamed answer may go with NO new token before the backend is judged wedged (#230).
+    /// <c>HttpClient.Timeout</c> bounds only the pre-header phase under <c>ResponseHeadersRead</c>; body reads
+    /// are otherwise unbounded, so a model that emits a few tokens and then stalls hangs the request forever.
+    /// Reset on every token, so a slow-but-alive model is never killed — only a stall is. Config:
+    /// <c>SemanticAnalyzer:StreamIdleTimeoutSeconds</c> (default 120s; ≤ 0 disables the guard).
+    /// </summary>
+    private readonly TimeSpan _streamIdleTimeout;
+
     public OllamaSemanticAnalyzer(HttpClient httpClient, IConfiguration configuration, ILogger<OllamaSemanticAnalyzer> logger)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -28,6 +37,9 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
         _ollamaUrl = (configuration["SemanticAnalyzer:OllamaUrl"] ?? "http://localhost:11434").TrimEnd('/');
         _ollamaModel = configuration["SemanticAnalyzer:OllamaModel"] ?? "qwen2.5-coder";
+
+        var idleSeconds = configuration.GetValue<double?>("SemanticAnalyzer:StreamIdleTimeoutSeconds") ?? 120;
+        _streamIdleTimeout = idleSeconds > 0 ? TimeSpan.FromSeconds(idleSeconds) : Timeout.InfiniteTimeSpan;
 
         // Do NOT set _httpClient.BaseAddress here — mutating a shared HttpClient after construction
         // is not thread-safe and would affect any other service using the same instance.
@@ -316,6 +328,13 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var reader = new StreamReader(stream);
 
+        // Idle-timeout guard for the body (#230): under ResponseHeadersRead, HttpClient.Timeout stops applying
+        // once headers are in, so a backend that emits a few tokens and then stalls would hang the request
+        // forever. This linked source is armed ONLY around each read and disarmed the instant a line arrives,
+        // so it times the backend's silence, not the consumer's backpressure at `yield` — a slow-but-alive
+        // model keeps resetting it, and only a wedged backend (no token for the whole window) trips it.
+        using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
         // Buffer the full answer alongside streaming it, so a citation-validation footer can be appended
         // once the whole answer is known (a single [Name @ …] can span two chunks) — TICKET-206.
         var full = new System.Text.StringBuilder();
@@ -325,7 +344,22 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            string? line;
+            idleCts.CancelAfter(_streamIdleTimeout); // arm the idle window for this read
+            try
+            {
+                line = await reader.ReadLineAsync(idleCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The window elapsed with no new token AND the client did not disconnect → the backend stalled
+                // mid-answer. Surface it as a failure — it joins the mid-stream failure path #227 fixed (a 500
+                // if nothing was yielded yet, otherwise the endpoint's "answer incomplete" marker) — instead of
+                // hanging forever. The `when` guard keeps a genuine client disconnect on its quiet path (#227).
+                throw new OllamaResponseException(
+                    $"The Ollama stream went idle for over {_streamIdleTimeout.TotalSeconds:0}s mid-answer — the backend appears wedged (no further tokens, no completion).");
+            }
+            idleCts.CancelAfter(Timeout.InfiniteTimeSpan); // disarm: a token arrived; don't count processing/yield time
             if (line is null)
             {
                 break; // end of stream
