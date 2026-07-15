@@ -24,6 +24,29 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     private readonly bool _isMemory;
 
     /// <summary>
+    /// Serializes write transactions within this process (#246).
+    ///
+    /// <para>
+    /// SQLite allows exactly one writer at a time; the question is only <b>where</b> concurrent writers wait.
+    /// They used to fight over the database's write lock and the 5-second <c>busy_timeout</c>, and under real
+    /// contention (many parallel requests on a slow box) that produced a corrupting chain: a writer's
+    /// <c>COMMIT</c> failed with <c>SQLITE_BUSY</c>, the rollback that <c>await using</c> then attempted on the
+    /// transaction <b>also</b> failed against the still-locked database, and the connection was returned to the
+    /// pool with an <b>open transaction</b>. The next operation to lease that connection called
+    /// <c>BeginTransaction</c> and got <i>"cannot start a transaction within a transaction"</i> — a failure that
+    /// landed on an innocent later request and looked random. It surfaced only once CI began running on a
+    /// slow 2-core runner (#209), where the contention is high enough to exhaust the timeout.
+    /// </para>
+    /// <para>
+    /// WAL (already enabled) fixes reader-vs-writer contention but not writer-vs-writer. So writers now queue
+    /// <b>in-process</b> instead: at most one holds a transaction at a time, none ever meets a busy database,
+    /// no commit or rollback fails on a lock, and no connection is ever poisoned. Reads are deliberately NOT
+    /// gated — under WAL they run concurrently with the single writer, which is what keeps search latency flat.
+    /// </para>
+    /// </summary>
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
+
+    /// <summary>
     /// Initializes a new instance of <see cref="SqliteGraphStorageProvider"/>
     /// with the specified database file path.
     /// </summary>
@@ -68,6 +91,33 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     /// <summary>
     /// Opens a fresh connection for a single operation. The caller owns and disposes it.
     /// </summary>
+    /// <summary>
+    /// Acquires the in-process write lock (see <see cref="_writeLock"/>) and returns a scope that releases it
+    /// on disposal. Every method that opens a write <c>BeginTransaction</c> takes this as its first line —
+    /// <c>await using var _ = await AcquireWriteLockAsync(ct)</c> — so the release is automatic at method exit,
+    /// on every path including an exception. Reads do not take it.
+    /// </summary>
+    /// <remarks>
+    /// <c>internal</c> so a test can hold the lock and prove a write actually waits on it — i.e. that the fix
+    /// is wired into the write methods, not merely present (#246).
+    /// </remarks>
+    internal async Task<IDisposable> AcquireWriteLockAsync(CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return new WriteLockScope(_writeLock);
+    }
+
+    private sealed class WriteLockScope(SemaphoreSlim semaphore) : IDisposable
+    {
+        private SemaphoreSlim? _semaphore = semaphore;
+
+        public void Dispose()
+        {
+            // Guard against a double-release; Dispose is idempotent.
+            System.Threading.Interlocked.Exchange(ref _semaphore, null)?.Release();
+        }
+    }
+
     private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
         var connection = new SqliteConnection(_connectionString);
@@ -95,6 +145,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     {
         ArgumentNullException.ThrowIfNull(nodes);
 
+        using var _writeScope = await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
@@ -203,6 +254,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     {
         ArgumentNullException.ThrowIfNull(edges);
 
+        using var _writeScope = await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
@@ -701,6 +753,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
+        using var _writeScope = await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
@@ -772,6 +825,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var paths = filePaths.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.Ordinal).ToList();
         if (paths.Count == 0) return;
 
+        using var _writeScope = await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
@@ -832,6 +886,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
+        using var _writeScope = await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
@@ -1224,6 +1279,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
         ArgumentNullException.ThrowIfNull(diagnostics);
 
+        using var _writeScope = await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
@@ -1295,6 +1351,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     public void Dispose()
     {
         _keepAlive?.Dispose();
+        _writeLock.Dispose();
     }
 
     #region Private Helpers
@@ -1469,6 +1526,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
 
     public async Task UpdateNodeSemanticDataAsync(string nodeId, SemanticAnalysisResult result, float[]? embedding = null, string? embeddingModel = null, CancellationToken cancellationToken = default)
     {
+        using var _writeScope = await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
         // The concept nodes/edges AND the node's summary update are written in a SINGLE transaction.
