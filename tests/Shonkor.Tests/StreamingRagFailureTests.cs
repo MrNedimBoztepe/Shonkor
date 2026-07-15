@@ -35,6 +35,7 @@ namespace Shonkor.Tests;
 /// dashboard can tell this answer is not an answer".
 /// </para>
 /// </summary>
+[Collection(ExpectedServerErrorsCollection.Name)]
 public class StreamingRagFailureTests
 {
     private const string ApiKey = "test-key";
@@ -118,6 +119,7 @@ public class StreamingRagFailureTests
     {
         using var backend = FakeOllamaBackend.ThatNeverResponds();
 
+        ExpectedError.Emit("streaming /api/ask: a hung backend must fail, not serve a blank 200 — asserted below (#236)");
         var (status, body) = await AskStreamAsync(backend.Url);
 
         Assert.NotEqual(HttpStatusCode.OK, status);
@@ -136,6 +138,7 @@ public class StreamingRagFailureTests
         // Valid NDJSON, terminal line, zero content — the shape a misconfigured model produces.
         using var backend = FakeOllamaBackend.ThatAnswers("""{"response":"","done":true}""" + "\n");
 
+        ExpectedError.Emit("streaming /api/ask: a zero-token completion is a backend malfunction, asserted below as a 500 (#236)");
         var (status, body) = await AskStreamAsync(backend.Url);
 
         Assert.Equal(HttpStatusCode.InternalServerError, status);
@@ -147,6 +150,7 @@ public class StreamingRagFailureTests
     {
         using var backend = new MisbehavingBackend(MisbehavingBackend.Mode.DieMidBody);
 
+        ExpectedError.Emit("streaming /api/ask: a backend that dies mid-body surfaces as a 500 — asserted below (#236)");
         var (status, body) = await AskStreamAsync(backend.Url);
 
         Assert.Equal(HttpStatusCode.InternalServerError, status);
@@ -158,6 +162,7 @@ public class StreamingRagFailureTests
     {
         using var backend = new FakeOllamaBackend(HttpStatusCode.ServiceUnavailable);
 
+        ExpectedError.Emit("streaming /api/ask: a 503 from the backend surfaces as a 500 — asserted below (#236)");
         var (status, body) = await AskStreamAsync(backend.Url);
 
         Assert.Equal(HttpStatusCode.InternalServerError, status);

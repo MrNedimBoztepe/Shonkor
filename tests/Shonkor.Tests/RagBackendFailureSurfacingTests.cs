@@ -31,6 +31,7 @@ namespace Shonkor.Tests;
 /// both are asserted here, side by side, because the whole point is that they must not look alike.
 /// </para>
 /// </summary>
+[Collection(ExpectedServerErrorsCollection.Name)]
 public class RagBackendFailureSurfacingTests
 {
     private sealed class AppFactory(string ollamaUrl, string workspace) : WebApplicationFactory<Program>
@@ -111,6 +112,7 @@ public class RagBackendFailureSurfacingTests
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-API-Key", ApiKey);
 
+        ExpectedError.Emit("/api/ask: a 200-OK-but-unusable backend payload must surface as a 500, asserted below (#236)");
         var res = await client.PostAsJsonAsync("/api/ask", new { Query = "how are tokens hashed?", NodeIds = new[] { nodeId } });
 
         // THE POINT: not a 200 carrying prose the user reads as the model's answer.
