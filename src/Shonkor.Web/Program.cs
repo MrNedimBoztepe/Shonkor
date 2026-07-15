@@ -119,6 +119,33 @@ if (!app.Environment.IsDevelopment()
 
 // --- Middleware pipeline ---
 
+// Security headers on every response (#260). The CSP is deliberately a SOURCE ALLOW-LIST, not a strict
+// nonce/hash policy: the dashboard has ~19 inline event handlers, ~70 inline style attributes and an inline
+// ATLAS script, so keeping 'unsafe-inline' avoids a large, UI-breaking refactor for little gain — inline
+// XSS is already handled by escapeHtml + DOMPurify. What the allow-list DOES buy is real: an injected
+// <script src> or stylesheet from an unlisted host is blocked, and the object/base/framing vectors are shut
+// (frame-ancestors 'none' also gives clickjacking protection). Hosts listed are exactly the CDNs the two
+// shells load (cdnjs, unpkg, jsdelivr) plus Google Fonts (googleapis for CSS, gstatic for the font files).
+const string contentSecurityPolicy =
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://unpkg.com https://cdn.jsdelivr.net; " +
+    "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    "img-src 'self' data:; " +
+    "connect-src 'self'; " +
+    "object-src 'none'; " +
+    "base-uri 'self'; " +
+    "frame-ancestors 'none'";
+app.Use(async (ctx, next) =>
+{
+    var headers = ctx.Response.Headers;
+    headers["Content-Security-Policy"] = contentSecurityPolicy;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["X-Frame-Options"] = "DENY"; // legacy fallback for browsers predating frame-ancestors
+    headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    await next();
+});
+
 // ATLAS is the primary UI: redirect the bare root to it. The legacy dashboard stays reachable at
 // /index.html. This runs before UseDefaultFiles so "/" never resolves to the old shell.
 app.Use(async (ctx, next) =>
