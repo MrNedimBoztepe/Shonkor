@@ -126,6 +126,7 @@ public class McpProtocolConformanceTests
         WriteRegistry(ws, dbAsDirectory);
         var handler = new McpRequestHandler(new ProjectManager(ws), new ContextCapsuleSynthesizer(), "P", lockToContextProject: true);
 
+        ExpectedError.Emit("get_stats over a DB path that is a directory — asserted below as an isError result, not thrown (#236)");
         var root = Parse(await handler.ProcessJsonRpcMessageAsync(ToolCall("get_stats", new { })));
 
         // The model must SEE the failure: it arrives in the result, flagged isError, not in the error channel.
