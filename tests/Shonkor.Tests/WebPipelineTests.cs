@@ -57,6 +57,24 @@ public class WebPipelineTests : IClassFixture<WebPipelineTests.AppFactory>
     }
 
     [Fact]
+    public async Task EveryResponse_CarriesTheSecurityHeaders()
+    {
+        // The header middleware runs first in the pipeline (#260), so even a public, unauthenticated response
+        // carries the policy. Drop the middleware and this fails — the header is a guard, not decoration.
+        var res = await _client.GetAsync("/health");
+
+        var csp = Assert.Single(res.Headers.TryGetValues("Content-Security-Policy", out var v) ? v : Array.Empty<string>());
+        Assert.Contains("default-src 'self'", csp, StringComparison.Ordinal);
+        Assert.Contains("object-src 'none'", csp, StringComparison.Ordinal);
+        Assert.Contains("frame-ancestors 'none'", csp, StringComparison.Ordinal);
+        // The CDN hosts the shells actually load must be allow-listed, or the dashboard would break under CSP.
+        Assert.Contains("https://cdn.jsdelivr.net", csp, StringComparison.Ordinal);
+
+        Assert.Equal("nosniff", Assert.Single(res.Headers.GetValues("X-Content-Type-Options")));
+        Assert.Equal("DENY", Assert.Single(res.Headers.GetValues("X-Frame-Options")));
+    }
+
+    [Fact]
     public async Task LivenessProbe_IsPublic_AndHealthy()
     {
         // /health/live runs no dependency checks — up as soon as the process serves.
