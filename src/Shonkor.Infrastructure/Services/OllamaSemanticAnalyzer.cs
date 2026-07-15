@@ -247,22 +247,21 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
     /// isn't silently presented as complete.
     ///
     /// <para>
-    /// <b>No retry pipeline here — but not for the reason this comment used to give (#224).</b> It said "a
-    /// stream can't be safely restarted once bytes are on the wire". That sentence is true, and it is not what
-    /// protects anything: the send below uses <c>HttpCompletionOption.ResponseHeadersRead</c>, so a pipeline
-    /// placed around it could only ever see failures from <i>before the headers arrived</i> — where nothing has
-    /// been yielded and a restart would be perfectly safe. A failure <i>after</i> bytes are flowing happens once
-    /// the send has already returned, and is unretriable <b>by construction</b>, exactly like the deterministic
-    /// failures of #222 and the mid-body deaths of #221. The absence of a pipeline is not the safety mechanism;
-    /// the completion option is.
+    /// <b>The retry is scoped to the pre-header send (#224 established why that is safe; #243 acted on it).</b>
+    /// The send uses <c>HttpCompletionOption.ResponseHeadersRead</c>, so a pipeline around it can only ever see
+    /// failures from <i>before the headers arrived</i> — where nothing has been yielded and a restart is
+    /// indistinguishable from a first attempt. A failure <i>after</i> bytes are flowing happens once the send
+    /// has already returned, so it is unretriable <b>by construction</b>, exactly like the deterministic
+    /// failures of #222 and the mid-body deaths of #221. The completion option is the safety mechanism, not the
+    /// absence of a pipeline — so a pipeline that only touches the pre-header phase is safe to add, and it gives
+    /// the user-facing streaming path the same cheap connection recovery the blocking path always had.
     /// </para>
     /// <para>
-    /// So the property worth protecting is the one <c>StreamingNoRetryTests</c> pins: <b>a token is never
-    /// emitted twice, and the backend is never asked to generate the same answer again</b>. Adding a pipeline
-    /// here would break that only for the failures it could actually see — a 5xx, which the blocking path
-    /// deliberately does not retry either (a 5xx mid-generation means the model already failed, and re-running
-    /// a minutes-long generation on the off-chance is not a service to the caller). A retry limited to genuine
-    /// pre-connection failures would be safe, and is a change worth considering rather than forbidding.
+    /// The property <c>StreamingNoRetryTests</c> pins still holds: <b>a token is never emitted twice, and the
+    /// backend is never asked to generate the same answer again.</b> The pipeline is
+    /// <c>OllamaResilience.Blocking</c> — one retry, <i>connection failures only</i> — so a 5xx is a response the
+    /// pipeline returns and <c>EnsureSuccessStatusCode</c> throws outside it (not retried, matching the blocking
+    /// path), and a body-phase failure is out of the pipeline's reach.
     /// </para>
     /// </summary>
     public IAsyncEnumerable<string> StreamRAGResponseAsync(
@@ -286,14 +285,29 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             options = new { temperature = 0, seed = 42, num_ctx = options.NumCtx }
         };
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_ollamaUrl}/api/generate")
+        // Retry ONLY the pre-header send, and only for a genuine connection failure (#243). This is now safe
+        // to reason about because of #224: ResponseHeadersRead returns the moment the headers arrive, so a
+        // failure the pipeline can see is always one from BEFORE any byte was yielded — nothing has streamed,
+        // so restarting is indistinguishable from a first attempt. A failure while reading the BODY happens
+        // after ExecuteAsync has already returned, and is therefore never retried, which is the property
+        // StreamingNoRetryTests pins. So the user-facing streaming path finally gets the same cheap recovery
+        // the blocking path always had — a backend that was merely not listening yet no longer fails the answer
+        // outright — without any risk of a replayed token. Uses OllamaResilience.Blocking (one retry, connect
+        // errors only): a 5xx is a response, so the pipeline returns it and EnsureSuccessStatusCode below throws
+        // it OUTSIDE the retry, exactly as the blocking path treats a mid-generation 5xx.
+        //
+        // The request is built INSIDE the callback because an HttpRequestMessage can be sent only once; each
+        // attempt needs a fresh one.
+        using var response = await OllamaResilience.Blocking.ExecuteAsync(async ct =>
         {
-            Content = JsonContent.Create(requestBody)
-        };
-
-        using var response = await _httpClient
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{_ollamaUrl}/api/generate")
+            {
+                Content = JsonContent.Create(requestBody)
+            };
+            return await _httpClient
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                .ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
