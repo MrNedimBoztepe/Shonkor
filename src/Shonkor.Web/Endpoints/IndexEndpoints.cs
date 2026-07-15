@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Shonkor.Core.Interfaces;
+using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Services;
 
 using static Shonkor.Web.EndpointHelpers;
@@ -35,7 +36,18 @@ public static class IndexEndpoints
                     return Results.BadRequest("No project configured.");
                 }
 
+                // The caller may narrow the scan to a subdirectory, but NOT escape the project. `Directory` is
+                // untrusted input; without this an authenticated tenant could point it at any path on the server
+                // (e.g. "/etc", "C:\\") and read arbitrary source into their graph, then retrieve it via /api/rag.
+                // So the target must be the project root itself or something provably inside it (#code-scanning
+                // cs/path-injection). project.Path is trusted (set at project creation), so it is the base.
+                var projectRoot = Path.GetFullPath(project.Path);
                 var targetDir = Path.GetFullPath(request?.Directory ?? project.Path);
+                if (!FilePaths.AreEqual(targetDir, projectRoot) && !FilePaths.TryGetRelative(targetDir, projectRoot, out _))
+                {
+                    return Results.BadRequest("The index directory must be within the project's own path.");
+                }
+
                 if (!Directory.Exists(targetDir))
                 {
                     return Results.BadRequest($"Target directory does not exist: {targetDir}");

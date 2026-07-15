@@ -156,7 +156,10 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         };
 
         var ragEndpoint = $"{_ollamaUrl}/api/generate";
-        _logger.LogInformation("Generating RAG response via Ollama ({Model}) for query: {Query}", _ollamaModel, query);
+        // Flatten line breaks out of the untrusted query before logging: a raw newline lets a caller forge a
+        // fake second log line (cs/log-forging). ReplaceLineEndings(" ") is the same flattening RagPromptBuilder
+        // and AnswersBenchmark already use.
+        _logger.LogInformation("Generating RAG response via Ollama ({Model}) for query: {Query}", _ollamaModel, query.ReplaceLineEndings(" "));
 
         // A RAG generation is BLOCKING and can take minutes. Retrying it repeatedly could keep a caller
         // waiting for an answer that will not come. So it uses the BLOCKING pipeline (#116): at most ONE
