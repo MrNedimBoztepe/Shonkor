@@ -181,12 +181,18 @@ public static class SearchEndpoints
                     await context.Response.WriteAsync(full, ct);
                 }
             }
-            catch (OperationCanceledException)
+            // The CLIENT went away. There is nothing to write to and nobody to read it, so returning quietly is
+            // right — but ONLY for this case. The filter matters (#227): an HttpClient timeout also arrives as a
+            // TaskCanceledException, and this arm used to swallow it, so a backend that hung produced an empty
+            // body with a 200 OK — a failure rendered as a successful, blank answer. Same confusion #215 found
+            // in the retry classifier: a timeout is not a cancellation, it only looks like one.
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
             {
-                // Client disconnected or request aborted — nothing to do; the response is already partial.
+                // Client disconnected or request aborted — the response is already partial and unread.
             }
             catch (Exception ex)
             {
+                // Everything else, INCLUDING a timeout the client did not ask for: the backend failed us.
                 Console.Error.WriteLine($"[API] Streaming RAG response failed. :: {ex.Message}");
                 // Headers/body may already be sent; append a marker rather than trying to set a status code.
                 if (!context.Response.HasStarted)

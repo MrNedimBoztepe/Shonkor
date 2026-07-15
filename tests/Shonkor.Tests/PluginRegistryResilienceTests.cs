@@ -14,6 +14,21 @@ namespace Shonkor.Tests;
 /// </summary>
 public class PluginRegistryResilienceTests
 {
+    /// <summary>Whether the file can still be opened for reading despite a FileShare.None handle being held —
+    /// i.e. whether this platform actually enforces the lock the test above depends on.</summary>
+    private static bool CanStillRead(string path)
+    {
+        try
+        {
+            using var _ = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            return true;   // the lock was NOT enforced
+        }
+        catch (IOException)
+        {
+            return false;  // denied, as Windows does — the premise holds
+        }
+    }
+
     private static string NewWorkspace()
     {
         var ws = Path.Combine(Path.GetTempPath(), $"shonkor_plugres_{Guid.NewGuid():N}");
@@ -37,7 +52,25 @@ public class PluginRegistryResilienceTests
         return zipPath;
     }
 
-    [Fact]
+    /// <summary>
+    /// <b>This test's premise is Windows-only, and now says so (#240).</b>
+    ///
+    /// <para>
+    /// <c>FileShare.None</c> is a <b>mandatory</b> lock on Windows: another handle's read genuinely fails. On
+    /// Unix, .NET only emulates it with an <i>advisory</i> <c>flock()</c>, which it <b>silently skips</b> when
+    /// the filesystem does not support it — overlay, container and NFS mounts return <c>ENOTSUP</c>, and CI
+    /// runners are exactly that. Where it is skipped the product's read succeeds, the install succeeds, and this
+    /// test fails; or worse, if the install threw <c>InvalidOperationException</c> for some <i>other</i> reason,
+    /// it would pass while asserting nothing about the unreadable-registry path it is named for.
+    /// </para>
+    /// <para>
+    /// So the lock is <b>verified</b> rather than assumed: if this platform will not actually deny the read, the
+    /// test skips loudly instead of pretending. The behaviour it guards — a failed install must not wipe the
+    /// existing registry — stays covered on Windows, and the skip is visible in the test count rather than
+    /// hidden inside a green pass (the #182 rule).
+    /// </para>
+    /// </summary>
+    [SkippableFact]
     public void Install_WhileRegistryFileIsLocked_Fails_WithoutWipingExistingPlugins()
     {
         var ws = NewWorkspace();
@@ -50,6 +83,13 @@ public class PluginRegistryResilienceTests
             // Simulate AV/backup/another instance holding the file: reads must fail, not read-as-empty.
             using (File.Open(registryPath, FileMode.Open, FileAccess.Read, FileShare.None))
             {
+                // Does this platform ACTUALLY deny the read? If not, the premise is absent and the assertion
+                // below would be measuring something else entirely.
+                Skip.If(CanStillRead(registryPath),
+                    "This filesystem does not enforce FileShare.None (advisory-only flock, as on many Linux " +
+                    "container mounts), so the 'registry file is locked' condition cannot be created here. The " +
+                    "behaviour is exercised on the Windows CI leg.");
+
                 Assert.ThrowsAny<InvalidOperationException>(() => registry.InstallFromZip(MakeZip(ws, "second")));
             }
 

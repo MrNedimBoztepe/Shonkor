@@ -3,6 +3,8 @@ using System.Text.Json;
 using Shonkor.Core.Interfaces;
 using Shonkor.Infrastructure.Storage;
 
+using Shonkor.Core.Services;
+
 namespace Shonkor.Infrastructure.Services;
 
 public class Organization
@@ -351,7 +353,7 @@ public partial class ProjectManager
                     return (project: p, full);
                 })
                 .Where(x => normalized.Equals(x.full, StringComparison.OrdinalIgnoreCase)
-                         || normalized.StartsWith(x.full + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                         || normalized.StartsWith(x.full + Path.DirectorySeparatorChar, FilePaths.Comparison))
                 .OrderByDescending(x => x.full.Length)
                 .Select(x => x.project)
                 .FirstOrDefault();
@@ -471,11 +473,17 @@ public partial class ProjectManager
 
         var configPath = Path.Combine(project.Path, "shonkor.json");
         
-        // Keep DB path relative or clean in the saved json file
+        // Keep the DB path relative in the saved json ONLY when it genuinely lives inside the project.
+        //
+        // The test used to be a bare StartsWith, which is not a containment test (#235): with
+        // project.Path = /srv/app, a database at /srv/app-data/shonkor.db matched, and the path was rewritten
+        // to "../app-data/shonkor.db" — persisted into shonkor.json as though it were a project-relative
+        // location, silently making the config depend on the project's PARENT directory. TryGetRelative
+        // enforces the separator boundary and compares the way the filesystem does.
         var dbPathToSave = newConfig.DatabasePath;
-        if (Path.IsPathRooted(dbPathToSave) && dbPathToSave.StartsWith(project.Path, StringComparison.OrdinalIgnoreCase))
+        if (Path.IsPathRooted(dbPathToSave) && FilePaths.TryGetRelative(dbPathToSave, project.Path, out var relDb))
         {
-            dbPathToSave = Path.GetRelativePath(project.Path, dbPathToSave);
+            dbPathToSave = relDb;
         }
 
         var configToSave = new WebConfig

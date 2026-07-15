@@ -31,6 +31,39 @@ public class OllamaRetryTests
         Assert.True(OllamaRetry.IsTransient(new SocketException()));
     }
 
+    /// <summary>
+    /// The exception chain a REAL <see cref="HttpClient"/> timeout produces (#215). Reproduced from a live
+    /// socket timeout, not invented: when the timeout elapses HttpClient tears the connection down, so a
+    /// <see cref="SocketException"/> ends up buried at the bottom — under the cancellation that actually
+    /// caused it.
+    /// </summary>
+    private static Exception RealClientTimeout() =>
+        new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 2 seconds elapsing.",
+            new TimeoutException("The operation was canceled.",
+                new TaskCanceledException("The operation was canceled.",
+                    new IOException("Unable to read data from the transport connection.",
+                        new SocketException()))));
+
+    [Fact]
+    public void ARealTimeout_IsNotAConnectError_EvenThoughTheSocketLayerReportsOneOnTheWayOut()
+    {
+        // THE BUG (#215). IsConnectError used to scan the chain for any SocketException and find the one
+        // above — so it called a timeout a connection failure, and the BLOCKING RAG path retried the single
+        // failure it exists never to retry, doubling a minutes-long wait for a human.
+        //
+        // It hid behind a test that constructed a bare TaskCanceledException, which is NOT the shape
+        // HttpClient throws. Only a real socket timeout exposed it. This pins the real shape.
+        Assert.False(OllamaRetry.IsConnectError(RealClientTimeout()),
+            "a timeout means we DID reach the backend and it did not answer in time — not that we never got there");
+
+        // ...while a genuine connection failure (no cancellation anywhere in it) still is one, so the blocking
+        // path keeps its one cheap retry for a backend that simply was not listening yet.
+        Assert.True(OllamaRetry.IsConnectError(new HttpRequestException(HttpRequestError.ConnectionError, "refused", new SocketException())));
+
+        // And the background path is unaffected: it still retries a timeout, which is the whole asymmetry.
+        Assert.True(OllamaRetry.IsTransient(RealClientTimeout()));
+    }
+
     [Fact]
     public void Transient_DeterministicFailures_AreNotRetryable()
     {
@@ -46,13 +79,22 @@ public class OllamaRetryTests
     [Fact]
     public void ConnectError_DistinguishesUnreachableFromMidFlightFailure()
     {
-        // The blocking RAG path retries ONLY these: the request never reached a responding backend.
-        Assert.True(OllamaRetry.IsConnectError(Http(null)));
-        Assert.True(OllamaRetry.IsConnectError(Http(null, new SocketException())));
-        Assert.True(OllamaRetry.IsConnectError(new HttpRequestException("dns", new SocketException())));
+        // The blocking RAG path retries ONLY these: the request never reached a responding backend. The
+        // HttpRequestError values are what .NET really sets — verified against live failures in
+        // OllamaFailureShapeTests, not assumed. A null status is NOT enough on its own (#218): a 200 OK whose
+        // body dies mid-generation also carries a null status, and re-running THAT is a multi-minute mistake.
+        Assert.True(OllamaRetry.IsConnectError(
+            new HttpRequestException(HttpRequestError.ConnectionError, "refused", new SocketException())));
+        Assert.True(OllamaRetry.IsConnectError(
+            new HttpRequestException(HttpRequestError.NameResolutionError, "dns", new SocketException())));
+        Assert.True(OllamaRetry.IsConnectError(
+            new HttpRequestException(HttpRequestError.SecureConnectionError, "tls")));
 
-        // These reached the server (or timed out mid-generation) — retrying doubles a minutes-long wait.
+        // These reached the server (or died after it answered) — retrying doubles a minutes-long wait.
         Assert.False(OllamaRetry.IsConnectError(Http(HttpStatusCode.InternalServerError)));
+        Assert.False(OllamaRetry.IsConnectError(
+            new HttpRequestException(HttpRequestError.Unknown, "died mid-body",
+                new IOException("connection reset", new SocketException()))));
         Assert.False(OllamaRetry.IsConnectError(new TaskCanceledException()));
         Assert.False(OllamaRetry.IsConnectError(new OllamaResponseException("empty")));
     }
@@ -120,7 +162,7 @@ public class OllamaRetryTests
     public async Task Blocking_RetriesAConnectFailure_ExactlyOnce()
     {
         // The backend simply wasn't listening yet — cheap to retry, likely to fix itself.
-        var handler = new FlakyHandler(failures: 1, () => new HttpRequestException("refused", new SocketException()));
+        var handler = new FlakyHandler(failures: 1, () => new HttpRequestException(HttpRequestError.ConnectionError, "refused", new SocketException()));
         var (attempts, error) = await RunAsync(OllamaResilience.Blocking, handler);
 
         Assert.Null(error);

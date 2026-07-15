@@ -36,7 +36,12 @@ public class OllamaEmbeddingService : IEmbeddingService
         // Do NOT set _httpClient.BaseAddress here — mutating a shared HttpClient after construction
         // is not thread-safe and would affect any other service using the same instance.
         // Instead we build the full URL per request (see below).
-        _httpClient.Timeout = TimeSpan.FromMinutes(1);
+        //
+        // The timeout used to be assigned unconditionally, which silently overwrote whatever the caller had
+        // configured — including via AddHttpClient, the idiomatic place to set one (#215). It is now
+        // EmbeddingService:TimeoutSeconds, defaulting to the minute it was hard-coded at, and a caller who
+        // set a timeout deliberately keeps it.
+        OllamaClientFactory.ApplyTimeout(_httpClient, configuration, "EmbeddingService", TimeSpan.FromMinutes(1));
     }
 
     public Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default)
@@ -64,7 +69,13 @@ public class OllamaEmbeddingService : IEmbeddingService
         // OllamaResilience, which every construction path (Web DI, CLI, bench) wraps its HttpClient in.
         // Two consequences worth naming, because the old hand-rolled loop had to work for them:
         //   - The OllamaResponseException below is raised AFTER a successful 200, so the retry pipeline has
-        //     already returned and cannot retry it. Deterministic-failure-is-never-retried is now structural.
+        //     already returned and cannot retry it: a backend answering 200 with garbage will answer identically
+        //     next time, so retrying is pure waste. This comment used to call that "structural", i.e. a property
+        //     of WHERE the throw sits. It is actually protected TWICE (#222): move the check inside the pipeline
+        //     and OllamaRetry still refuses to retry it, because an unusable payload is not transient. Either
+        //     mechanism alone suffices — verified by mutating each in turn. DeterministicFailureNeverRetriedTests
+        //     pins the OUTCOME (exactly one request) rather than either mechanism, so it fails only when the
+        //     property genuinely breaks, not when the code is merely rearranged.
         //   - A caller-triggered cancellation propagates out of the pipeline. There is no longer any need to
         //     tell it apart from an HttpClient timeout by inspecting the token.
         var response = await OllamaResilience.Background

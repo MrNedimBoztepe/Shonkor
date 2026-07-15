@@ -153,6 +153,13 @@ public class TokenBudgetAndNestingTests
         // The tension #112 posed: nesting the CONTENT would either duplicate a child's text into its parent
         // (double-counted by BM25 in FTS) or break the StartLine..EndLine ↔ Content invariant that makes
         // citations exact. Only the EDGES nest. Each section still stores exactly its own body.
+        //
+        // NOTE (#239): this fixture is an LF string literal, and that is why it could NOT catch the bug it
+        // looks like it is guarding. On Windows the real file on disk is CRLF, the invariant asserted below
+        // was FALSE by one trailing '\r' on every section, and this test stayed green throughout — it encoded
+        // the assumption it existed to test. LineEndingTests now asserts the same invariant against files
+        // actually written to disk, in both line endings. This one keeps its #112 job (edges nest, text does
+        // not) and is no longer relied on for the invariant.
         const string md = "# Doc\n\nIntro.\n\n## Chapter\n\nFraming.\n";
         var (nodes, _) = await ParseAsync(md);
         var lines = md.Split('\n');

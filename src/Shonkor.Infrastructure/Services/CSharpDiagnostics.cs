@@ -5,6 +5,8 @@ using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
+using Shonkor.Core.Services;
+
 namespace Shonkor.Infrastructure.Services;
 
 /// <summary>
@@ -49,7 +51,7 @@ public static class CSharpDiagnostics
         if (compilation is not null)
         {
             var compTree = compilation.SyntaxTrees
-                .FirstOrDefault(t => string.Equals(t.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(t => string.Equals(t.FilePath, filePath, FilePaths.Comparison));
             if (compTree is not null)
             {
                 semanticChecked = true;

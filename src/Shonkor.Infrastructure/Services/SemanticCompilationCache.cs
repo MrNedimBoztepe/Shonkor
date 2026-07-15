@@ -29,7 +29,7 @@ public sealed class SemanticCompilationCache
         public bool Built;
     }
 
-    private readonly ConcurrentDictionary<string, Entry> _byDirectory = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Entry> _byDirectory = new(FilePaths.Comparer);
 
     private static string Key(string directoryPath) => Path.GetFullPath(directoryPath).TrimEnd(Path.DirectorySeparatorChar);
 
@@ -74,13 +74,13 @@ public sealed class SemanticCompilationCache
 
             var compilation = entry.Compilation;
 
-            foreach (var raw in changedFullPaths.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (var raw in changedFullPaths.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(FilePaths.Comparer))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!raw.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) continue;
 
                 var full = Path.GetFullPath(raw);
-                var existing = compilation?.SyntaxTrees.FirstOrDefault(t => string.Equals(t.FilePath, full, StringComparison.OrdinalIgnoreCase));
+                var existing = compilation?.SyntaxTrees.FirstOrDefault(t => string.Equals(t.FilePath, full, FilePaths.Comparison));
 
                 if (!File.Exists(full))
                 {
