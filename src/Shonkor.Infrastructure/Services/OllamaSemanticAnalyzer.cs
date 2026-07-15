@@ -241,12 +241,29 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
     /// <summary>
     /// Streams the grounded RAG answer token-by-token from Ollama (<c>stream=true</c>, NDJSON), so the UI
-    /// shows first tokens immediately instead of waiting for the whole generation (TICKET-104). Uses the
-    /// same grounded prompt as <see cref="GenerateRAGResponseAsync"/>. No retry loop — a stream can't be
-    /// safely restarted once bytes are on the wire; a failure after headers are sent surfaces to the caller,
-    /// which can only mark the partial answer (it cannot transparently fall back to the blocking path).
-    /// If the stream ends before Ollama's terminal <c>done</c> line (e.g. the backend is killed mid-answer),
-    /// a truncation marker is emitted so the answer isn't silently presented as complete.
+    /// shows first tokens immediately instead of waiting for the whole generation (TICKET-104). Uses the same
+    /// grounded prompt as <see cref="GenerateRAGResponseAsync"/>. If the stream ends before Ollama's terminal
+    /// <c>done</c> line (e.g. the backend is killed mid-answer), a truncation marker is emitted so the answer
+    /// isn't silently presented as complete.
+    ///
+    /// <para>
+    /// <b>No retry pipeline here — but not for the reason this comment used to give (#224).</b> It said "a
+    /// stream can't be safely restarted once bytes are on the wire". That sentence is true, and it is not what
+    /// protects anything: the send below uses <c>HttpCompletionOption.ResponseHeadersRead</c>, so a pipeline
+    /// placed around it could only ever see failures from <i>before the headers arrived</i> — where nothing has
+    /// been yielded and a restart would be perfectly safe. A failure <i>after</i> bytes are flowing happens once
+    /// the send has already returned, and is unretriable <b>by construction</b>, exactly like the deterministic
+    /// failures of #222 and the mid-body deaths of #221. The absence of a pipeline is not the safety mechanism;
+    /// the completion option is.
+    /// </para>
+    /// <para>
+    /// So the property worth protecting is the one <c>StreamingNoRetryTests</c> pins: <b>a token is never
+    /// emitted twice, and the backend is never asked to generate the same answer again</b>. Adding a pipeline
+    /// here would break that only for the failures it could actually see — a 5xx, which the blocking path
+    /// deliberately does not retry either (a 5xx mid-generation means the model already failed, and re-running
+    /// a minutes-long generation on the off-chance is not a service to the caller). A retry limited to genuine
+    /// pre-connection failures would be safe, and is a change worth considering rather than forbidding.
+    /// </para>
     /// </summary>
     public IAsyncEnumerable<string> StreamRAGResponseAsync(
         string query,
