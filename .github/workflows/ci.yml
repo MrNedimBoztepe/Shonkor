@@ -25,6 +25,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege for the default GITHUB_TOKEN: this workflow only builds and tests, so it needs to read
+# the repo and nothing else. Without an explicit block the token inherits the repo/org default, which can be
+# read/write (actions/missing-workflow-permissions). Declared at the top so every job inherits it.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: Build & Test (${{ matrix.name }})
