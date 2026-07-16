@@ -23,6 +23,8 @@ AddJsonConsole           # Microsoft.Extensions.Logging extension method (struct
 SemanticModel            # Microsoft.CodeAnalysis (Roslyn) - exact C# symbol resolution
 CSharpCompilation        # Microsoft.CodeAnalysis.CSharp (Roslyn)
 ReplaceSyntaxTree        # Microsoft.CodeAnalysis method used by the incremental check_edit path
+InternalsVisibleTo       # MSBuild item / System.Runtime.CompilerServices attribute - how Shonkor.Tests
+                         # reaches the bench's internal logic (#191). Not a type we declare.
 
 [placeholders]
 # Illustrative names in worked examples. They are supposed not to exist.
