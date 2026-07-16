@@ -119,17 +119,28 @@ if (!app.Environment.IsDevelopment()
 
 // --- Middleware pipeline ---
 
-// Security headers on every response (#260). The CSP is deliberately a SOURCE ALLOW-LIST, not a strict
-// nonce/hash policy: the ATLAS shell still has inline event handlers, inline style attributes and an inline
-// script, so keeping 'unsafe-inline' avoids a UI-breaking refactor for little gain — inline XSS is already
-// handled by escapeHtml. What the allow-list DOES buy is real: an injected <script src> or stylesheet from an
-// unlisted host is blocked, and the object/base/framing vectors are shut (frame-ancestors 'none' also gives
-// clickjacking protection). Hosts are exactly what ATLAS loads: cdnjs (d3) and Google Fonts (googleapis for
-// the CSS, gstatic for the font files). The legacy dashboard's unpkg/jsdelivr/Prism deps were dropped with it
-// (#262).
+// Security headers on every response (#260, tightened in #271).
+//
+// script-src carries NO 'unsafe-inline' (#271). That is the setting that matters: with it, a policy that
+// permits the page's own inline handlers permits ANY injected inline script, which is most of what a CSP is
+// for. ATLAS's script now lives in atlas.js (covered by 'self') and its controls dispatch from data-act
+// attributes, so there is no script-in-markup left to allow. Keep it that way — an inline handler or an
+// inline <script> added here will simply not run, and no nonce or hash can rescue one: the markup is
+// generated, and browsers ignore 'unsafe-inline' the moment a nonce or hash is present. It is all or none.
+//
+// style-src DOES keep 'unsafe-inline', deliberately. The ~46 inline style attributes and the <style> block are
+// a much weaker vector than script (no code execution), and removing them would be a large diff for very
+// little — the point of #271 was script execution, and that is now closed.
+//
+// The rest is a source allow-list: an injected <script src> or stylesheet from an unlisted host is blocked,
+// and the object/base/framing vectors are shut (frame-ancestors 'none' also gives clickjacking protection).
+// Hosts are exactly what ATLAS loads: cdnjs (d3) and Google Fonts (googleapis for the CSS, gstatic for the
+// font files). The legacy dashboard's unpkg/jsdelivr/Prism deps were dropped with it (#262).
+//
+// escapeHtml remains the primary defence against injected markup; this is defence-in-depth behind it.
 const string contentSecurityPolicy =
     "default-src 'self'; " +
-    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; " +
+    "script-src 'self' https://cdnjs.cloudflare.com; " +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src 'self' https://fonts.gstatic.com; " +
     "img-src 'self' data:; " +
