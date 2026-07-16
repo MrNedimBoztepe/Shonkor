@@ -42,8 +42,13 @@ public class BlockingBodyReadTimeoutTests
     {
         // 200 + headers + a partial, incomplete JSON body, then the connection is held open with no more bytes —
         // so the body read blocks waiting for a completion that never comes.
+        //
+        // 3s, not 1s: the SAME budget also bounds the send, so the headers must arrive inside it. The backend
+        // writes them immediately (well under 100ms), but a loaded CI runner can stretch a first request badly —
+        // and if the send timed out instead, this would throw TaskCanceledException and the assertion below
+        // would fail for the wrong reason. 3s leaves ~30x headroom while still proving the read is bounded.
         using var backend = FakeOllamaBackend.ThatStreamsThenStalls("{\"response\":\"half an ans");
-        var analyzer = Analyzer(backend.Url, timeoutSeconds: 1);
+        var analyzer = Analyzer(backend.Url, timeoutSeconds: 3);
 
         var sw = Stopwatch.StartNew();
         var ex = await Assert.ThrowsAsync<OllamaResponseException>(

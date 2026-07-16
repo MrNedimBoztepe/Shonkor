@@ -78,6 +78,11 @@ public class OllamaEmbeddingService : IEmbeddingService
         //     property genuinely breaks, not when the code is merely rearranged.
         //   - A caller-triggered cancellation propagates out of the pipeline. There is no longer any need to
         //     tell it apart from an HttpClient timeout by inspecting the token.
+        //
+        // COMPLETION-OPTION CONTRACT (#244): PostAsJsonAsync reads the FULL BODY inside the pipeline, and that
+        // is deliberate — it keeps a mid-body failure retryable, which is what background work wants. Switching
+        // this to ResponseHeadersRead would silently stop that. The contract for all four Ollama call sites is
+        // stated once, in OllamaResilience.
         var response = await OllamaResilience.Background
             .ExecuteAsync(async ct => await _httpClient.PostAsJsonAsync(endpoint, requestBody, ct).ConfigureAwait(false), cancellationToken)
             .ConfigureAwait(false);
