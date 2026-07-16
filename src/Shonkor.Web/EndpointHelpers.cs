@@ -29,6 +29,23 @@ public static class EndpointHelpers
     }
 
     /// <summary>
+    /// As <see cref="Fail(string, Exception)"/>, but also carries a stable machine-readable failure class in
+    /// the problem document's <c>code</c> extension (#228).
+    ///
+    /// <para>
+    /// The generic client message stays exactly as generic — no path, no SQL, no stack. The code adds no
+    /// detail, only an identity: it says <i>which kind</i> of failure this was, so a dashboard or an operator
+    /// can tell "Ollama is not running" from "your model returns garbage" from "raise the timeout" — remedies
+    /// with nothing in common that previously all read "Failed to generate RAG response.".
+    /// </para>
+    /// </summary>
+    public static IResult Fail(string clientMessage, string code, Exception ex)
+    {
+        Console.Error.WriteLine($"[API] {clientMessage} :: {ex}");
+        return Results.Problem(clientMessage, extensions: new Dictionary<string, object?> { ["code"] = code });
+    }
+
+    /// <summary>
     /// Resolves the storage provider for the current request's tenant, taken from the
     /// <c>X-Project-Name</c> header (set authoritatively by <see cref="Middleware.ApiKeyMiddleware"/>),
     /// falling back to the active project when absent.

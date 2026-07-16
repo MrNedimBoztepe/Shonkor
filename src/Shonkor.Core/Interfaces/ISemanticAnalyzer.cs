@@ -45,20 +45,33 @@ public interface ISemanticAnalyzer
         => GenerateRAGResponseAsync(query, contextNodes, cancellationToken);
 
     /// <summary>
-    /// Streams the answer incrementally (token/chunk at a time). The default implementation yields the
-    /// full <see cref="GenerateRAGResponseAsync"/> result in one chunk, so implementations that cannot
-    /// stream still satisfy callers; backends that support streaming override this.
+    /// Streams the answer incrementally as typed <see cref="RagStreamEvent"/>s (#231).
+    ///
+    /// <para>
+    /// This used to yield <c>string</c>, and everything that was not a token — "answer incomplete",
+    /// "unsupported sources" — was appended to that same stream as English prose. Signal and content shared a
+    /// channel, so a consumer could only string-match, and <b>the model could forge the markers by emitting
+    /// the text</b>. Now a <see cref="RagStreamEventKind.Token"/> is the only kind carrying model-authored
+    /// text; everything else is an event the model has no way to produce.
+    /// </para>
+    /// <para>
+    /// The default implementation yields the full <see cref="GenerateRAGResponseAsync"/> result as one token
+    /// followed by a completed <see cref="RagStreamEventKind.Done"/>, so implementations that cannot stream
+    /// still satisfy callers; backends that support streaming override this.
+    /// </para>
     /// </summary>
-    async IAsyncEnumerable<string> StreamRAGResponseAsync(
+    async IAsyncEnumerable<RagStreamEvent> StreamRAGResponseAsync(
         string query,
         IReadOnlyList<GraphNode> contextNodes,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        yield return await GenerateRAGResponseAsync(query, contextNodes, cancellationToken).ConfigureAwait(false);
+        yield return RagStreamEvent.OfToken(
+            await GenerateRAGResponseAsync(query, contextNodes, cancellationToken).ConfigureAwait(false));
+        yield return RagStreamEvent.OfDone(complete: true);
     }
 
     /// <summary>Grounding-aware streaming overload (TICKET-206); defaults to the non-options stream.</summary>
-    IAsyncEnumerable<string> StreamRAGResponseAsync(
+    IAsyncEnumerable<RagStreamEvent> StreamRAGResponseAsync(
         string query,
         IReadOnlyList<GraphNode> contextNodes,
         RagPromptOptions options,

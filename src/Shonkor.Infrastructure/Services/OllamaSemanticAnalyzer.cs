@@ -239,7 +239,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
-                    throw new OllamaResponseException(
+                    throw new OllamaStalledException(
                         $"Ollama sent response headers but no usable body within {_httpClient.Timeout.TotalSeconds:0}s — the backend appears wedged mid-response.");
                 }
                 var responseText = responseJson?["response"]?.ToString();
@@ -304,13 +304,13 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
     /// path), and a body-phase failure is out of the pipeline's reach.
     /// </para>
     /// </summary>
-    public IAsyncEnumerable<string> StreamRAGResponseAsync(
+    public IAsyncEnumerable<RagStreamEvent> StreamRAGResponseAsync(
         string query,
         IReadOnlyList<GraphNode> contextNodes,
         CancellationToken cancellationToken = default)
         => StreamRAGResponseAsync(query, contextNodes, RagPromptOptions.Default, cancellationToken);
 
-    public async IAsyncEnumerable<string> StreamRAGResponseAsync(
+    public async IAsyncEnumerable<RagStreamEvent> StreamRAGResponseAsync(
         string query,
         IReadOnlyList<GraphNode> contextNodes,
         RagPromptOptions options,
@@ -385,7 +385,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                 // mid-answer. Surface it as a failure — it joins the mid-stream failure path #227 fixed (a 500
                 // if nothing was yielded yet, otherwise the endpoint's "answer incomplete" marker) — instead of
                 // hanging forever. The `when` guard keeps a genuine client disconnect on its quiet path (#227).
-                throw new OllamaResponseException(
+                throw new OllamaStalledException(
                     $"The Ollama stream went idle for over {_streamIdleTimeout.TotalSeconds:0}s mid-answer — the backend appears wedged (no further tokens, no completion).");
             }
             idleCts.CancelAfter(Timeout.InfiniteTimeSpan); // disarm: a token arrived; don't count processing/yield time
@@ -416,7 +416,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             if (!string.IsNullOrEmpty(token))
             {
                 full.Append(token);
-                yield return token;
+                yield return RagStreamEvent.OfToken(token);
             }
             if (done)
             {
@@ -440,24 +440,24 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
         if (completed)
         {
-            // Append the invalid-citation footer (if any) after the model's own text — never rewrite it.
+            // Unsupported citations are DATA now, not a prose footer spliced into the answer (#231). This used
+            // to yield a fixed-English block "so app.js strips it consistently" — app.js is gone (#262), and the
+            // string-strip coupling it existed for is exactly what a typed event removes. The consumer decides
+            // how to show it, and the model cannot forge it by writing the same words.
             var validNames = RagPromptBuilder.ValidCitationNames(plan.Nodes);
             var report = CitationValidator.Validate(full.ToString(), validNames);
             if (report.HasInvalidCitations)
             {
-                // Fixed marker — ALWAYS English, identical to CitationValidator's footer so app.js strips it
-                // consistently across the streaming and blocking paths (regardless of answer language).
-                var sb = new System.Text.StringBuilder("\n\n");
-                sb.AppendLine("> ⚠ **Unsupported sources:** the following cited sources are NOT in the provided context and are therefore unverified:");
-                foreach (var name in report.InvalidCitations) sb.AppendLine($"> - {name}");
-                yield return sb.ToString();
+                yield return RagStreamEvent.OfUnsupportedCitations(report.InvalidCitations);
             }
+            yield return RagStreamEvent.OfDone(complete: true);
         }
         else
         {
-            // Stream ended without Ollama's terminal done=true — the backend was cut off mid-answer.
-            // Emit a marker so the caller/UI doesn't present a truncated answer as complete.
-            yield return "\n\n_… [Answer incomplete — connection to the model was interrupted]_";
+            // Stream ended without Ollama's terminal done=true — the backend was cut off mid-answer. The tokens
+            // already emitted are real, so they stand; the incompleteness travels as a signal instead of as the
+            // English sentence it used to append to the user's answer.
+            yield return RagStreamEvent.OfDone(complete: false);
         }
     }
 
