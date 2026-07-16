@@ -17,6 +17,8 @@ public static class StatsEndpoints
 {
     public static void MapStatsEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // GET /api/stats - graph statistics for the active/selected project.
         app.MapGet("/api/stats", async (HttpContext context, ProjectManager pm, CancellationToken ct) =>
         {
@@ -27,7 +29,7 @@ public static class StatsEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Request failed.", ex);
+                return Fail(log, "Request failed.", ex);
             }
         });
 
@@ -62,7 +64,7 @@ public static class StatsEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to get diagnostics.", ex);
+                return Fail(log, "Failed to get diagnostics.", ex);
             }
         });
 
@@ -77,7 +79,7 @@ public static class StatsEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Request failed.", ex);
+                return Fail(log, "Request failed.", ex);
             }
         });
 
@@ -112,7 +114,7 @@ public static class StatsEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to update status.", ex);
+                return Fail(log, "Failed to update status.", ex);
             }
         });
     }

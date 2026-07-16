@@ -14,6 +14,8 @@ public static class ProjectEndpoints
 {
     public static void MapProjectEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // GET /api/projects - list all registered projects + the active one.
         app.MapGet("/api/projects", (ProjectManager pm) =>
             Results.Ok(new { Projects = pm.GetProjects(), ActiveProject = pm.GetActiveProjectName() }));
@@ -37,7 +39,7 @@ public static class ProjectEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to add project.", ex);
+                return Fail(log, "Failed to add project.", ex);
             }
         });
 
@@ -51,7 +53,7 @@ public static class ProjectEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to delete project.", ex);
+                return Fail(log, "Failed to delete project.", ex);
             }
         });
 
@@ -74,7 +76,7 @@ public static class ProjectEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to switch active project.", ex);
+                return Fail(log, "Failed to switch active project.", ex);
             }
         });
 
@@ -93,7 +95,7 @@ public static class ProjectEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to update semantic setting.", ex);
+                return Fail(log, "Failed to update semantic setting.", ex);
             }
         });
 
@@ -114,7 +116,7 @@ public static class ProjectEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to update external type prefixes.", ex);
+                return Fail(log, "Failed to update external type prefixes.", ex);
             }
         });
 
@@ -131,7 +133,7 @@ public static class ProjectEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to retrieve config.", ex);
+                return Fail(log, "Failed to retrieve config.", ex);
             }
         });
 
@@ -149,7 +151,7 @@ public static class ProjectEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to save config.", ex);
+                return Fail(log, "Failed to save config.", ex);
             }
         });
     }

@@ -5,8 +5,11 @@ using System.IO;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Shonkor.Core.Interfaces;
 using Shonkor.Infrastructure.Services;
 
@@ -19,12 +22,32 @@ namespace Shonkor.Web;
 public static class EndpointHelpers
 {
     /// <summary>
+    /// The logger every endpoint group hands to <see cref="Fail(ILogger, string, Exception)"/> (#256).
+    ///
+    /// <para>
+    /// Resolved once per group at registration time and captured by the endpoint lambdas, which is why this is
+    /// not a static field: <c>WebApplicationFactory</c> boots several hosts concurrently under xUnit, and a
+    /// static logger would be shared — last writer wins — across hosts that each configured their own.
+    /// Resolving from <paramref name="app"/>'s own provider gives each host its own.
+    /// </para>
+    /// </summary>
+    public static ILogger ApiLogger(this WebApplication app) =>
+        app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Shonkor.Api");
+
+    /// <summary>
     /// Logs the full exception server-side but returns only a generic message to the client,
     /// so internal paths/stack details are never leaked over the API.
+    ///
+    /// <para>
+    /// Goes through <see cref="ILogger"/> rather than <c>Console.Error</c> (#256), so these paths honour log
+    /// levels and configuration like everything else, arrive structured, and can be routed or silenced by the
+    /// host — including a test host that expects the failure and no longer has to print a scary stack trace to
+    /// prove it happened.
+    /// </para>
     /// </summary>
-    public static IResult Fail(string clientMessage, Exception ex)
+    public static IResult Fail(ILogger logger, string clientMessage, Exception ex)
     {
-        Console.Error.WriteLine($"[API] {clientMessage} :: {ex}");
+        logger.LogError(ex, "[API] {ClientMessage}", clientMessage);
         return Results.Problem(clientMessage);
     }
 
@@ -39,9 +62,9 @@ public static class EndpointHelpers
     /// with nothing in common that previously all read "Failed to generate RAG response.".
     /// </para>
     /// </summary>
-    public static IResult Fail(string clientMessage, string code, Exception ex)
+    public static IResult Fail(ILogger logger, string clientMessage, string code, Exception ex)
     {
-        Console.Error.WriteLine($"[API] {clientMessage} :: {ex}");
+        logger.LogError(ex, "[API] {ClientMessage} ({FailureCode})", clientMessage, code);
         return Results.Problem(clientMessage, extensions: new Dictionary<string, object?> { ["code"] = code });
     }
 

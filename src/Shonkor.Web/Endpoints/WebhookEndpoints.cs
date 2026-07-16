@@ -132,6 +132,8 @@ public static class WebhookEndpoints
 
     public static void MapWebhookEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // POST /api/webhooks/github/install
         // Triggered when the GitHub App is installed in an organization.
         // Auto-provisions Tenants (Projects) for all selected repositories.
@@ -196,7 +198,7 @@ public static class WebhookEndpoints
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[API] GitHub Install Webhook failed. :: {ex}");
+                log.LogError(ex, "[API] GitHub Install Webhook failed.");
                 return Results.Problem("GitHub Install Webhook failed.");
             }
         });
@@ -289,7 +291,7 @@ public static class WebhookEndpoints
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[API] Push webhook failed. :: {ex}");
+                log.LogError(ex, "[API] Push webhook failed.");
                 return Results.Problem("Webhook failed.");
             }
         });
@@ -339,7 +341,7 @@ public static class WebhookEndpoints
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[API] PR webhook failed. :: {ex}");
+                log.LogError(ex, "[API] PR webhook failed.");
                 return Results.Problem("PR Webhook failed.");
             }
         });

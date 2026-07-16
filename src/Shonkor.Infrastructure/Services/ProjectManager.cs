@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using Shonkor.Core.Interfaces;
 using Shonkor.Infrastructure.Storage;
@@ -97,8 +98,23 @@ public partial class ProjectManager
 
     public string WorkspacePath { get; private set; }
 
-    public ProjectManager(string currentWorkspace)
+    /// <summary>
+    /// Optional sink for config-load diagnostics (#256). Null in the stdio host and in tests, where the stderr
+    /// fallback below is exactly right; the Web host supplies one via DI.
+    /// </summary>
+    private readonly ILogger? _logger;
+
+    /// <summary>Routes a diagnostic to the logger, or to stderr — never stdout (the MCP host's protocol channel).</summary>
+    private void Warn(Exception ex, string message)
     {
+        if (_logger != null) _logger.LogWarning(ex, "{ProjectManagerMessage}", message);
+        else Console.Error.WriteLine($"{message}: {ex.Message}");
+    }
+
+    public ProjectManager(string currentWorkspace, ILogger? logger = null)
+    {
+        // Assigned before LoadProjects, which is the very thing that can fail and want to log (#256).
+        _logger = logger;
         WorkspacePath = currentWorkspace;
         _projectsFilePath = Path.Combine(currentWorkspace, "projects.json");
         LoadProjects(currentWorkspace);
@@ -421,7 +437,7 @@ public partial class ProjectManager
             catch (Exception ex)
             {
                 // Malformed shonkor.json — fall back to the default config but surface the reason.
-                Console.Error.WriteLine($"[ProjectManager] Failed to read config for '{projectName}': {ex.Message}");
+                Warn(ex, $"[ProjectManager] Failed to read config for '{projectName}'");
             }
         }
 
@@ -582,7 +598,7 @@ public partial class ProjectManager
             {
                 // Corrupt/unreadable projects.json — keep whatever is already in memory, but log it
                 // so silent data loss doesn't go unnoticed.
-                Console.Error.WriteLine($"[ProjectManager] Failed to load projects.json: {ex.Message}");
+                Warn(ex, "[ProjectManager] Failed to load projects.json");
             }
         }
 

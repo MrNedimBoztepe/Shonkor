@@ -13,6 +13,8 @@ public static class GraphRagEndpoints
 {
     public static void MapGraphRagEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // POST /api/rag/query
         // Exposes Shonkor's structural graph directly to external AI Agents (e.g. ChatGPT, Antigravity)
         // using the X-API-Key for multi-tenant security.
@@ -63,7 +65,7 @@ public static class GraphRagEndpoints
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[API] GraphRAG query failed. :: {ex}");
+                log.LogError(ex, "[API] GraphRAG query failed.");
                 return Results.Problem("GraphRAG query failed.");
             }
         });
