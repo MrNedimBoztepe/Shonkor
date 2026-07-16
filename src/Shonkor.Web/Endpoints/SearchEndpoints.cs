@@ -21,6 +21,8 @@ public static class SearchEndpoints
 {
     public static void MapSearchEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // GET /api/search - full-text (FTS5) search over nodes.
         app.MapGet("/api/search", async (string q, int? limit, int? offset, string? type, HttpContext context, ProjectManager pm, CancellationToken ct) =>
         {
@@ -37,7 +39,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Search failed.", ex);
+                return Fail(log, "Search failed.", ex);
             }
         });
 
@@ -56,7 +58,7 @@ public static class SearchEndpoints
                 var queryEmbedding = await embeddingService.GenerateEmbeddingAsync(q, EmbeddingKind.Query, ct);
                 if (queryEmbedding == null || queryEmbedding.Length == 0)
                 {
-                    return Fail("Failed to generate embedding for the search query.", new Exception("Embedding generation returned empty."));
+                    return Fail(log, "Failed to generate embedding for the search query.", new Exception("Embedding generation returned empty."));
                 }
 
                 var results = await storage.SearchSemanticAsync(queryEmbedding, limit ?? 15, ct);
@@ -64,7 +66,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Semantic search failed.", ex);
+                return Fail(log, "Semantic search failed.", ex);
             }
         });
 
@@ -90,7 +92,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Hybrid search failed.", ex);
+                return Fail(log, "Hybrid search failed.", ex);
             }
         });
 
@@ -127,7 +129,7 @@ public static class SearchEndpoints
             {
                 // The message stays generic (no internals leak); the code says WHICH failure it was (#228), so
                 // the blocking path and the stream's error frame speak one vocabulary.
-                return Fail("Failed to generate RAG response.", RagFailureCode.Classify(ex), ex);
+                return Fail(log, "Failed to generate RAG response.", RagFailureCode.Classify(ex), ex);
             }
         });
 
@@ -208,7 +210,7 @@ public static class SearchEndpoints
             catch (Exception ex)
             {
                 // Everything else, INCLUDING a timeout the client did not ask for: the backend failed us.
-                Console.Error.WriteLine($"[API] Streaming RAG response failed. :: {ex.Message}");
+                log.LogError(ex, "[API] Streaming RAG response failed.");
                 // Headers/body may already be sent; emit an error FRAME rather than trying to set a status code.
                 // The frame carries the machine-readable class (#228) — the same vocabulary /api/ask uses — so a
                 // consumer can act on it without reading prose, and the status code is no longer the only signal.
@@ -240,7 +242,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Subgraph traversal failed.", ex);
+                return Fail(log, "Subgraph traversal failed.", ex);
             }
         });
 
@@ -299,7 +301,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to load node references.", ex);
+                return Fail(log, "Failed to load node references.", ex);
             }
         });
 
@@ -343,7 +345,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Path finding failed.", ex);
+                return Fail(log, "Path finding failed.", ex);
             }
         });
 
@@ -376,7 +378,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Capsule synthesis failed.", ex);
+                return Fail(log, "Capsule synthesis failed.", ex);
             }
         });
     }

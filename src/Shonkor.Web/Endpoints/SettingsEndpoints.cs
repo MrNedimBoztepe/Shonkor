@@ -21,6 +21,8 @@ public static class SettingsEndpoints
 {
     public static void MapSettingsEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // GET /api/settings — current effective AI settings (loopback-only; non-secret operational config).
         app.MapGet("/api/settings", (HttpContext context, IConfiguration config) =>
         {
@@ -75,7 +77,7 @@ public static class SettingsEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to save settings.", ex);
+                return Fail(log, "Failed to save settings.", ex);
             }
         });
     }

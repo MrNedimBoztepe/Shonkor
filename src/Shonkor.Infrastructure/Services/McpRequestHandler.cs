@@ -1,6 +1,7 @@
 // Licensed to Shonkor under the MIT License.
 
 using System.Reflection;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Shonkor.Core.Interfaces;
@@ -51,6 +52,23 @@ public sealed class McpRequestHandler
     /// <summary>A reusable JSON-null element, used to echo back an explicit <c>"id": null</c> JSON-RPC id.</summary>
     private static readonly JsonElement NullJsonElement = JsonSerializer.SerializeToElement<object?>(null);
 
+    /// <summary>
+    /// Optional sink for error diagnostics (#256). Null in the stdio host, where <c>Console.Error</c> already
+    /// IS the log channel and the fallback below is exactly right; the Web host supplies one so /api/mcp
+    /// failures honour log configuration like the rest of the API.
+    /// </summary>
+    private readonly ILogger? _logger;
+
+    /// <summary>
+    /// Routes an error to the logger, or to stderr — <b>never stdout</b>. In the stdio host stdout carries the
+    /// JSON-RPC protocol itself, so a single stray write there corrupts the session for the client.
+    /// </summary>
+    private void LogError(Exception ex, string message)
+    {
+        if (_logger != null) _logger.LogError(ex, "{McpMessage}", message);
+        else Console.Error.WriteLine($"{message} {ex.Message}\n{ex.StackTrace}");
+    }
+
     public McpRequestHandler(
         ProjectManager projectManager,
         ContextCapsuleSynthesizer synthesizer,
@@ -59,10 +77,13 @@ public sealed class McpRequestHandler
         IEmbeddingService? embeddingService = null,
         IEnumerable<IFileParser>? fileParsers = null,
         SemanticCompilationCache? compilationCache = null,
-        bool persistentSession = true)
+        bool persistentSession = true,
+        ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(projectManager);
         ArgumentNullException.ThrowIfNull(synthesizer);
+
+        _logger = logger;
 
         _ctx = new McpToolContext(projectManager, synthesizer, contextProjectName, lockToContextProject,
             embeddingService, fileParsers, compilationCache, persistentSession);
@@ -104,7 +125,7 @@ public sealed class McpRequestHandler
             catch (Exception ex)
             {
                 // Errors go to stderr because stdout is reserved strictly for JSON-RPC messages.
-                Console.Error.WriteLine($"[MCP Error] {ex.Message}");
+                LogError(ex, "[MCP Error]");
             }
         }
     }
@@ -191,7 +212,7 @@ public sealed class McpRequestHandler
         {
             // The full detail (including any file paths / SQL text) goes ONLY to the server log; the
             // client-facing message is generic so a relay response can't exfiltrate internal paths.
-            Console.Error.WriteLine($"[MCP Internal Error] {ex.Message}\n{ex.StackTrace}");
+            LogError(ex, "[MCP Internal Error]");
             if (idNode != null)
             {
                 try
@@ -256,7 +277,7 @@ public sealed class McpRequestHandler
             // The text stays free of ex.Message (TICKET-209/M11: it can carry filesystem paths or SQL);
             // the tool name and exception TYPE are safe to surface and are what the model can act on.
             // Full detail (message + stack) goes only to the server log.
-            Console.Error.WriteLine($"[MCP Tool Error] {ex.Message}\n{ex.StackTrace}");
+            LogError(ex, "[MCP Tool Error]");
             return SendToolError(id,
                 $"Tool '{toolName}' failed to execute ({ex.GetType().Name}). This is a server-side failure, not a bad argument — see the server log for details. Try a different approach or a narrower query.",
                 McpErrorCode.ToolFailed);

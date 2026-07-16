@@ -21,6 +21,8 @@ public static class InsightsEndpoints
 {
     public static void MapInsightsEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // GET /api/insights/hotspots — change-risk "god nodes" ranked by betweenness centrality.
         app.MapGet("/api/insights/hotspots", async (int? limit, HttpContext context, ProjectManager pm, CancellationToken ct) =>
         {
@@ -58,7 +60,7 @@ public static class InsightsEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Hotspot analysis failed.", ex);
+                return Fail(log, "Hotspot analysis failed.", ex);
             }
         });
 
@@ -112,7 +114,7 @@ public static class InsightsEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Cluster analysis failed.", ex);
+                return Fail(log, "Cluster analysis failed.", ex);
             }
         });
     }

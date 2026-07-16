@@ -56,7 +56,11 @@ builder.Services.AddHealthChecks()
 // Multi-project registry, rooted at the nearest ancestor workspace containing a shonkor.json.
 // Registered lazily (via factory) so tests can substitute a ProjectManager rooted at a temp workspace
 // instead of the developer's real one.
-builder.Services.AddSingleton(_ => new ProjectManager(FindWorkspacePath()));
+// The logger comes from the container (#256) so registry-load failures honour log configuration instead of
+// going straight to stderr. The CLI keeps passing none: there, stderr IS the log channel, because stdout
+// carries the MCP JSON-RPC protocol.
+builder.Services.AddSingleton(sp => new ProjectManager(
+    FindWorkspacePath(), sp.GetRequiredService<ILoggerFactory>().CreateLogger<ProjectManager>()));
 
 // Force-load YamlDotNet into the AppDomain so dynamic plugins can reference it.
 _ = typeof(YamlDotNet.Serialization.Deserializer);
