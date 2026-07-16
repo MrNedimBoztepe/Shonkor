@@ -220,6 +220,29 @@ public class OllamaFailureShapeTests
         Assert.Equal(OllamaResilience.BackgroundAttempts, backend.Requests);
     }
 
+    /// <summary>
+    /// The OTHER background path, on the same failure, must behave the same (#234).
+    ///
+    /// <para>
+    /// Embedding is a separate service with its own send, so the asymmetry above only covers half of it: switch
+    /// <c>OllamaEmbeddingService</c> alone to <c>ResponseHeadersRead</c> "for consistency with the RAG path" and
+    /// indexing would quietly stop retrying every dropped body, while the enrichment test above stayed green.
+    /// <c>OllamaCompletionOptionContractTests</c> catches that change in the source; this catches it in the
+    /// OUTCOME, which is what the codebase prefers to pin — it fails only when the property genuinely breaks,
+    /// not when the code is merely rearranged.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task TheEmbeddingPath_OnTheSameFailure_AlsoRetriesIt_TheBackgroundRuleIsNotJustEnrichments()
+    {
+        using var backend = new MisbehavingBackend(MisbehavingBackend.Mode.DieMidBody);
+        var embedding = Embedding(backend.Url);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => embedding.GenerateEmbeddingAsync("hello"));
+
+        Assert.Equal(OllamaResilience.BackgroundAttempts, backend.Requests);
+    }
+
     private static OllamaSemanticAnalyzer Analyzer(string url) =>
         OllamaClientFactory.CreateSemanticAnalyzer(
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -228,6 +251,15 @@ public class OllamaFailureShapeTests
                 ["SemanticAnalyzer:TimeoutSeconds"] = "10"
             }).Build(),
             NullLogger<OllamaSemanticAnalyzer>.Instance);
+
+    private static OllamaEmbeddingService Embedding(string url) =>
+        OllamaClientFactory.CreateEmbeddingService(
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["EmbeddingService:OllamaUrl"] = url,
+                ["EmbeddingService:TimeoutSeconds"] = "10"
+            }).Build(),
+            NullLogger<OllamaEmbeddingService>.Instance);
 
     private static GraphNode Node(string id) => new()
     {
