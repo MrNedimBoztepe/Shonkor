@@ -70,7 +70,7 @@ public class OllamaCompletionOptionContractTests
     [Fact]
     public void TheStreamingSend_ReadsHeadersOnly_SoATokenCanNeverBeEmittedTwice()
     {
-        var body = Method(Analyzer(), "public async IAsyncEnumerable<string> StreamRAGResponseAsync(");
+        var body = Method(Analyzer(), "public async IAsyncEnumerable<RagStreamEvent> StreamRAGResponseAsync(");
 
         Assert.Contains("HttpCompletionOption.ResponseHeadersRead", body, StringComparison.Ordinal);
     }

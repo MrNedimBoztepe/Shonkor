@@ -51,7 +51,7 @@ public class BlockingBodyReadTimeoutTests
         var analyzer = Analyzer(backend.Url, timeoutSeconds: 3);
 
         var sw = Stopwatch.StartNew();
-        var ex = await Assert.ThrowsAsync<OllamaResponseException>(
+        var ex = await Assert.ThrowsAsync<OllamaStalledException>(
             () => analyzer.GenerateRAGResponseAsync("how are tokens hashed?", new[] { Node() }));
         sw.Stop();
 

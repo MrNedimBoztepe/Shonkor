@@ -57,23 +57,27 @@ public class StreamingNoRetryTests
         Id = "A", Name = "A", Type = "Class", Content = "class A {}", FilePath = "src/A.cs"
     };
 
-    /// <summary>Drains the stream, tolerating the failure it is meant to end in.</summary>
-    private static async Task<string> CollectAsync(OllamaSemanticAnalyzer analyzer)
+    /// <summary>Drains the stream into its events, tolerating the failure it is meant to end in.</summary>
+    private static async Task<List<RagStreamEvent>> CollectAsync(OllamaSemanticAnalyzer analyzer)
     {
-        var sb = new System.Text.StringBuilder();
+        var events = new List<RagStreamEvent>();
         try
         {
-            await foreach (var chunk in analyzer.StreamRAGResponseAsync("what does the graph do?", [Node()]))
+            await foreach (var ev in analyzer.StreamRAGResponseAsync("what does the graph do?", [Node()]))
             {
-                sb.Append(chunk);
+                events.Add(ev);
             }
         }
         catch
         {
             // The failure is the point of the fixture; what we assert is what reached the wire, and how often.
         }
-        return sb.ToString();
+        return events;
     }
+
+    /// <summary>The model's words: the token events concatenated, with no control signal mixed in (#231).</summary>
+    private static string Answer(IEnumerable<RagStreamEvent> events) =>
+        string.Concat(events.Where(e => e.Kind == RagStreamEventKind.Token).Select(e => e.Token));
 
     /// <summary>
     /// <b>The property that matters.</b> The backend answers, streams real tokens, and then dies. If the stream
@@ -89,17 +93,19 @@ public class StreamingNoRetryTests
             """{"response":"Tokens are hashed ","done":false}""" + "\n" +
             """{"response":"with SHA-256.","done":false}""" + "\n");
 
-        var answer = await CollectAsync(Analyzer(backend.Url));
+        var events = await CollectAsync(Analyzer(backend.Url));
 
         // The generation happened once...
         Assert.Equal(1, backend.Requests);
 
         // ...and the tokens it produced appear exactly once in what the caller received.
-        var occurrences = answer.Split("Tokens are hashed with SHA-256.").Length - 1;
+        var occurrences = Answer(events).Split("Tokens are hashed with SHA-256.").Length - 1;
         Assert.Equal(1, occurrences);
 
-        // ...and the answer still announces its own incompleteness (#227), rather than reading as finished.
-        Assert.Contains("incomplete", answer, StringComparison.OrdinalIgnoreCase);
+        // ...and the stream still announces its own incompleteness (#227), rather than reading as finished —
+        // now on the terminal event, where the model cannot reach it, instead of as prose in its own answer.
+        var done = Assert.Single(events, e => e.Kind == RagStreamEventKind.Done);
+        Assert.False(done.Complete);
     }
 
     /// <summary>

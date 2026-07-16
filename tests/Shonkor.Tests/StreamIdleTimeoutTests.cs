@@ -50,11 +50,11 @@ public class StreamIdleTimeoutTests
 
         var sb = new StringBuilder();
         var sw = Stopwatch.StartNew();
-        var ex = await Assert.ThrowsAsync<OllamaResponseException>(async () =>
+        var ex = await Assert.ThrowsAsync<OllamaStalledException>(async () =>
         {
-            await foreach (var chunk in analyzer.StreamRAGResponseAsync("how are tokens hashed?", [Node()]))
+            await foreach (var ev in analyzer.StreamRAGResponseAsync("how are tokens hashed?", [Node()]))
             {
-                sb.Append(chunk);
+                sb.Append(ev.Token);
             }
         });
         sw.Stop();
@@ -86,9 +86,9 @@ public class StreamIdleTimeoutTests
         var analyzer = Analyzer(backend.Url, idleSeconds: 3);
 
         var sb = new StringBuilder();
-        await foreach (var chunk in analyzer.StreamRAGResponseAsync("q", [Node()]))
+        await foreach (var ev in analyzer.StreamRAGResponseAsync("q", [Node()]))
         {
-            sb.Append(chunk);
+            sb.Append(ev.Token);
         }
 
         // Every token, in order, plus the terminal one: the stream ran to completion and was never killed.

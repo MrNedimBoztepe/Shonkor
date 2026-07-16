@@ -75,9 +75,9 @@ public class StreamPreConnectionRetryTests
     private static async Task<string> CollectAsync(OllamaSemanticAnalyzer analyzer)
     {
         var sb = new System.Text.StringBuilder();
-        await foreach (var chunk in analyzer.StreamRAGResponseAsync("how are tokens hashed?", [Node()]))
+        await foreach (var ev in analyzer.StreamRAGResponseAsync("how are tokens hashed?", [Node()]))
         {
-            sb.Append(chunk);
+            sb.Append(ev.Token);
         }
         return sb.ToString();
     }
