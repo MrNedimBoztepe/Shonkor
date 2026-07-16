@@ -216,7 +216,23 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                     .ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
-                var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
+                // Bound the body read (#266). Under ResponseHeadersRead, HttpClient.Timeout stops applying once
+                // the headers are in, so this read would otherwise hang forever against a backend that flushes
+                // headers and then stalls before the JSON body — the blocking twin of the streaming hang #230
+                // fixed. It gets the SAME budget as the headers phase (the effective HttpClient.Timeout) via a
+                // linked source; a genuine client cancel keeps its own path (the `when` guard, as in #227).
+                using var readCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                readCts.CancelAfter(_httpClient.Timeout);
+                JsonObject? responseJson;
+                try
+                {
+                    responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: readCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new OllamaResponseException(
+                        $"Ollama sent response headers but no usable body within {_httpClient.Timeout.TotalSeconds:0}s — the backend appears wedged mid-response.");
+                }
                 var responseText = responseJson?["response"]?.ToString();
 
                 // A 200 OK with no usable answer in it is a BACKEND FAILURE, and is now reported as one (#225).
