@@ -71,11 +71,21 @@ public sealed class GraphIndexScanner
         _compilationCache = compilationCache;
     }
 
-    /// <summary>Routes a scan diagnostic to the logger, or to stderr — never stdout (see ctor remarks).</summary>
+    /// <summary>
+    /// Routes a scan diagnostic to the logger, or to stderr — never stdout (see ctor remarks).
+    ///
+    /// <para>
+    /// Line endings are flattened first (#276, <c>cs/log-forging</c>). Callers interpolate <b>file paths</b>,
+    /// and a path is not ours: POSIX filenames may contain newlines, so indexing an untrusted repository would
+    /// otherwise let a checked-in filename write its own log lines. CodeQL only flagged the ProjectManager
+    /// site, but this one takes the more obviously attacker-supplied value of the two.
+    /// </para>
+    /// </summary>
     private void Warn(string message)
     {
-        if (_logger != null) _logger.LogWarning("{ScanMessage}", message);
-        else Console.Error.WriteLine(message);
+        var line = message.ReplaceLineEndings(" ");
+        if (_logger != null) _logger.LogWarning("{ScanMessage}", line);
+        else Console.Error.WriteLine(line);
     }
 
     /// <summary>
