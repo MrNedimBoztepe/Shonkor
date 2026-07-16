@@ -11,6 +11,20 @@ const PALETTE = ['#1f4d44','#b14a26','#5a5230','#a9803a','#2f6c66','#8f3d1e','#6
 const INTERACTION = new Set(['Task','Decision','Question','Milestone']);
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+/* Resolve a value read back OUT of the DOM to one of our own literals (#277).
+ *
+ * Several controls write a value into a data- attribute, read it back on click, and interpolate it into
+ * innerHTML. The values are ours, so this is not exploitable today — poisoning the attribute already needs
+ * DOM control. But the round-trip LOSES the provenance: nothing downstream can tell an app-authored literal
+ * from an attacker-authored one, so the day an attribute starts carrying graph data, the interpolation is a
+ * real XSS and nobody notices. CodeQL (js/xss-through-dom) is right about the shape even though it is wrong
+ * about the current instances.
+ *
+ * Returns the element FROM `allowed` rather than the string it matched, so what flows onward is a literal
+ * this file owns and the taint ends here. escapeHtml at the sink would mask the symptom instead, and would
+ * not survive an attribute that legitimately needs markup-ish content later. Unknown input fails closed. */
+function pickAllowed(allowed, value, fallback){ const i = allowed.indexOf(value); return i >= 0 ? allowed[i] : fallback; }
+
 async function boot(){
   try{
     const p = await (await fetch('/api/projects')).json();
@@ -491,6 +505,9 @@ function huntPick(i){ const n=_huntT[i]; if(!n) return; const id=n.id||n.Id; clo
 
 /* --- Insights (whole-graph topology: hotspots · clusters · surprising connections) --- */
 let _insTab='hotspots', _insMode='modularity', _insNodes=[], _insPairs=[];
+/* The cluster modes, named once (#277): the same list renders the chips and validates the value read back
+   off one, so the two can never drift apart. */
+const INS_MODES=['modularity','components'];
 function insNodeIx(n){ _insNodes.push(n); return _insNodes.length-1; }
 function insWireNodes(scope){ scope.querySelectorAll('[data-nix]').forEach(el=>el.onclick=()=>{ const n=_insNodes[+el.getAttribute('data-nix')]; if(n&&n.id){ closeStation(); focusNode(n.id, n); } }); }
 function renderInsights(body){
@@ -515,8 +532,8 @@ async function insHotspots(b){
   }catch(e){ b.innerHTML='<div class="sempty">Hotspot analysis failed.</div>'; }
 }
 async function insClusters(b){
-  _insNodes=[]; b.innerHTML=`<div class="chips" style="margin-bottom:8px">${['modularity','components'].map(m=>`<span class="chip ${_insMode===m?'on':''}" data-m="${m}">${m}</span>`).join('')}</div><div id="ins-cl"><div class="sempty">Clustering…</div></div>`;
-  b.querySelectorAll('[data-m]').forEach(c=>c.onclick=()=>{ _insMode=c.getAttribute('data-m'); insClusters(b); });
+  _insNodes=[]; b.innerHTML=`<div class="chips" style="margin-bottom:8px">${INS_MODES.map(m=>`<span class="chip ${_insMode===m?'on':''}" data-m="${m}">${m}</span>`).join('')}</div><div id="ins-cl"><div class="sempty">Clustering…</div></div>`;
+  b.querySelectorAll('[data-m]').forEach(c=>c.onclick=()=>{ _insMode=pickAllowed(INS_MODES, c.getAttribute('data-m'), 'modularity'); insClusters(b); });
   const cl=b.querySelector('#ins-cl');
   try{
     const r=await (await fetch(`/api/insights/clusters?mode=${_insMode}&maxSmall=15`,{headers:H()})).json();
@@ -570,13 +587,15 @@ async function runCapStation(){
 
 /* --- Diagnostics station --- */
 let _diagSev='warning';
+/* Named once (#277) — same list renders the chips and validates the value read back off one. */
+const DIAG_SEVS=['info','warning','error'];
 function renderDiagStation(body){
   body.innerHTML = `
     <div class="chips" id="diag-tabs">
-      ${['info','warning','error'].map(s=>`<span class="chip ${_diagSev===s?'on':''}" data-s="${s}">${s}+</span>`).join('')}
+      ${DIAG_SEVS.map(s=>`<span class="chip ${_diagSev===s?'on':''}" data-s="${s}">${s}+</span>`).join('')}
     </div>
     <div id="diag-full"><div class="sempty">Loading…</div></div>`;
-  body.querySelectorAll('#diag-tabs .chip').forEach(c=>c.onclick=()=>{ _diagSev=c.getAttribute('data-s'); body.querySelectorAll('#diag-tabs .chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); loadDiagFull(); });
+  body.querySelectorAll('#diag-tabs .chip').forEach(c=>c.onclick=()=>{ _diagSev=pickAllowed(DIAG_SEVS, c.getAttribute('data-s'), 'warning'); body.querySelectorAll('#diag-tabs .chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); loadDiagFull(); });
   loadDiagFull();
 }
 async function loadDiagFull(){
@@ -1064,7 +1083,8 @@ async function loadJournal(){
     const tabs=[`<span class="chip ${_jFilter===''?'on':''}" data-f="">all <span style="opacity:.6">${_journal.length}</span></span>`]
       .concat(REC_ORDER.filter(t=>counts[t]).map(t=>`<span class="chip ${_jFilter===t?'on':''}" data-f="${t}">${t} <span style="opacity:.6">${counts[t]}</span></span>`));
     $('#j-tabs').innerHTML=tabs.join('');
-    $('#j-tabs').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{ _jFilter=c.getAttribute('data-f'); paintJournal(); });
+    // '' is the "all" chip, so it belongs in the allow-list alongside the record types (#277).
+    $('#j-tabs').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{ _jFilter=pickAllowed(['', ...REC_ORDER], c.getAttribute('data-f'), ''); paintJournal(); });
     paintJournal();
   }catch(e){ list.innerHTML='<div class="sempty">Records unavailable.</div>'; }
 }
