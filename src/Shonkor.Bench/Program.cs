@@ -12,6 +12,12 @@
 //   shonkor-bench <db> --set <f>       score a curated golden set JSON (e.g. bench/golden/agent-queries.json)
 //                                      instead of the auto-bootstrapped self-retrieval set
 //   shonkor-bench <db> --baseline <f>  gate P@1/MRR/Recall@k against baseline JSON, >5% rel drop exits 2
+//   shonkor-bench <db> --enrich-baseline
+//                                      give the RAG baseline's chunks the same AI summaries the graph's
+//                                      nodes carry (#189). The 2x2's "+9,1 pp = the graph" bundles topology
+//                                      with the summary-enriched indexed unit; run WITH and WITHOUT this
+//                                      flag and the difference between the two baselines is what the
+//                                      summaries alone bought — the rest is topology.
 //   shonkor-bench --diff <a> <b>       per-case rank-1 diff between two runs' bench/cases.json (#174):
 //                                      which cases changed their top hit, and in which direction. Needs no
 //                                      database. A LENS, not a gate — always exits 0; --baseline owns
@@ -391,7 +397,8 @@ if (compareRag)
 {
     Console.WriteLine("[3/3] RAG baseline head-to-head (chunked-RAG vs Shonkor capsule)");
     var ragCases = golden ?? GoldenSetGenerator.Generate(allNodes);
-    rag = await RagBaselineBenchmark.RunAsync(provider, allNodes, CreateEmbeddingService(), ragCases, synthesizer, Console.Out);
+    rag = await RagBaselineBenchmark.RunAsync(provider, allNodes, CreateEmbeddingService(), ragCases, synthesizer, Console.Out,
+        enrichBaselineChunks: args.Contains("--enrich-baseline"));
     Console.WriteLine();
 
     report.AppendLine("## RAG baseline head-to-head");

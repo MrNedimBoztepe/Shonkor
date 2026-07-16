@@ -60,7 +60,8 @@ internal static class RagBaselineBenchmark
 
     public static async Task<ComparisonResult?> RunAsync(
         SqliteGraphStorageProvider provider, IReadOnlyList<GraphNode> nodes, IEmbeddingService? emb,
-        List<GoldenCase> cases, ContextCapsuleSynthesizer synth, TextWriter log)
+        List<GoldenCase> cases, ContextCapsuleSynthesizer synth, TextWriter log,
+        bool enrichBaselineChunks = false)
     {
         if (emb is null) { log.WriteLine("  rag baseline: no embedding backend — skipped"); return null; }
 
@@ -70,6 +71,12 @@ internal static class RagBaselineBenchmark
             .Where(n => n.Type == "File" && !string.IsNullOrEmpty(n.FilePath) && File.Exists(n.FilePath!))
             .Select(n => n.FilePath!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var chunks = BuildChunks(files);
+        if (enrichBaselineChunks)
+        {
+            // #189: equalise the INDEXED UNIT so whatever gap remains is topology, not richer text.
+            chunks = EnrichChunks(chunks, nodes);
+            log.WriteLine("  rag baseline: chunks ENRICHED with node summaries (#189) — this run isolates topology");
+        }
         log.WriteLine($"  rag baseline: {chunks.Count} chunks from {files.Count} files; embedding (cached)...");
 
         await EmbedChunksAsync(chunks, emb, Path.Combine("bench", "rag-chunk-cache.json"), log);
@@ -184,6 +191,58 @@ internal static class RagBaselineBenchmark
             idx = capsule.IndexOf(node.Name, idx + 1, StringComparison.Ordinal);
         }
         return false;
+    }
+
+    /// <summary>
+    /// Gives each chunk the AI summaries of the nodes whose line range it covers (#189).
+    ///
+    /// <para>
+    /// The +9,1 pp the 2×2 attributes to "the graph" is not pure topology. Shonkor's nodes carry summaries
+    /// from the enrichment worker that keyword-match plain-English intent; raw source chunks do not — which
+    /// is why the baseline's keyword arm fired on only 10 of 33 queries (#166/#188). So the honest reading of
+    /// the number is "the graph's topology PLUS its summary-enriched indexed unit", and those are two
+    /// different claims a sharp customer will separate for us if we do not.
+    /// </para>
+    /// <para>
+    /// Enriching the BASELINE's chunks equalises the indexed unit, so a run with this on isolates what the
+    /// topology alone buys. Summaries are appended, not substituted: the chunk must still be the code it was,
+    /// or the comparison changes two things at once.
+    /// </para>
+    /// </summary>
+    internal static List<Chunk> EnrichChunks(IReadOnlyList<Chunk> chunks, IReadOnlyList<GraphNode> nodes)
+    {
+        // Nodes grouped by file, so each chunk only scans its own file's symbols.
+        var byFile = nodes
+            .Where(n => !string.IsNullOrEmpty(n.FilePath) && !string.IsNullOrWhiteSpace(n.Summary))
+            .GroupBy(n => n.FilePath!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var enriched = new List<Chunk>(chunks.Count);
+        foreach (var ch in chunks)
+        {
+            var summaries = byFile.TryGetValue(ch.File, out var fileNodes)
+                ? fileNodes
+                    // A node belongs to this chunk when their line ranges overlap. Nodes without lines
+                    // (file-level) are skipped: attaching them to every chunk of the file would hand the
+                    // baseline a whole-file summary on each window, which over-corrects the other way.
+                    .Where(n => n.StartLine is { } s && n.EndLine is { } e && s <= ch.EndLine + 1 && e >= ch.StartLine + 1)
+                    .Select(n => n.Summary!.Trim())
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList()
+                : [];
+
+            enriched.Add(summaries.Count == 0
+                ? ch
+                : new Chunk
+                {
+                    File = ch.File,
+                    StartLine = ch.StartLine,
+                    EndLine = ch.EndLine,
+                    Text = string.Join("\n", summaries) + "\n" + ch.Text,
+                    Hash = Sha(string.Join("\n", summaries) + "\n" + ch.Text)
+                });
+        }
+        return enriched;
     }
 
     private static List<Chunk> BuildChunks(List<string> files)
