@@ -19,6 +19,14 @@ concurrency:
 jobs:
   # PR gate: deterministic, Ollama-free. Builds the fixture DB (the repo indexes itself) and gates the
   # FTS retrieval rows against the checked-in baseline. A >5% relative drop in P@1/MRR/Recall@k fails.
+  #
+  # It also carries the #136 eval-contamination gate, which is NOT obvious from the step names below and is
+  # why #200 was opened to "wire it into the nightly" — it was already here. The check sits on the bench's
+  # main path (Bench/Program.cs, right after RetrievalBenchmark.RunAsync), so ANY --baseline/--set run
+  # reaches it, and it needs no embeddings: an index-excluded meta file surfacing in FTS results is enough.
+  # That means contamination fails on every PR, not nightly — better than #136's AC asked for. Keep it that
+  # way: if the retrieval step below is ever narrowed to a mode that skips the bench's main path, the gate
+  # silently stops running on PRs. (--answers is such a mode; it returns before the check.)
   retrieval-fts:
     name: Retrieval (FTS gate)
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
