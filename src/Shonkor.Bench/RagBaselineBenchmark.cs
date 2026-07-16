@@ -29,7 +29,8 @@ internal static class RagBaselineBenchmark
     private const int Hops = 2;
     private const int BudgetChars = 12000;
 
-    private sealed class Chunk
+    /// <summary>One baseline chunk. <c>internal</c> so the pure ranking logic below can be unit-tested (#191).</summary>
+    internal sealed class Chunk
     {
         public required string File { get; init; }
         public int StartLine { get; init; }
@@ -275,7 +276,7 @@ internal static class RagBaselineBenchmark
     /// one, and at most 40) — the shared budgeted-pick both baseline arms use, so the vector and hybrid arms
     /// differ ONLY in their ranking, never in how the budget is applied.
     /// </summary>
-    private static (List<Chunk> Chunks, double Tokens) PickWithinBudget(
+    internal static (List<Chunk> Chunks, double Tokens) PickWithinBudget(
         IReadOnlyList<Chunk> chunks, List<int> order, double budgetTokens)
     {
         double used = 0;
@@ -297,7 +298,7 @@ internal static class RagBaselineBenchmark
     /// keyword arm that is the SAME BM25 the product uses — not a hand-rolled scorer (the #163 trap). Row i+1
     /// is chunk <c>embedded[i]</c>. The connection is kept open for the whole run and disposed by the caller.
     /// </summary>
-    private static SqliteConnection BuildChunkFts(IReadOnlyList<Chunk> chunks)
+    internal static SqliteConnection BuildChunkFts(IReadOnlyList<Chunk> chunks)
     {
         var conn = new SqliteConnection("Data Source=:memory:");
         conn.Open();
@@ -329,7 +330,7 @@ internal static class RagBaselineBenchmark
     /// by <c>bm25()</c>, and on an FTS syntax error (colons, slashes, operators) it falls back to <c>LIKE</c>
     /// over the query's word tokens — the same degradation <c>SqliteGraphStorageProvider</c> does.
     /// </summary>
-    private static List<int> KeywordRankChunks(SqliteConnection conn, string query)
+    internal static List<int> KeywordRankChunks(SqliteConnection conn, string query)
     {
         var order = new List<int>();
         try
@@ -362,7 +363,7 @@ internal static class RagBaselineBenchmark
     /// baseline's keyword+vector fusion is like-for-like with the product's — the only remaining difference
     /// between the two hybrid rows is the graph.
     /// </summary>
-    private static List<int> RrfFuse(List<int> vectorRank, List<int> keywordRank, int k = 60)
+    internal static List<int> RrfFuse(List<int> vectorRank, List<int> keywordRank, int k = 60)
     {
         var score = new Dictionary<int, double>();
         void Accumulate(List<int> ranked)
