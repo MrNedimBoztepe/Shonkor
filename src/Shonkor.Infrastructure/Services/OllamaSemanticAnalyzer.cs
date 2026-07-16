@@ -21,6 +21,15 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
     private readonly string _ollamaUrl;
     private readonly string _ollamaModel;
 
+    /// <summary>
+    /// How long a streamed answer may go with NO new token before the backend is judged wedged (#230).
+    /// <c>HttpClient.Timeout</c> bounds only the pre-header phase under <c>ResponseHeadersRead</c>; body reads
+    /// are otherwise unbounded, so a model that emits a few tokens and then stalls hangs the request forever.
+    /// Reset on every token, so a slow-but-alive model is never killed — only a stall is. Config:
+    /// <c>SemanticAnalyzer:StreamIdleTimeoutSeconds</c> (default 120s; ≤ 0 disables the guard).
+    /// </summary>
+    private readonly TimeSpan _streamIdleTimeout;
+
     public OllamaSemanticAnalyzer(HttpClient httpClient, IConfiguration configuration, ILogger<OllamaSemanticAnalyzer> logger)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -28,6 +37,9 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
         _ollamaUrl = (configuration["SemanticAnalyzer:OllamaUrl"] ?? "http://localhost:11434").TrimEnd('/');
         _ollamaModel = configuration["SemanticAnalyzer:OllamaModel"] ?? "qwen2.5-coder";
+
+        var idleSeconds = configuration.GetValue<double?>("SemanticAnalyzer:StreamIdleTimeoutSeconds") ?? 120;
+        _streamIdleTimeout = idleSeconds > 0 ? TimeSpan.FromSeconds(idleSeconds) : Timeout.InfiniteTimeSpan;
 
         // Do NOT set _httpClient.BaseAddress here — mutating a shared HttpClient after construction
         // is not thread-safe and would affect any other service using the same instance.
@@ -80,6 +92,11 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         // Background work: Polly retries transient failures with exponential backoff + jitter (#116). The
         // OllamaResponseException raised below comes AFTER a 200, so the pipeline has already returned and
         // cannot retry it — deterministic failures are excluded by construction, not by a rule.
+        //
+        // COMPLETION-OPTION CONTRACT (#244): PostAsJsonAsync reads the FULL BODY inside the pipeline, and that
+        // is deliberate — it keeps a mid-body failure retryable, which is what background work wants (nobody is
+        // waiting). Switching this to ResponseHeadersRead would silently stop that. The full contract for all
+        // four call sites is stated once, in OllamaResilience.
         {
             {
                 var response = await OllamaResilience.Background
@@ -197,6 +214,10 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                         {
                             Content = JsonContent.Create(requestBody)
                         };
+                        // COMPLETION-OPTION CONTRACT (#244): ResponseHeadersRead is load-bearing, not incidental.
+                        // It is what keeps a mid-body failure OUTSIDE this pipeline, so a minutes-long generation
+                        // is never silently re-run while a human waits (#221). Change it to a full body read and
+                        // that bug returns — invisibly on Windows. Stated once in OllamaResilience.
                         return await _httpClient
                             .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
                             .ConfigureAwait(false);
@@ -204,7 +225,23 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                     .ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
-                var responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: cancellationToken).ConfigureAwait(false);
+                // Bound the body read (#266). Under ResponseHeadersRead, HttpClient.Timeout stops applying once
+                // the headers are in, so this read would otherwise hang forever against a backend that flushes
+                // headers and then stalls before the JSON body — the blocking twin of the streaming hang #230
+                // fixed. It gets the SAME budget as the headers phase (the effective HttpClient.Timeout) via a
+                // linked source; a genuine client cancel keeps its own path (the `when` guard, as in #227).
+                using var readCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                readCts.CancelAfter(_httpClient.Timeout);
+                JsonObject? responseJson;
+                try
+                {
+                    responseJson = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: readCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new OllamaStalledException(
+                        $"Ollama sent response headers but no usable body within {_httpClient.Timeout.TotalSeconds:0}s — the backend appears wedged mid-response.");
+                }
                 var responseText = responseJson?["response"]?.ToString();
 
                 // A 200 OK with no usable answer in it is a BACKEND FAILURE, and is now reported as one (#225).
@@ -267,13 +304,13 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
     /// path), and a body-phase failure is out of the pipeline's reach.
     /// </para>
     /// </summary>
-    public IAsyncEnumerable<string> StreamRAGResponseAsync(
+    public IAsyncEnumerable<RagStreamEvent> StreamRAGResponseAsync(
         string query,
         IReadOnlyList<GraphNode> contextNodes,
         CancellationToken cancellationToken = default)
         => StreamRAGResponseAsync(query, contextNodes, RagPromptOptions.Default, cancellationToken);
 
-    public async IAsyncEnumerable<string> StreamRAGResponseAsync(
+    public async IAsyncEnumerable<RagStreamEvent> StreamRAGResponseAsync(
         string query,
         IReadOnlyList<GraphNode> contextNodes,
         RagPromptOptions options,
@@ -307,6 +344,10 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             {
                 Content = JsonContent.Create(requestBody)
             };
+            // COMPLETION-OPTION CONTRACT (#244): ResponseHeadersRead is load-bearing, not incidental. It returns
+            // before a single byte is yielded, which is the ONLY reason retrying this send is safe — a failure
+            // the pipeline can see is always pre-token, so no token can ever be emitted twice (#224). Change it
+            // to a full body read and the stream becomes retryable mid-answer. Stated once in OllamaResilience.
             return await _httpClient
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
                 .ConfigureAwait(false);
@@ -315,6 +356,13 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var reader = new StreamReader(stream);
+
+        // Idle-timeout guard for the body (#230): under ResponseHeadersRead, HttpClient.Timeout stops applying
+        // once headers are in, so a backend that emits a few tokens and then stalls would hang the request
+        // forever. This linked source is armed ONLY around each read and disarmed the instant a line arrives,
+        // so it times the backend's silence, not the consumer's backpressure at `yield` — a slow-but-alive
+        // model keeps resetting it, and only a wedged backend (no token for the whole window) trips it.
+        using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         // Buffer the full answer alongside streaming it, so a citation-validation footer can be appended
         // once the whole answer is known (a single [Name @ …] can span two chunks) — TICKET-206.
@@ -325,7 +373,22 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            string? line;
+            idleCts.CancelAfter(_streamIdleTimeout); // arm the idle window for this read
+            try
+            {
+                line = await reader.ReadLineAsync(idleCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The window elapsed with no new token AND the client did not disconnect → the backend stalled
+                // mid-answer. Surface it as a failure — it joins the mid-stream failure path #227 fixed (a 500
+                // if nothing was yielded yet, otherwise the endpoint's "answer incomplete" marker) — instead of
+                // hanging forever. The `when` guard keeps a genuine client disconnect on its quiet path (#227).
+                throw new OllamaStalledException(
+                    $"The Ollama stream went idle for over {_streamIdleTimeout.TotalSeconds:0}s mid-answer — the backend appears wedged (no further tokens, no completion).");
+            }
+            idleCts.CancelAfter(Timeout.InfiniteTimeSpan); // disarm: a token arrived; don't count processing/yield time
             if (line is null)
             {
                 break; // end of stream
@@ -353,7 +416,7 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             if (!string.IsNullOrEmpty(token))
             {
                 full.Append(token);
-                yield return token;
+                yield return RagStreamEvent.OfToken(token);
             }
             if (done)
             {
@@ -377,24 +440,24 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
         if (completed)
         {
-            // Append the invalid-citation footer (if any) after the model's own text — never rewrite it.
+            // Unsupported citations are DATA now, not a prose footer spliced into the answer (#231). This used
+            // to yield a fixed-English block "so app.js strips it consistently" — app.js is gone (#262), and the
+            // string-strip coupling it existed for is exactly what a typed event removes. The consumer decides
+            // how to show it, and the model cannot forge it by writing the same words.
             var validNames = RagPromptBuilder.ValidCitationNames(plan.Nodes);
             var report = CitationValidator.Validate(full.ToString(), validNames);
             if (report.HasInvalidCitations)
             {
-                // Fixed marker — ALWAYS English, identical to CitationValidator's footer so app.js strips it
-                // consistently across the streaming and blocking paths (regardless of answer language).
-                var sb = new System.Text.StringBuilder("\n\n");
-                sb.AppendLine("> ⚠ **Unsupported sources:** the following cited sources are NOT in the provided context and are therefore unverified:");
-                foreach (var name in report.InvalidCitations) sb.AppendLine($"> - {name}");
-                yield return sb.ToString();
+                yield return RagStreamEvent.OfUnsupportedCitations(report.InvalidCitations);
             }
+            yield return RagStreamEvent.OfDone(complete: true);
         }
         else
         {
-            // Stream ended without Ollama's terminal done=true — the backend was cut off mid-answer.
-            // Emit a marker so the caller/UI doesn't present a truncated answer as complete.
-            yield return "\n\n_… [Answer incomplete — connection to the model was interrupted]_";
+            // Stream ended without Ollama's terminal done=true — the backend was cut off mid-answer. The tokens
+            // already emitted are real, so they stand; the incompleteness travels as a signal instead of as the
+            // English sentence it used to append to the user's answer.
+            yield return RagStreamEvent.OfDone(complete: false);
         }
     }
 

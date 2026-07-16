@@ -56,7 +56,11 @@ builder.Services.AddHealthChecks()
 // Multi-project registry, rooted at the nearest ancestor workspace containing a shonkor.json.
 // Registered lazily (via factory) so tests can substitute a ProjectManager rooted at a temp workspace
 // instead of the developer's real one.
-builder.Services.AddSingleton(_ => new ProjectManager(FindWorkspacePath()));
+// The logger comes from the container (#256) so registry-load failures honour log configuration instead of
+// going straight to stderr. The CLI keeps passing none: there, stderr IS the log channel, because stdout
+// carries the MCP JSON-RPC protocol.
+builder.Services.AddSingleton(sp => new ProjectManager(
+    FindWorkspacePath(), sp.GetRequiredService<ILoggerFactory>().CreateLogger<ProjectManager>()));
 
 // Force-load YamlDotNet into the AppDomain so dynamic plugins can reference it.
 _ = typeof(YamlDotNet.Serialization.Deserializer);
@@ -119,8 +123,46 @@ if (!app.Environment.IsDevelopment()
 
 // --- Middleware pipeline ---
 
-// ATLAS is the primary UI: redirect the bare root to it. The legacy dashboard stays reachable at
-// /index.html. This runs before UseDefaultFiles so "/" never resolves to the old shell.
+// Security headers on every response (#260, tightened in #271).
+//
+// script-src carries NO 'unsafe-inline' (#271). That is the setting that matters: with it, a policy that
+// permits the page's own inline handlers permits ANY injected inline script, which is most of what a CSP is
+// for. ATLAS's script now lives in atlas.js (covered by 'self') and its controls dispatch from data-act
+// attributes, so there is no script-in-markup left to allow. Keep it that way — an inline handler or an
+// inline <script> added here will simply not run, and no nonce or hash can rescue one: the markup is
+// generated, and browsers ignore 'unsafe-inline' the moment a nonce or hash is present. It is all or none.
+//
+// style-src DOES keep 'unsafe-inline', deliberately. The ~46 inline style attributes and the <style> block are
+// a much weaker vector than script (no code execution), and removing them would be a large diff for very
+// little — the point of #271 was script execution, and that is now closed.
+//
+// The rest is a source allow-list: an injected <script src> or stylesheet from an unlisted host is blocked,
+// and the object/base/framing vectors are shut (frame-ancestors 'none' also gives clickjacking protection).
+// Hosts are exactly what ATLAS loads: cdnjs (d3) and Google Fonts (googleapis for the CSS, gstatic for the
+// font files). The legacy dashboard's unpkg/jsdelivr/Prism deps were dropped with it (#262).
+//
+// escapeHtml remains the primary defence against injected markup; this is defence-in-depth behind it.
+const string contentSecurityPolicy =
+    "default-src 'self'; " +
+    "script-src 'self' https://cdnjs.cloudflare.com; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    "img-src 'self' data:; " +
+    "connect-src 'self'; " +
+    "object-src 'none'; " +
+    "base-uri 'self'; " +
+    "frame-ancestors 'none'";
+app.Use(async (ctx, next) =>
+{
+    var headers = ctx.Response.Headers;
+    headers["Content-Security-Policy"] = contentSecurityPolicy;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["X-Frame-Options"] = "DENY"; // legacy fallback for browsers predating frame-ancestors
+    headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    await next();
+});
+
+// ATLAS is the only UI: redirect the bare root to it. (The legacy /index.html dashboard was removed in #262.)
 app.Use(async (ctx, next) =>
 {
     if (ctx.Request.Path == "/")
@@ -137,14 +179,11 @@ app.Use(async (ctx, next) =>
 // matched files, so only unmatched requests (the /api/* endpoints) reach the ApiKeyMiddleware below.
 app.UseDefaultFiles();
 
-var contentTypeProvider = new FileExtensionContentTypeProvider();
-contentTypeProvider.Mappings[".po"] = "text/plain";
 app.UseStaticFiles(new StaticFileOptions
 {
-    ContentTypeProvider = contentTypeProvider,
-    // Never cache HTML: the shell references versioned assets (app.js?v=, app.css?v=), so the browser
-    // must always re-fetch index.html to learn the current versions. Otherwise a stale cached shell
-    // keeps loading old JS/CSS (e.g. an old API path) even after an update.
+    // Never cache HTML: the ATLAS shell references versioned assets, so the browser must always re-fetch the
+    // shell to learn the current versions. Otherwise a stale cached shell keeps loading old JS/CSS after an
+    // update.
     OnPrepareResponse = ctx =>
     {
         var path = ctx.File.Name;

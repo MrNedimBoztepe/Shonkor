@@ -16,7 +16,12 @@ namespace Shonkor.Tests;
 /// <para>
 /// This deliberately does not silence the failure. The point of #236 is not to hide the noise but to label
 /// it, so the CI log stays honest — the error still prints, it just arrives wearing a tag that says it was
-/// asked for. If we ever want to gate on it, grep the build log for stack traces not preceded by the marker.
+/// asked for.
+/// </para>
+/// <para>
+/// This is now <b>enforced</b> (#255): CI runs <c>scripts/gate-expected-errors.sh</c> over the captured test
+/// log and fails the build if a deliberate-error line is not balanced by a marker. So a new negative test that
+/// logs an exception <b>must</b> call <see cref="Emit"/> right before the action, or the gate goes red.
 /// </para>
 /// </summary>
 internal static class ExpectedError

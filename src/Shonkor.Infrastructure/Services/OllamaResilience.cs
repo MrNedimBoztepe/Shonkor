@@ -55,6 +55,46 @@ namespace Shonkor.Infrastructure.Services;
 ///   failure. The old code had to distinguish "the caller cancelled" from "HttpClient timed out" by
 ///   inspecting the token, because both surface as <see cref="TaskCanceledException"/>.</item>
 /// </list>
+///
+/// <para>
+/// <b>The completion-option contract — the one place that states it (#244).</b> What each path retries, how
+/// many times, and what makes that safe is decided as much by the <c>HttpCompletionOption</c> at the call site
+/// as by the pipeline it picks: the option decides whether a body-phase failure happens <i>inside</i> the
+/// pipeline (retryable) or after it has already returned (not). That is four call sites that merely happen to
+/// pass the right enum, so:
+/// </para>
+/// <list type="table">
+///   <listheader><term>path</term><description>option · pipeline · attempts · what a MID-BODY failure does</description></listheader>
+///   <item><term><c>OllamaSemanticAnalyzer.AnalyzeNodeAsync</c> (background)</term>
+///   <description><c>PostAsJsonAsync</c> — full body read <b>inside</b> the pipeline · <see cref="Background"/> ·
+///   <see cref="BackgroundAttempts"/> · <b>retried</b>, which is correct: nobody is waiting on it.</description></item>
+///   <item><term><c>OllamaEmbeddingService.GenerateEmbeddingAsync</c> (background)</term>
+///   <description>the same — full body read inside the pipeline · <see cref="Background"/> ·
+///   <see cref="BackgroundAttempts"/> · <b>retried</b>.</description></item>
+///   <item><term><c>OllamaSemanticAnalyzer.GenerateRAGResponseAsync</c> (blocking)</term>
+///   <description><c>ResponseHeadersRead</c> (#221) · <see cref="Blocking"/> · <see cref="BlockingAttempts"/>,
+///   connect errors only · <b>never retried</b>: the body is read after the pipeline returned, so a
+///   minutes-long generation cannot be silently re-run while a human waits.</description></item>
+///   <item><term><c>OllamaSemanticAnalyzer.StreamRAGResponseAsync</c> (streaming)</term>
+///   <description><c>ResponseHeadersRead</c> (#224) · <see cref="Blocking"/> · <see cref="BlockingAttempts"/>,
+///   connect errors only · <b>never retried</b>: headers return before any byte is yielded, so a failure the
+///   pipeline can see is always pre-token — <b>a token can never be emitted twice</b>.</description></item>
+/// </list>
+/// <para>
+/// Flip a <c>ResponseHeadersRead</c> site to a full body read and the pipeline starts seeing body-phase
+/// failures: #221's bug returns (and per the platform table in <see cref="OllamaRetry"/> it would be
+/// <b>invisible on Windows</b>) and a stream becomes retryable mid-answer. Flip a background site the other way
+/// and it silently stops retrying the failures it exists to absorb. None of that is visible at the call site,
+/// so it is not left to prose: <c>OllamaCompletionOptionContractTests</c> fails if any of the four changes, and
+/// each site carries a comment pointing here.
+/// </para>
+/// <para>
+/// A corollary worth knowing before touching any of it (#230, #266): <c>ResponseHeadersRead</c> also ends
+/// <c>HttpClient.Timeout</c>'s reach at the headers, so <b>both</b> ResponseHeadersRead paths must bound their
+/// own body reads — the stream by an idle timeout that resets per token, the blocking read by the effective
+/// client timeout. The background paths need neither, because a full body read stays inside
+/// <c>HttpClient.Timeout</c>.
+/// </para>
 /// </summary>
 public static class OllamaResilience
 {

@@ -23,6 +23,8 @@ public static class SurprisingConnectionsEndpoints
 
     public static void MapSurprisingConnectionsEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // POST /api/surprising-connections — embedding-derived pairs that look related but have no direct edge.
         app.MapPost("/api/surprising-connections", async (SurprisingListRequest? req, HttpContext context, ProjectManager pm, CancellationToken ct) =>
         {
@@ -55,7 +57,7 @@ public static class SurprisingConnectionsEndpoints
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[API] surprising-connections failed. :: {ex}");
+                log.LogError(ex, "[API] surprising-connections failed.");
                 return Results.Problem("Surprising-connection detection failed.");
             }
         });
@@ -83,7 +85,7 @@ public static class SurprisingConnectionsEndpoints
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[API] surprising-connections explain failed. :: {ex}");
+                log.LogError(ex, "[API] surprising-connections explain failed.");
                 return Results.Problem("Failed to generate the surprising-connection explanation.");
             }
         });

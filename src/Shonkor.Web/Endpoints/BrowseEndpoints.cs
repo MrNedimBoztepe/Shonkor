@@ -21,6 +21,8 @@ public static class BrowseEndpoints
 {
     public static void MapBrowseEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         app.MapGet("/api/browse", (string? path, HttpContext context, IHostEnvironment env, IConfiguration config) =>
         {
             var allowBrowse = config.GetValue<bool?>("Security:AllowFilesystemBrowse") ?? env.IsDevelopment();
@@ -69,7 +71,7 @@ public static class BrowseEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to browse directory.", ex);
+                return Fail(log, "Failed to browse directory.", ex);
             }
         });
     }

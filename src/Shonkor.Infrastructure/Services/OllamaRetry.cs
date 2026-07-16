@@ -21,6 +21,25 @@ public sealed class OllamaResponseException : Exception
 }
 
 /// <summary>
+/// The backend accepted the request, began responding, and then went <b>silent</b> — the stream produced no
+/// further token inside its idle window (#230), or the blocking body never arrived inside the client timeout
+/// (#266).
+///
+/// <para>
+/// Deliberately NOT an <see cref="OllamaResponseException"/>: that one means "a 200 carrying an unusable
+/// payload" — the model answered, the answer is garbage. A stall is the opposite shape: nothing is wrong with
+/// what arrived, the backend simply stopped. The two have completely different remedies (<i>fix the model</i>
+/// vs <i>the backend is wedged — restart it / raise the timeout</i>), and #228 turns that distinction into a
+/// machine-readable code. Sharing a type would force the classifier to string-match the message, which is
+/// exactly the anti-pattern #231 exists to remove.
+/// </para>
+/// </summary>
+public sealed class OllamaStalledException : Exception
+{
+    public OllamaStalledException(string message) : base(message) { }
+}
+
+/// <summary>
 /// Retry <b>classification</b> for the Ollama-backed services: retry only what a retry can plausibly fix
 /// (transport failures, 5xx, 408/429, HttpClient timeouts) and never what it cannot (a deterministic 4xx, an
 /// unusable payload) — and never a cancellation the CALLER asked for.

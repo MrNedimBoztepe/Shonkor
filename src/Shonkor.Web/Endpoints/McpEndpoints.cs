@@ -67,9 +67,12 @@ public static class McpEndpoints
             // The embedding backend (Ollama) is wired here so search_semantic works over the HTTP relay.
             // persistentSession: false — this handler lives for exactly one POST, so session-scoped
             // state (set_project's override) cannot be carried; the tool refuses instead of pretending.
+            // logger: over the HTTP relay there is no stdio protocol to protect, so tool failures go through
+            // the host's logging like any other API error (#256) rather than straight to the process's stderr.
             var handler = new McpRequestHandler(projectManager, synthesizer, projectName,
                 lockToContextProject: isTenantLocked, embeddingService: embeddingService, fileParsers: fileParsers,
-                compilationCache: compilationCache, persistentSession: false);
+                compilationCache: compilationCache, persistentSession: false,
+                logger: context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Shonkor.Mcp"));
 
             using var reader = new StreamReader(context.Request.Body);
             var body = await reader.ReadToEndAsync();

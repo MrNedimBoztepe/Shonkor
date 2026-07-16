@@ -21,6 +21,8 @@ public static class IndexEndpoints
 {
     public static void MapIndexEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // POST /api/index - scan and (re)index a project's directory into the graph.
         app.MapPost("/api/index", async (IndexRequest? request, HttpContext context, IConfiguration config, ProjectManager pm, IEnumerable<IFileParser> parsers, SemanticCompilationCache compilationCache, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
@@ -100,7 +102,7 @@ public static class IndexEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Indexing operation failed.", ex);
+                return Fail(log, "Indexing operation failed.", ex);
             }
         });
     }

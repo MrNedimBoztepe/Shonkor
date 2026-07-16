@@ -25,6 +25,8 @@ public static class PluginEndpoints
 {
     public static void MapPluginEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // GET /api/plugins - list installed plugins with their lifecycle state.
         app.MapGet("/api/plugins", (ProjectManager pm) =>
         {
@@ -47,7 +49,7 @@ public static class PluginEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to list plugins.", ex);
+                return Fail(log, "Failed to list plugins.", ex);
             }
         });
 
@@ -84,7 +86,7 @@ public static class PluginEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to install plugin.", ex);
+                return Fail(log, "Failed to install plugin.", ex);
             }
             finally
             {
@@ -94,15 +96,15 @@ public static class PluginEndpoints
 
         // POST /api/plugins/{id}/activate - load this plugin on subsequent indexing.
         app.MapPost("/api/plugins/{id}/activate", (string id, HttpContext context, ProjectManager pm) =>
-            RunTransition(context, pm, r => r.Activate(id)));
+            RunTransition(log, context, pm, r => r.Activate(id)));
 
         // POST /api/plugins/{id}/deactivate - stop loading this plugin.
         app.MapPost("/api/plugins/{id}/deactivate", (string id, HttpContext context, ProjectManager pm) =>
-            RunTransition(context, pm, r => r.Deactivate(id)));
+            RunTransition(log, context, pm, r => r.Deactivate(id)));
 
         // DELETE /api/plugins/{id} - uninstall (remove files + registry entry).
         app.MapDelete("/api/plugins/{id}", (string id, HttpContext context, ProjectManager pm) =>
-            RunTransition(context, pm, r => r.Uninstall(id)));
+            RunTransition(log, context, pm, r => r.Uninstall(id)));
 
         // GET /api/node-types - aggregate node types across core parsers, active plugins, and system types.
         app.MapGet("/api/node-types", (ProjectManager pm, IEnumerable<IFileParser> coreParsers) =>
@@ -132,12 +134,12 @@ public static class PluginEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to get node types.", ex);
+                return Fail(log, "Failed to get node types.", ex);
             }
         });
     }
 
-    private static IResult RunTransition(HttpContext context, ProjectManager pm, Func<PluginRegistry, PluginOperationResult> op)
+    private static IResult RunTransition(ILogger log, HttpContext context, ProjectManager pm, Func<PluginRegistry, PluginOperationResult> op)
     {
         if (!context.IsLoopback())
         {
@@ -150,7 +152,7 @@ public static class PluginEndpoints
         }
         catch (Exception ex)
         {
-            return Fail("Plugin operation failed.", ex);
+            return Fail(log, "Plugin operation failed.", ex);
         }
     }
 }

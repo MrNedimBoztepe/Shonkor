@@ -109,6 +109,40 @@ public class StreamingRagFailureTests
         return (res.StatusCode, await res.Content.ReadAsStringAsync());
     }
 
+    /// <summary>Parses the NDJSON body into its frames (#231): one JSON object per line.</summary>
+    private static List<JsonElement> Frames(string body) =>
+        body.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonDocument.Parse(line).RootElement)
+            .ToList();
+
+    /// <summary>The answer text: the concatenation of the <c>token</c> frames, and nothing else.</summary>
+    private static string Answer(string body) =>
+        string.Concat(Frames(body)
+            .Where(f => f.TryGetProperty("token", out _))
+            .Select(f => f.GetProperty("token").GetString()));
+
+    /// <summary>
+    /// Asserts the stream ended in a failure and returns the machine-readable class (#228).
+    ///
+    /// <para>
+    /// This is what replaced <c>Assert.Contains("Error streaming the answer", body)</c>. That assertion could
+    /// not tell an error apart from a model that happened to write those words, and it pinned English prose as
+    /// the API contract — which is what #231 exists to end. A frame the model cannot author is the contract now.
+    /// </para>
+    /// </summary>
+    private static string FailureCode(string body)
+    {
+        var frames = Frames(body);
+
+        var error = Assert.Single(frames, f => f.TryGetProperty("error", out _));
+        var done = Assert.Single(frames, f => f.TryGetProperty("done", out _));
+
+        // A failure is never dressed as a finished answer: the terminal frame says so on its own.
+        Assert.False(done.GetProperty("complete").GetBoolean());
+
+        return error.GetProperty("error").GetProperty("code").GetString()!;
+    }
+
     /// <summary>
     /// <b>The bug.</b> Before #227 this was a <c>200 OK</c> with an empty body: Ollama hung, the
     /// <c>HttpClient</c> timeout fired, the <c>TaskCanceledException</c> was caught by the "client disconnected"
@@ -125,7 +159,9 @@ public class StreamingRagFailureTests
         Assert.NotEqual(HttpStatusCode.OK, status);
         Assert.Equal(HttpStatusCode.InternalServerError, status);
         Assert.NotEqual(string.Empty, body);
-        Assert.Contains("Error streaming the answer", body, StringComparison.OrdinalIgnoreCase);
+        // ...and it says WHICH failure (#228): the request outlived its budget. "Raise the timeout / use a
+        // smaller model" — a remedy nothing else on this page shares.
+        Assert.Equal("backend_timeout", FailureCode(body));
     }
 
     /// <summary>
@@ -142,7 +178,10 @@ public class StreamingRagFailureTests
         var (status, body) = await AskStreamAsync(backend.Url);
 
         Assert.Equal(HttpStatusCode.InternalServerError, status);
-        Assert.Contains("Error streaming the answer", body, StringComparison.OrdinalIgnoreCase);
+        // The backend answered 200 and streamed a well-formed terminal line — it is not unreachable and not
+        // timing out. It is answering with something unusable, and retrying gets the same nothing (#222).
+        Assert.Equal("backend_unusable_response", FailureCode(body));
+        Assert.Equal(string.Empty, Answer(body)); // no token frame was ever passed off as an answer
     }
 
     [Fact]
@@ -154,7 +193,7 @@ public class StreamingRagFailureTests
         var (status, body) = await AskStreamAsync(backend.Url);
 
         Assert.Equal(HttpStatusCode.InternalServerError, status);
-        Assert.Contains("Error streaming the answer", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("backend_error", FailureCode(body));
     }
 
     [Fact]
@@ -166,7 +205,9 @@ public class StreamingRagFailureTests
         var (status, body) = await AskStreamAsync(backend.Url);
 
         Assert.Equal(HttpStatusCode.InternalServerError, status);
-        Assert.Contains("Error streaming the answer", body, StringComparison.OrdinalIgnoreCase);
+        // Something IS listening and it said no — distinct from backend_unreachable, and the remedy differs:
+        // read the backend's own logs, do not go looking for a dead process.
+        Assert.Equal("backend_error", FailureCode(body));
     }
 
     /// <summary>
@@ -175,6 +216,14 @@ public class StreamingRagFailureTests
     /// tokens already sent are a perfectly readable paragraph — which is exactly why an unmarked truncation is a
     /// correctness bug the reader cannot see. The answer must arrive carrying its own incompleteness.
     /// </summary>
+    /// <remarks>
+    /// This test is where #231 is easiest to see. It used to assert <c>Contains("incomplete", body)</c> — and the
+    /// marker it matched was English prose appended to the model's own text. Two things were wrong with that: the
+    /// text was the API contract, so it could not be reworded or translated; and <b>a model that merely wrote the
+    /// word "incomplete" satisfied it</b>, which means the signal was forgeable by the very thing it was
+    /// describing. Now completeness rides on the terminal frame, where the model has no way to reach it, and the
+    /// token frames carry the model's words and nothing but.
+    /// </remarks>
     [Fact]
     public async Task APartialAnswer_ArrivesMarkedAsIncomplete_SoItCannotBeReadAsComplete()
     {
@@ -186,10 +235,13 @@ public class StreamingRagFailureTests
         var (status, body) = await AskStreamAsync(backend.Url);
 
         // The tokens the model DID produce are kept — they are real, and throwing them away helps nobody.
-        Assert.Contains("Tokens are hashed with SHA-256.", body, StringComparison.Ordinal);
+        // Note this is the ANSWER, not the raw body: the assertion can no longer be satisfied by a control
+        // signal that happens to contain the text.
+        Assert.Equal("Tokens are hashed with SHA-256.", Answer(body));
 
-        // ...but the answer says, in the answer itself, that it is not finished.
-        Assert.Contains("incomplete", body, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(HttpStatusCode.OK, status); // bytes were already on the wire; the marker carries the news
+        // ...but the stream says, in a frame beside the answer, that it is not finished.
+        var done = Assert.Single(Frames(body), f => f.TryGetProperty("done", out _));
+        Assert.False(done.GetProperty("complete").GetBoolean());
+        Assert.Equal(HttpStatusCode.OK, status); // bytes were already on the wire; the frame carries the news
     }
 }

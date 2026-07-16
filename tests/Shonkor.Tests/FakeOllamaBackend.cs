@@ -20,8 +20,28 @@ internal sealed class FakeOllamaBackend : IDisposable
     private readonly HttpListener _listener = new();
     private readonly HttpStatusCode? _status;
     private readonly string? _body;
+    private readonly string? _stallLine;
+    private readonly IReadOnlyList<string>? _dripLines;
+    private readonly TimeSpan _dripGap;
     private readonly List<HttpListenerContext> _hung = [];
     private int _requests;
+
+    /// <summary>
+    /// A backend that streams headers + one NDJSON token, flushes it, then <b>holds the connection open with
+    /// no further bytes</b> — the shape of a model that emits a little then wedges (#230). Headers arrive (so
+    /// <c>ResponseHeadersRead</c> returns and the first token is delivered), but the next body read blocks
+    /// forever, which is exactly what the stream idle-timeout must catch.
+    /// </summary>
+    public static FakeOllamaBackend ThatStreamsThenStalls(string firstLine) =>
+        new(HttpStatusCode.OK, stallLine: firstLine);
+
+    /// <summary>
+    /// A backend that streams <paramref name="lines"/> one at a time with <paramref name="gap"/> between them,
+    /// then closes. A slow-but-alive model: if each gap is under the idle timeout, the guard must NOT trip
+    /// (it resets on every token), even if the total exceeds the idle window (#230).
+    /// </summary>
+    public static FakeOllamaBackend ThatDripsThenCompletes(IReadOnlyList<string> lines, TimeSpan gap) =>
+        new(HttpStatusCode.OK, dripLines: lines, dripGap: gap);
 
     /// <summary>
     /// A backend that <b>accepts the connection and then never answers</b> — the only way to drive a real
@@ -49,10 +69,14 @@ internal sealed class FakeOllamaBackend : IDisposable
     /// which is what makes the request count a readable signal for telling the two policies apart.
     /// </param>
     /// <param name="body">Response body to return with <paramref name="status"/>, if any.</param>
-    public FakeOllamaBackend(HttpStatusCode? status = HttpStatusCode.ServiceUnavailable, string? body = null)
+    public FakeOllamaBackend(HttpStatusCode? status = HttpStatusCode.ServiceUnavailable, string? body = null,
+        string? stallLine = null, IReadOnlyList<string>? dripLines = null, TimeSpan dripGap = default)
     {
         _status = status;
         _body = body;
+        _stallLine = stallLine;
+        _dripLines = dripLines;
+        _dripGap = dripGap;
         Url = $"http://127.0.0.1:{FreePort()}";
         _listener.Prefixes.Add($"{Url}/");
         _listener.Start();
@@ -72,6 +96,44 @@ internal sealed class FakeOllamaBackend : IDisposable
             {
                 // Accept and hold. Never respond, never close — the client must hit its own timeout.
                 lock (_hung) _hung.Add(ctx);
+                continue;
+            }
+
+            if (_stallLine is not null)
+            {
+                // Headers + one token, flushed, then hold open forever (no more tokens, no done, no close).
+                try
+                {
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "application/x-ndjson";
+                    ctx.Response.SendChunked = true;
+                    var bytes = System.Text.Encoding.UTF8.GetBytes(_stallLine);
+                    await ctx.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+                    await ctx.Response.OutputStream.FlushAsync().ConfigureAwait(false);
+                }
+                catch { /* client already gone */ }
+                lock (_hung) _hung.Add(ctx); // hold; the idle-timeout guard on the client must end this
+                continue;
+            }
+
+            if (_dripLines is not null)
+            {
+                // Stream each line with a gap, then close cleanly. A slow-but-alive backend.
+                try
+                {
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "application/x-ndjson";
+                    ctx.Response.SendChunked = true;
+                    for (var i = 0; i < _dripLines.Count; i++)
+                    {
+                        if (i > 0) await Task.Delay(_dripGap).ConfigureAwait(false);
+                        var bytes = System.Text.Encoding.UTF8.GetBytes(_dripLines[i]);
+                        await ctx.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+                        await ctx.Response.OutputStream.FlushAsync().ConfigureAwait(false);
+                    }
+                    ctx.Response.Close();
+                }
+                catch { /* client already gone */ }
                 continue;
             }
 

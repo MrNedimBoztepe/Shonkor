@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -20,6 +21,8 @@ public static class SearchEndpoints
 {
     public static void MapSearchEndpoints(this WebApplication app)
     {
+        // Resolved once here and captured by the lambdas below (#256) — see EndpointHelpers.ApiLogger.
+        var log = app.ApiLogger();
         // GET /api/search - full-text (FTS5) search over nodes.
         app.MapGet("/api/search", async (string q, int? limit, int? offset, string? type, HttpContext context, ProjectManager pm, CancellationToken ct) =>
         {
@@ -36,7 +39,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Search failed.", ex);
+                return Fail(log, "Search failed.", ex);
             }
         });
 
@@ -55,7 +58,7 @@ public static class SearchEndpoints
                 var queryEmbedding = await embeddingService.GenerateEmbeddingAsync(q, EmbeddingKind.Query, ct);
                 if (queryEmbedding == null || queryEmbedding.Length == 0)
                 {
-                    return Fail("Failed to generate embedding for the search query.", new Exception("Embedding generation returned empty."));
+                    return Fail(log, "Failed to generate embedding for the search query.", new Exception("Embedding generation returned empty."));
                 }
 
                 var results = await storage.SearchSemanticAsync(queryEmbedding, limit ?? 15, ct);
@@ -63,7 +66,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Semantic search failed.", ex);
+                return Fail(log, "Semantic search failed.", ex);
             }
         });
 
@@ -89,7 +92,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Hybrid search failed.", ex);
+                return Fail(log, "Hybrid search failed.", ex);
             }
         });
 
@@ -124,7 +127,9 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to generate RAG response.", ex);
+                // The message stays generic (no internals leak); the code says WHICH failure it was (#228), so
+                // the blocking path and the stream's error frame speak one vocabulary.
+                return Fail(log, "Failed to generate RAG response.", RagFailureCode.Classify(ex), ex);
             }
         });
 
@@ -145,9 +150,11 @@ public static class SearchEndpoints
 
             if (prep.NoEvidence)
             {
-                // Deterministic abstention WITHOUT an LLM call — write it as the (single-chunk) answer.
-                context.Response.ContentType = "text/plain; charset=utf-8";
-                await context.Response.WriteAsync(prep.AbstentionText, ct);
+                // Deterministic abstention WITHOUT an LLM call — a real, complete answer, streamed as frames
+                // like any other so a consumer never has to special-case it.
+                context.Response.ContentType = NdjsonContentType;
+                await WriteFrameAsync(context, new { token = prep.AbstentionText }, ct);
+                await WriteFrameAsync(context, new { done = true, complete = true }, ct);
                 return;
             }
             if (prep.ContextNodes.Count == 0)
@@ -157,7 +164,10 @@ public static class SearchEndpoints
                 return;
             }
 
-            context.Response.ContentType = "text/plain; charset=utf-8";
+            // NDJSON, not text/plain (#231): one JSON object per line, mirroring the shape Ollama streams TO us.
+            // Control signals — an error, a truncated answer, unsupported citations — are frames the model has no
+            // way to author, instead of English prose spliced into its own text where it could forge them.
+            context.Response.ContentType = NdjsonContentType;
             // Context metadata as response headers (TICKET-205) — available before the body streams, so the
             // UI can show "Context: N nodes, M truncated" without polluting the text/plain answer stream.
             context.Response.Headers["X-Context-Nodes-Used"] = prep.Plan.Nodes.Count.ToString();
@@ -169,16 +179,23 @@ public static class SearchEndpoints
             {
                 if (streamingEnabled)
                 {
-                    await foreach (var chunk in semanticAnalyzer.StreamRAGResponseAsync(req.Query, prep.ContextNodes, prep.Options, ct).WithCancellation(ct))
+                    await foreach (var ev in semanticAnalyzer.StreamRAGResponseAsync(req.Query, prep.ContextNodes, prep.Options, ct).WithCancellation(ct))
                     {
-                        await context.Response.WriteAsync(chunk, ct);
+                        object frame = ev.Kind switch
+                        {
+                            RagStreamEventKind.Token => new { token = ev.Token },
+                            RagStreamEventKind.UnsupportedCitations => new { unsupportedCitations = ev.UnsupportedCitations },
+                            _ => new { done = true, complete = ev.Complete }
+                        };
+                        await WriteFrameAsync(context, frame, ct);
                         await context.Response.Body.FlushAsync(ct);
                     }
                 }
                 else
                 {
                     var full = await semanticAnalyzer.GenerateRAGResponseAsync(req.Query, prep.ContextNodes, prep.Options, ct);
-                    await context.Response.WriteAsync(full, ct);
+                    await WriteFrameAsync(context, new { token = full }, ct);
+                    await WriteFrameAsync(context, new { done = true, complete = true }, ct);
                 }
             }
             // The CLIENT went away. There is nothing to write to and nobody to read it, so returning quietly is
@@ -193,13 +210,18 @@ public static class SearchEndpoints
             catch (Exception ex)
             {
                 // Everything else, INCLUDING a timeout the client did not ask for: the backend failed us.
-                Console.Error.WriteLine($"[API] Streaming RAG response failed. :: {ex.Message}");
-                // Headers/body may already be sent; append a marker rather than trying to set a status code.
+                log.LogError(ex, "[API] Streaming RAG response failed.");
+                // Headers/body may already be sent; emit an error FRAME rather than trying to set a status code.
+                // The frame carries the machine-readable class (#228) — the same vocabulary /api/ask uses — so a
+                // consumer can act on it without reading prose, and the status code is no longer the only signal.
                 if (!context.Response.HasStarted)
                 {
                     context.Response.StatusCode = StatusCodes.Status500InternalServerError;
                 }
-                await context.Response.WriteAsync("\n[Error streaming the answer]", CancellationToken.None);
+                await WriteFrameAsync(context,
+                    new { error = new { code = RagFailureCode.Classify(ex), message = "The answer could not be streamed." } },
+                    CancellationToken.None);
+                await WriteFrameAsync(context, new { done = true, complete = false }, CancellationToken.None);
             }
         });
 
@@ -220,7 +242,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Subgraph traversal failed.", ex);
+                return Fail(log, "Subgraph traversal failed.", ex);
             }
         });
 
@@ -279,7 +301,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Failed to load node references.", ex);
+                return Fail(log, "Failed to load node references.", ex);
             }
         });
 
@@ -323,7 +345,7 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Path finding failed.", ex);
+                return Fail(log, "Path finding failed.", ex);
             }
         });
 
@@ -356,8 +378,18 @@ public static class SearchEndpoints
             }
             catch (Exception ex)
             {
-                return Fail("Capsule synthesis failed.", ex);
+                return Fail(log, "Capsule synthesis failed.", ex);
             }
         });
     }
+
+    /// <summary>The streamed answer's media type: one JSON object per line (#231).</summary>
+    private const string NdjsonContentType = "application/x-ndjson; charset=utf-8";
+
+    /// <summary>
+    /// Writes one NDJSON frame. Newline-terminated because the newline IS the framing — a consumer splits on it
+    /// and parses each line, exactly as this service already reads Ollama's own stream.
+    /// </summary>
+    private static Task WriteFrameAsync(HttpContext context, object frame, CancellationToken ct) =>
+        context.Response.WriteAsync(JsonSerializer.Serialize(frame) + "\n", ct);
 }

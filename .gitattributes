@@ -1,0 +1,3 @@
+# Shell scripts must stay LF even when checked out on Windows: a CRLF in a .sh breaks the shebang and every
+# command when the file runs on the Linux CI runner (\r is treated as part of the interpreter path / args).
+*.sh text eol=lf
