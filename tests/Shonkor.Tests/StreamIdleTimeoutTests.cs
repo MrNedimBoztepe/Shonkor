@@ -69,19 +69,21 @@ public class StreamIdleTimeoutTests
     [Fact]
     public async Task ASlowButAliveStream_IsNotKilled_TheIdleTimerResetsOnEveryToken()
     {
-        // Five tokens 400 ms apart (each gap well under the 1s idle window), then done. The gaps total 1.6s —
-        // MORE than the idle window — so a timer that did not reset per token would trip at 1s. Because it does
-        // reset, every individual gap clears the window and the whole answer arrives.
-        var lines = new[]
-        {
-            """{"response":"a ","done":false}""" + "\n",
-            """{"response":"b ","done":false}""" + "\n",
-            """{"response":"c ","done":false}""" + "\n",
-            """{"response":"d ","done":false}""" + "\n",
-            """{"response":"e","done":true}""" + "\n"
-        };
-        using var backend = FakeOllamaBackend.ThatDripsThenCompletes(lines, TimeSpan.FromMilliseconds(400));
-        var analyzer = Analyzer(backend.Url, idleSeconds: 1);
+        // 22 tokens 150 ms apart, then done. Two properties have to hold at once, and the margins are chosen so
+        // a loaded CI runner cannot flip either:
+        //   * every individual gap (150 ms) is FAR under the 3s idle window — it would have to stretch ~20x to
+        //     trip the guard. (An earlier version used 400 ms against a 1s window; a 2-core Windows runner
+        //     stretched one gap past 1s and failed the build. Runner jitter is the thing to design against.)
+        //   * the gaps TOTAL 3.15s — more than the idle window — so a timer that accumulated instead of
+        //     resetting would fire at 3s and kill this stream. It does not, so the whole answer arrives.
+        // Note a slow runner only makes the second property MORE true (bigger total), so slowness cannot mask a
+        // regression here; it can only threaten the per-gap margin, which is why that one is so generous.
+        var lines = new List<string>();
+        for (var i = 0; i < 21; i++) lines.Add("{\"response\":\"t" + i + " \",\"done\":false}\n");
+        lines.Add("{\"response\":\"end\",\"done\":true}\n");
+
+        using var backend = FakeOllamaBackend.ThatDripsThenCompletes(lines, TimeSpan.FromMilliseconds(150));
+        var analyzer = Analyzer(backend.Url, idleSeconds: 3);
 
         var sb = new StringBuilder();
         await foreach (var chunk in analyzer.StreamRAGResponseAsync("q", [Node()]))
@@ -89,6 +91,8 @@ public class StreamIdleTimeoutTests
             sb.Append(chunk);
         }
 
-        Assert.Contains("a b c d e", sb.ToString(), StringComparison.Ordinal); // completed in full, never killed
+        // Every token, in order, plus the terminal one: the stream ran to completion and was never killed.
+        var expected = string.Concat(Enumerable.Range(0, 21).Select(i => $"t{i} ")) + "end";
+        Assert.Contains(expected, sb.ToString(), StringComparison.Ordinal);
     }
 }
