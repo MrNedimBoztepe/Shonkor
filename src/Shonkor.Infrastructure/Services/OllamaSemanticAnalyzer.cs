@@ -92,6 +92,11 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
         // Background work: Polly retries transient failures with exponential backoff + jitter (#116). The
         // OllamaResponseException raised below comes AFTER a 200, so the pipeline has already returned and
         // cannot retry it — deterministic failures are excluded by construction, not by a rule.
+        //
+        // COMPLETION-OPTION CONTRACT (#244): PostAsJsonAsync reads the FULL BODY inside the pipeline, and that
+        // is deliberate — it keeps a mid-body failure retryable, which is what background work wants (nobody is
+        // waiting). Switching this to ResponseHeadersRead would silently stop that. The full contract for all
+        // four call sites is stated once, in OllamaResilience.
         {
             {
                 var response = await OllamaResilience.Background
@@ -209,6 +214,10 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
                         {
                             Content = JsonContent.Create(requestBody)
                         };
+                        // COMPLETION-OPTION CONTRACT (#244): ResponseHeadersRead is load-bearing, not incidental.
+                        // It is what keeps a mid-body failure OUTSIDE this pipeline, so a minutes-long generation
+                        // is never silently re-run while a human waits (#221). Change it to a full body read and
+                        // that bug returns — invisibly on Windows. Stated once in OllamaResilience.
                         return await _httpClient
                             .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
                             .ConfigureAwait(false);
@@ -335,6 +344,10 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
             {
                 Content = JsonContent.Create(requestBody)
             };
+            // COMPLETION-OPTION CONTRACT (#244): ResponseHeadersRead is load-bearing, not incidental. It returns
+            // before a single byte is yielded, which is the ONLY reason retrying this send is safe — a failure
+            // the pipeline can see is always pre-token, so no token can ever be emitted twice (#224). Change it
+            // to a full body read and the stream becomes retryable mid-answer. Stated once in OllamaResilience.
             return await _httpClient
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
                 .ConfigureAwait(false);
