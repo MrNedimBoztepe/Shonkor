@@ -231,7 +231,15 @@ public sealed class McpToolContext
 
         var stale = await StaleSuffixAsync(storage, def).ConfigureAwait(false);
 
-        if (incident.Count == 0) return string.Format(emptyMessage, def.Name, def.Type) + stale;
+        if (incident.Count == 0)
+        {
+            // #288 (Option 3): never emit an all-clear for a node type that structurally cannot carry the
+            // queried edge — point the caller at the node that can, instead of "safe to change in isolation".
+            var hint = EdgeCarrierRedirectHint(def);
+            if (!string.IsNullOrEmpty(hint))
+                return $"No {(incoming ? "inbound references to" : "outbound dependencies of")} '{def.Name}' ({def.Type})." + hint + stale;
+            return string.Format(emptyMessage, def.Name, def.Type) + stale;
+        }
 
         var filterNote = maxProvenance is { } mp ? $" (provenance ≤ {mp.ToString().ToLowerInvariant()})" : "";
         var sb = new System.Text.StringBuilder();

@@ -5,6 +5,31 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — A JS module queried by its bare stem reported a false all-clear despite real importers (#288)
+- For a JavaScript/TypeScript file the parser emits **two** nodes: a `JSComponent` (`{path}::{stem}`) and, via
+  the scanner, a `File` node (id = the plain path). Every `IMPORTS` edge targets the **File** node; the component
+  only ever carries an inbound `CONTAINS`. So the two nodes hold **disjoint** inbound edges, and a query on the
+  bare module stem (`moco-api`) resolved to the component — which by construction has **no inbound `IMPORTS`** —
+  and every impact/safety tool answered *"nothing references it — safe to change in isolation"* while three
+  modules imported it. A false all-clear is worse than "not found": it is a recommendation.
+- **Option 1 — resolve the stem to its File node.** `ResolveDefinitionAsync` now redirects a resolved
+  `JSComponent` to the `File` node that backs it (the node that actually carries the import fan-in), so
+  `moco-api` and `moco-api.js` answer **identically** across `references`, `find_usages`, `blast_radius`,
+  `edit_plan`, `related_tests` and `rename_plan`. Query-time only — **no re-index required.**
+- **Option 3 — an all-clear must be earned.** No impact/safety tool emits *"safe to change in isolation"* for a
+  node type that structurally cannot receive the queried edge. In the residual case where a `JSComponent` has no
+  backing `File` node (so the redirect cannot fire), the tools point the caller at the file instead of implying
+  the symbol is unused.
+- **`edit_plan` had a distinct, related defect:** its incoming-edges query lacked the `StructuralRelationships`
+  filter the other tools apply, so it listed the module's own `CONTAINS` edge as a *"reference site"* and omitted
+  the three real importers — a plausible-looking, wrong worklist. `edit_plan` now excludes structural containment,
+  as `references`/`find_usages`/`rename_plan` already did.
+- **`get_subgraph` handle parsing** accepts both `/` and `\` separators for the same logical path: a handle
+  quoted back with the host separator (`@/src\background\moco-api.js`) used to resolve to a different, usually
+  non-existent id and silently return an empty (and therefore misleading) graph.
+- **Not done here:** Option 2 (merging/attributing the `JSComponent`'s edges to the file) is deliberately out of
+  scope — it reaches into `CrossTechLinker`'s Sitecore cross-tech linking and needs its own ticket.
+
 ### Added — The streaming path's no-retry rule is pinned, and its stated reason was wrong (#224)
 - The last of the three "safe by construction" claims in the resilience code to be checked. The other two:
   #215/#218 (the retry classifiers) were **broken**; #222 (deterministic failures are never retried) **held**,

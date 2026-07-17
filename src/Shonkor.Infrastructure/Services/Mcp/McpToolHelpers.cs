@@ -257,8 +257,13 @@ public static class McpToolHelpers
         if (string.IsNullOrEmpty(handle)) return string.Empty;
         if (handle.StartsWith("@/", StringComparison.Ordinal) && !string.IsNullOrEmpty(basePath))
         {
-            // Handles carry '/' by contract (see ToHandle); re-seat them on the host separator on the way back.
-            var rel = handle[2..].Replace('/', System.IO.Path.DirectorySeparatorChar);
+            // Handles carry '/' by contract (see ToHandle), but a caller may quote one back with the host's
+            // own separator ('@/src\background\moco-api.js') — a plausible, equivalent form that used to
+            // resolve to a different (usually non-existent) id and silently return nothing (#288). Accept
+            // BOTH separators for the same logical path by re-seating either on the host separator.
+            var rel = handle[2..]
+                .Replace('\\', System.IO.Path.DirectorySeparatorChar)
+                .Replace('/', System.IO.Path.DirectorySeparatorChar);
             return System.IO.Path.Combine(basePath.TrimEnd('\\', '/'), rel);
         }
         return handle;
@@ -385,15 +390,53 @@ public static class McpToolHelpers
 
     /// <summary>
     /// Resolves a free-text symbol to its best-matching definition node: prefers an exact-name declaration
-    /// (Class/Method/…), then any exact-name node, then the first declaration, then the first hit.
+    /// (Class/Method/…), then any exact-name node, then the first declaration, then the first hit. A resolved
+    /// node that structurally cannot carry impact/dependency edges is redirected to the one that can (#288 —
+    /// see <see cref="RedirectToEdgeCarrierAsync"/>).
     /// </summary>
     public static async Task<GraphNode?> ResolveDefinitionAsync(IGraphStorageProvider storage, string symbol)
     {
         var hits = (await storage.SearchAsync(symbol, SymbolSearchLimit).ConfigureAwait(false)).Select(h => h.Node).ToList();
-        return hits.FirstOrDefault(n => IsExactNameMatch(n, symbol) && DeclarationTypes.Contains(n.Type))
+        var def = hits.FirstOrDefault(n => IsExactNameMatch(n, symbol) && DeclarationTypes.Contains(n.Type))
             ?? hits.FirstOrDefault(n => IsExactNameMatch(n, symbol))
             ?? hits.FirstOrDefault(n => DeclarationTypes.Contains(n.Type))
             ?? hits.FirstOrDefault();
+        return def is null ? null : await RedirectToEdgeCarrierAsync(storage, def).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// #288: Redirects a resolved definition that structurally cannot carry impact/dependency edges to the
+    /// node that can. The JS/TS parser emits a per-file <c>JSComponent</c>, but every <c>IMPORTS</c> edge
+    /// targets the file's <c>File</c> node — the component only ever holds an inbound <c>CONTAINS</c>. So a
+    /// bare module stem (<c>moco-api</c>) resolves to the component and would report a false all-clear, while
+    /// the file node (<c>moco-api.js</c>) sees the real importers. Redirect the component to its File node
+    /// (whose id is the component's <see cref="GraphNode.FilePath"/>) so the two answer identically. Returns
+    /// the original node unchanged when it is not such a dead end, or when no File node backs it.
+    /// </summary>
+    public static async Task<GraphNode> RedirectToEdgeCarrierAsync(IGraphStorageProvider storage, GraphNode def)
+    {
+        if (def.Type == "JSComponent" && !string.IsNullOrEmpty(def.FilePath))
+        {
+            var file = await storage.GetNodeByIdAsync(def.FilePath).ConfigureAwait(false);
+            if (file is { Type: "File" }) return file;
+        }
+        return def;
+    }
+
+    /// <summary>
+    /// #288 (Option 3): a pointer appended to an EMPTY impact/safety result when the resolved node is a type
+    /// that structurally cannot RECEIVE the queried edge — so the empty set is never read as a "safe to change
+    /// in isolation" all-clear. A <c>JSComponent</c> never receives <c>IMPORTS</c> (they land on its File
+    /// node); if analysis still lands on the component (its File node is absent from the graph), point the
+    /// caller at the file. Empty for ordinary nodes, which keeps the common path noise-free.
+    /// </summary>
+    public static string EdgeCarrierRedirectHint(GraphNode def)
+    {
+        if (def.Type != "JSComponent") return string.Empty;
+        var fileName = System.IO.Path.GetFileName(def.FilePath ?? string.Empty);
+        var target = string.IsNullOrEmpty(fileName) ? "its file" : $"the file '{fileName}'";
+        return $" NOTE: '{def.Name}' is a JSComponent node, which never receives IMPORTS — those land on {target}. "
+             + $"Query {target} for its real importers, not the bare module stem.";
     }
 
     /// <summary>

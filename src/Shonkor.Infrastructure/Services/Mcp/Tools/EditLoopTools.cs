@@ -351,13 +351,21 @@ public sealed class EditPlanTool : IMcpTool
         if (def.StartLine is int dl) defLoc += $":{dl}";
 
         var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
-        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id).ToList();
+        // Real reference sites only: exclude structural containment (#288). A CONTAINS edge (e.g. a File
+        // node containing its sole JSComponent) is not an actionable reference site, and listing it both
+        // masked the real importers and told the caller to "update" a containment relationship. AnalyzeTools
+        // already filters this on its incoming-edge queries; edit_plan did not.
+        var incoming = edges
+            .Where(e => e.TargetId == def.Id && e.SourceId != def.Id && !StructuralRelationships.Contains(e.Relationship))
+            .ToList();
 
         var sb = new System.Text.StringBuilder();
         sb.Append($"Edit plan — '{def.Name}' ({def.Type}) defined at {defLoc}\n");
         if (incoming.Count == 0)
         {
-            sb.Append("No reference sites — safe to change in isolation.\n");
+            // #288 (Option 3): don't hand back a false all-clear for a node type that cannot carry the edge.
+            var hint = EdgeCarrierRedirectHint(def);
+            sb.Append(string.IsNullOrEmpty(hint) ? "No reference sites — safe to change in isolation.\n" : "No reference sites." + hint + "\n");
         }
         else
         {
