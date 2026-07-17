@@ -156,6 +156,39 @@ public sealed class McpToolContext
     /// Returns a one-line "may be stale" warning to append to an analysis result when the resolved symbol's
     /// FILE changed on disk since indexing, or "" when fresh / untracked / no filesystem access.
     /// </summary>
+    /// <summary>
+    /// Names the project an answer came from, and how big it is — e.g. <c> in project 'shonkor' (2.726 nodes)</c>.
+    ///
+    /// <para>
+    /// Meant above all for the EMPTY answer (#286). "No matches for 'X'." reads as <i>this symbol does not
+    /// exist</i>. The true statement is <i>this symbol does not exist in project X</i>, and a reader supplies
+    /// the missing words themselves — wrongly, when the index is pointed somewhere else. That is the #157
+    /// class in our own tool surface: a plausible answer to a question nobody asked. An agent hitting this
+    /// had to run <c>get_stats</c> AND <c>orient</c> and reason from node types to work out it was querying a
+    /// different repository; the node count is what finally gave it away, so it belongs where it is free.
+    /// </para>
+    /// <para>
+    /// Never throws: a scope note that can fail would turn a working search into an error, which is a worse
+    /// trade than an unlabelled result.
+    /// </para>
+    /// </summary>
+    public async Task<string> ScopeSuffixAsync(IGraphStore storage, string? projectName, CancellationToken ct = default)
+    {
+        try
+        {
+            var name = ResolveProjectName(projectName);
+            if (string.IsNullOrWhiteSpace(name)) name = ProjectManager.GetActiveProjectName();
+            if (string.IsNullOrWhiteSpace(name)) return string.Empty;
+
+            var stats = await storage.GetStatisticsAsync(ct).ConfigureAwait(false);
+            return $" in project '{name}' ({stats.TotalNodes:N0} nodes)";
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
     public async Task<string> StaleSuffixAsync(IGraphStore storage, GraphNode def, CancellationToken ct = default)
     {
         if (FileParsers == null || string.IsNullOrEmpty(def.FilePath)) return string.Empty;

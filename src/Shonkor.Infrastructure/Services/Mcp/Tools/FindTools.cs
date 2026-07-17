@@ -53,7 +53,7 @@ public sealed class SearchGraphTool : IMcpTool
             // no connections, no indentation. Closer to ripgrep output than verbose JSON.
             if (results.Count == 0)
             {
-                return SendToolResponse(id, $"No matches for '{query}'{(typeFilter != null ? $" (type={typeFilter})" : "")}.");
+                return SendToolResponse(id, $"No matches for '{query}'{(typeFilter != null ? $" (type={typeFilter})" : "")}{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.");
             }
 
             var lines = results.Select(r =>
@@ -130,7 +130,7 @@ public sealed class LocateTool : IMcpTool
         var results = await storage.SearchAsync(query, limit).ConfigureAwait(false);
         if (results.Count == 0)
         {
-            return SendToolResponse(id, $"No matches for '{query}'.");
+            return SendToolResponse(id, $"No matches for '{query}'{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.");
         }
 
         var basePath = ctx.GetProjectBasePath(projectName);
@@ -207,7 +207,7 @@ public sealed class SearchSemanticTool : IMcpTool
             var hint = anyBelow > 0
                 ? $" {anyBelow} weak hit(s) below the similarity floor ({minScore:0.##}) were hidden — lower minScore to see them."
                 : " (Have nodes been embedded by the enrichment worker yet?)";
-            return SendToolResponse(id, $"No semantically similar nodes for '{query}' at or above similarity {minScore:0.##}.{hint}");
+            return SendToolResponse(id, $"No semantically similar nodes for '{query}' at or above similarity {minScore:0.##}{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.{hint}");
         }
 
         var lines = results.Select(r =>
@@ -268,7 +268,7 @@ public sealed class SearchHybridTool : IMcpTool
         var fused = await ctx.HybridSearchAsync(storage, query, limit).ConfigureAwait(false);
         if (fused.Count == 0)
         {
-            return SendToolResponse(id, $"No hybrid matches for '{query}'.");
+            return SendToolResponse(id, $"No hybrid matches for '{query}'{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.");
         }
 
         var lines = fused.Select(r =>

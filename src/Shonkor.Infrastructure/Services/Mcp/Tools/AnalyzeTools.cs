@@ -216,7 +216,7 @@ public sealed class FindUsagesTool : IMcpTool
             && PassesProvenance(e.Provenance, maxProv)).ToList();
         if (incoming.Count == 0)
         {
-            return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found in the graph.");
+            return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.");
         }
 
         var filterNote = maxProv is { } mp ? $" (provenance ≤ {mp.ToString().ToLowerInvariant()})" : "";
@@ -362,7 +362,7 @@ public sealed class ImplementationsOfTool : IMcpTool
 
         if (impls.Count == 0)
         {
-            return SendToolResponse(id, $"No implementations or subclasses of '{name}' found in the graph.");
+            return SendToolResponse(id, $"No implementations or subclasses of '{name}' found{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.");
         }
 
         var sb = new System.Text.StringBuilder();
