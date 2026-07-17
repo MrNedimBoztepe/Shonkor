@@ -83,7 +83,7 @@ public sealed class SetProjectTool : IMcpTool
     public object GetSchema() => new
     {
         name = "set_project",
-        description = "Switch the ACTIVE project this session works with — for clients (e.g. Claude Desktop) that have no per-chat working directory, so you can say 'work with FPM' and have every following tool call resolve to that project's graph. Lists the available projects when called with no name. (No effect when the server is locked to a single tenant.)",
+        description = "Switch the project THIS SESSION works with — for clients (e.g. Claude Desktop) that have no per-chat working directory, so you can say 'work with FPM' and have every following tool call resolve to that project's graph. SAFE TO CALL: the switch is session-local. It does not touch the shared registry and cannot change what any other chat or client sees, so you never need to ask permission to point yourself at the right graph. Lists the available projects when called with no name. (No effect when the server is locked to a single tenant; not supported over the per-request HTTP relay, which refuses rather than silently losing the switch.)",
         inputSchema = new
         {
             type = "object",
