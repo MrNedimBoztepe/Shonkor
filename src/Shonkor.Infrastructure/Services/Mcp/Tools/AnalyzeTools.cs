@@ -99,6 +99,10 @@ public sealed class ReferencesTool : IMcpTool
 
             if (affected.Count == 0)
             {
+                // #288 (Option 3): a structurally edge-less node type must not be reported as "safe to change".
+                var hint = EdgeCarrierRedirectHint(refDef);
+                if (!string.IsNullOrEmpty(hint))
+                    return SendToolResponse(id, $"Blast radius of '{refDef.Name}' ({refDef.Type}): no dependents on this node." + hint);
                 return SendToolResponse(id, $"Blast radius of '{refDef.Name}' ({refDef.Type}): nothing depends on it — safe to change in isolation, or it is an entry point. (CALLS-level impact needs semantic indexing.)");
             }
 
@@ -216,7 +220,10 @@ public sealed class FindUsagesTool : IMcpTool
             && PassesProvenance(e.Provenance, maxProv)).ToList();
         if (incoming.Count == 0)
         {
-            return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.");
+            // #288 (Option 3): if the resolved node cannot carry the queried edge, say so and point at the
+            // node that can, rather than implying the symbol is genuinely unused.
+            var hint = EdgeCarrierRedirectHint(def);
+            return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.{hint}");
         }
 
         var filterNote = maxProv is { } mp ? $" (provenance ≤ {mp.ToString().ToLowerInvariant()})" : "";
