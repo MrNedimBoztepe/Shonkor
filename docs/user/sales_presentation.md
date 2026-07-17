@@ -49,11 +49,13 @@ Every number below is **measured, dated, and reproducible with a command we ship
 | **vs. naive chunked RAG** (graph contribution) | **+9,1 pp** coverage | Like-for-like 2×2 (hybrid retrieval both sides): Shonkor **93,9 %** vs chunks **84,8 %**, at a matched token budget. `--compare-rag` |
 | **Database footprint** | **20,1 MB** | Local SQLite, embeddings included. Sized for your machine — not for your Git history. |
 
-> **How we read our own head-to-head.** Two caveats we publish rather than bury.
+> **How we read our own head-to-head.** Three caveats we publish rather than bury.
 >
 > **One:** the win is read off the **like-for-like diagonal** — hybrid retrieval on *both* sides, so the graph is the only difference (**+9,1 pp**). Seeded by vector alone, Shonkor scores **81,8 %** and the baseline **84,8 %** — a cell we publish rather than hide.
 >
 > **Two:** the baseline is vector-only and our winning row is hybrid. That is the conventional "naive RAG" setup, but a fair critic would want the chunks to get a keyword arm too. That comparison is an open ticket, not a settled result.
+>
+> **Three:** a sharp customer asks whether the +9,1 is really the *graph* or just the **AI summaries** the nodes carry. We measured it, paired in one process (`--enrich-baseline`): hand the baseline's chunks those same summaries and the gap does **not** close — the arms differ by about three cases of 33, inside the noise band. The summary text isn't a transferable driver a chunk pipeline could copy; the win attaches to the node-as-unit and its edges.
 >
 > And coverage is the *low* bar regardless: it only asks whether the target's text is somewhere in the blob. The reason to buy Shonkor is not six percentage points — it is the **edges**. *"What breaks if I change this?"* is a question a chunk retriever cannot answer **at any budget**, because it has none.
 
