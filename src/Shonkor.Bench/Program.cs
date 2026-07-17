@@ -426,7 +426,20 @@ if (compareRag)
         var graphDelta = (rag.ShonkorHybridCoverage - rag.RagHybridCoverage) * 100;
         var hybridGain = (rag.RagHybridCoverage - rag.RagCoverage) * 100;
         report.AppendLine($"**The graph's isolated contribution** (hybrid diagonal, same retrieval both sides): **{graphDelta:+0.0;-0.0;0.0} pp** ({rag.ShonkorHybridCoverage:P1} vs {rag.RagHybridCoverage:P1}).");
-        report.AppendLine($"Moving the *baseline* from vector-only to hybrid gains **{hybridGain:+0.0;-0.0;0.0} pp** — but read that with the next line before concluding the keyword arm is worthless.");
+        if (rag.RagEnrichedHybridCoverage is { } enrichedCov)
+        {
+            // #189/#284 decomposition, PAIRED in one process: of the graph diagonal, how much survives once
+            // the baseline's chunks carry the same AI summaries the graph's nodes do?
+            var summaryDelta = (enrichedCov - rag.RagHybridCoverage) * 100;      // what the summaries alone buy the baseline
+            var topologyResidual = (rag.ShonkorHybridCoverage - enrichedCov) * 100; // graph over an equal-richness baseline
+            report.AppendLine();
+            report.AppendLine($"**Decomposition (#189, paired):** summary-enriched baseline hybrid = **{enrichedCov:P1}**. " +
+                $"Of the +{graphDelta:0.0} pp graph diagonal, giving the baseline equal-richness text moves it **{summaryDelta:+0.0;-0.0;0.0} pp**, " +
+                $"leaving **{topologyResidual:+0.0;-0.0;0.0} pp** to topology. " +
+                $"On this {rag.Queries}-case set the two arms differ by {Math.Abs((enrichedCov - rag.RagHybridCoverage) * rag.Queries):0} case(s), so read the split against the interval, not as a point estimate.");
+        }
+        report.AppendLine();
+        report.AppendLine($"Moving the *baseline* from vector-only to hybrid gains **{hybridGain:+0.0;-0.0;0.0} pp** — but read that withthe next line before concluding the keyword arm is worthless.");
         report.AppendLine();
         report.AppendLine($"> **Why the baseline's keyword arm barely moves it:** it returned any hit on only **{rag.RagKeywordFiredQueries} of {rag.Queries}** queries. A raw 40-line source chunk does not keyword-match plain-English intent (\"how are api tokens hashed\" finds no chunk containing all those words). Shonkor's *nodes* do — a node carries a **name** and an **AI summary** that read like intent — which is why its hybrid arm gains where the baseline's does not. So the graph diagonal above is not pure topology: part of the gap is that the graph's indexed unit is keyword-matchable and a source chunk is not. That is a real advantage of the representation, named rather than hidden.");
         report.AppendLine();

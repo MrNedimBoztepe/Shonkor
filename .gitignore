@@ -62,5 +62,6 @@ bench/report.md
 bench/metrics.json
 bench/cases.json
 bench/rag-chunk-cache.json
+bench/rag-chunk-cache-enriched.json
 bench/answers-report.md
 bench/answers-metrics.json

@@ -53,7 +53,8 @@ internal static class RagBaselineBenchmark
         double ShonkorSeedSurvival,
         double ShonkorHybridCoverage,
         int SeedMissedTarget,
-        int RagKeywordFiredQueries)
+        int RagKeywordFiredQueries,
+        double? RagEnrichedHybridCoverage = null)
     {
         public double TokenSavingPct => RagAvgTokens > 0 ? (1.0 - ShonkorAvgTokens / RagAvgTokens) * 100 : 0;
     }
@@ -73,9 +74,7 @@ internal static class RagBaselineBenchmark
         var chunks = BuildChunks(files);
         if (enrichBaselineChunks)
         {
-            // #189: equalise the INDEXED UNIT so whatever gap remains is topology, not richer text.
-            chunks = EnrichChunks(chunks, nodes);
-            log.WriteLine("  rag baseline: chunks ENRICHED with node summaries (#189) — this run isolates topology");
+            log.WriteLine("  rag baseline: also scoring a SUMMARY-ENRICHED baseline this run (#189/#284) — paired");
         }
         log.WriteLine($"  rag baseline: {chunks.Count} chunks from {files.Count} files; embedding (cached)...");
 
@@ -89,6 +88,24 @@ internal static class RagBaselineBenchmark
 
         // Keyword index over the chunks (#166), so the baseline's hybrid arm uses the SAME BM25 as the product.
         using var chunkFts = BuildChunkFts(embedded);
+
+        // #189/#284: the ENRICHED baseline is measured IN THIS SAME PROCESS, against the same cases and the
+        // same per-query budget as the plain one. The first cut compared a plain run to a separate enriched
+        // run, and the disk (bench/*.md is rewritten every run) drifted between them — so the "plain" baseline
+        // was not even the same in both. Pairing removes that confound: the only difference between the plain
+        // and enriched coverage below is the summary text, nothing else.
+        List<Chunk>? enrichedEmbedded = null;
+        SqliteConnection? enrichedFts = null;
+        if (enrichBaselineChunks)
+        {
+            var enrichedChunks = EnrichChunks(chunks, nodes);
+            await EmbedChunksAsync(enrichedChunks, emb, Path.Combine("bench", "rag-chunk-cache-enriched.json"), log);
+            enrichedEmbedded = enrichedChunks.Where(c => c.Embedding is { Length: > 0 }).ToList();
+            foreach (var ch in enrichedEmbedded) VectorMath.NormalizeL2(ch.Embedding!);
+            enrichedFts = BuildChunkFts(enrichedEmbedded);
+        }
+        using var _enrichedFts = enrichedFts;
+        double ragEnrichedHybridCov = 0;
 
         double ragTok = 0, ragCov = 0, ragHybridCov = 0, shTok = 0, shCov = 0, shSeedSurv = 0, shHybridCov = 0;
         var seedMissedTarget = 0;
@@ -168,13 +185,26 @@ internal static class RagBaselineBenchmark
             var fusedRank = RrfFuse(vectorRank, keywordRank);
             var (hybChunks, _) = PickWithinBudget(embedded, fusedRank, shTokQ);
             ragHybridCov += hybChunks.Any(ch => CoversExpected(ch, expectedNodes)) ? 1 : 0;
+
+            // Enriched baseline, same arithmetic on the enriched sets (#284). Paired to the plain arm above
+            // by construction: same query, same budget (shTokQ), same case — the delta is the summaries alone.
+            if (enrichedEmbedded is not null && enrichedFts is not null)
+            {
+                var evRank = enrichedEmbedded
+                    .Select((ch, i) => (i, sim: Score(qn, ch.Embedding!)))
+                    .OrderByDescending(x => x.sim).Select(x => x.i).ToList();
+                var eFused = RrfFuse(evRank, KeywordRankChunks(enrichedFts, c.Query));
+                var (eHyb, _) = PickWithinBudget(enrichedEmbedded, eFused, shTokQ);
+                ragEnrichedHybridCov += eHyb.Any(ch => CoversExpected(ch, expectedNodes)) ? 1 : 0;
+            }
             n++;
         }
 
         return n == 0
             ? null
             : new ComparisonResult(n, embedded.Count, ragTok / n, ragCov / n, ragHybridCov / n,
-                shTok / n, shCov / n, shSeedSurv / n, shHybridCov / n, seedMissedTarget, ragKeywordFired);
+                shTok / n, shCov / n, shSeedSurv / n, shHybridCov / n, seedMissedTarget, ragKeywordFired,
+                enrichedEmbedded is not null ? ragEnrichedHybridCov / n : null);
     }
 
     /// <summary>True when <paramref name="node"/>'s name appears as a whole word in the capsule text.</summary>
