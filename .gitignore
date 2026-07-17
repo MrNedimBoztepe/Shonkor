@@ -60,6 +60,7 @@ publish/
 # The checked-in exceptions: bench/golden/* (curated sets) and bench/answers-baseline.json (the gate).
 bench/report.md
 bench/metrics.json
+bench/cases.json
 bench/rag-chunk-cache.json
 bench/answers-report.md
 bench/answers-metrics.json

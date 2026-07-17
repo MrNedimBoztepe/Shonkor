@@ -71,6 +71,8 @@ graph TD
 ### 5. Shonkor.Bench (Measurement)
 * **Responsibility**: The single benchmark harness — token reduction, retrieval precision (P@1 / P@k / Recall@k / MRR for FTS, vector and hybrid), the matched-budget RAG head-to-head, and answer groundedness. Golden sets live under `bench/golden/`; `--baseline` gates a run against stored metrics, and `--check-circularity` guards a golden set from becoming self-matching.
 * It **supersedes** the former `Shonkor.Eval` and `Shonkor.Benchmarks` projects, which no longer exist.
+* **Aggregates vs. cases (#174)**: the metrics are means, and a mean that moves does not say *which* cases moved — the two readings of a small shift ("noise" vs. "a systematic effect at this sample size") are indistinguishable from the aggregate alone. Every run therefore also writes `bench/cases.json` (each case's rank-1 hit: id, node type, matched), and `--diff <before> <after>` reports the cases whose top hit changed, classified **REGRESSED / FIXED / same-verdict**. It needs no database (so a recorded run can be diffed after its graph is gone) and **always exits 0** — it is a lens, not a gate; `--baseline` owns pass/fail.
+* **The harness is itself under test (#191)**: its pure logic — RRF fusion, the budgeted chunk pick, the FTS keyword arm, the `GoldenMatch` coverage matcher, and `CaseDiff` — is unit-tested from `Shonkor.Tests` via `InternalsVisibleTo` and an `extern alias bench`. This is not optional polish: the RAG coverage metric once measured **nothing** for an unknown period (#157) because no test asserted that a bare expected name could resolve to a node. A harness that under-reports is loud; one that reports a plausible number for a comparison it never performed is not.
 
 ---
 
