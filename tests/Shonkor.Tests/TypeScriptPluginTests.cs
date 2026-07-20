@@ -413,6 +413,112 @@ public sealed class TypeScriptPluginTests : IDisposable
         Assert.DoesNotContain(nodes, n => n.Id.Contains("button.tsx::button", StringComparison.Ordinal));
     }
 
+    // ====================================================================================================
+    // #317: member-id qualification — same-name get/set accessors and method overloads no longer collapse
+    // onto one node under the store's ON CONFLICT(Id) upsert.
+    // ====================================================================================================
+
+    // ---- AC#1 + AC#2 (accessors): a get and set of the SAME name become TWO distinct kind-qualified nodes ----
+
+    [Fact]
+    public async Task GetterAndSetter_SameName_EmitTwoDistinctKindQualifiedNodes()
+    {
+        var dir = NewProjectDir();
+        var path = Path.Combine(dir, "Box.ts");
+        var code =
+            "export class Box {\n" +
+            "  private _v = 0;\n" +
+            "  get value(): number { return this._v; }\n" +
+            "  set value(v: number) { this._v = v; }\n" +
+            "}\n";
+        await File.WriteAllTextAsync(path, code);
+
+        var host = new TestHost();
+        await using var parser = new TypeScriptParser();
+        parser.Initialize(host);
+
+        var (nodes, _) = await parser.ParseAsync(path, code);
+
+        var cls = Assert.Single(nodes, n => n.Type == "Class" && n.Name == "Box");
+        // Both accessors surface, both named "value" (verbatim), but as TWO distinct nodes ...
+        var accessors = nodes.Where(n => n.Type == "Method" && n.Name == "value").ToList();
+        Assert.Equal(2, accessors.Count);
+        // ... discriminated by accessor kind in the id suffix (`:get` / `:set`).
+        Assert.Contains(accessors, n => n.Id == $"{cls.Id}::value:get");
+        Assert.Contains(accessors, n => n.Id == $"{cls.Id}::value:set");
+        Assert.Equal(2, accessors.Select(n => n.Id).Distinct().Count());
+
+        // AC#3: the distinct-id invariant is HARD here — this fixture has multiple members, so before #317
+        // (a single `::Box::value` for both) it would fail; it is no longer false-passing on one member.
+        Assert.Equal(nodes.Count, nodes.Select(n => n.Id).Distinct().Count());
+
+        // BUG-012 guard: names are verbatim / case-sensitive, never lowercased.
+        Assert.All(accessors, n => Assert.Contains("value:", n.Id, StringComparison.Ordinal));
+    }
+
+    // ---- AC#1 + AC#2 (overloads): an overload set dedups to ONE node anchored at the implementation ----
+
+    [Fact]
+    public async Task MethodOverloads_DedupToSingleImplementationNode()
+    {
+        var dir = NewProjectDir();
+        var path = Path.Combine(dir, "Api.ts");
+        var code =
+            "export class Api {\n" +
+            "  foo(x: number): void;\n" + // line 2: overload signature (no body)
+            "  foo(x: string): void;\n" + // line 3: overload signature (no body)
+            "  foo(x: any): void { }\n" + // line 4: implementation (body)
+            "}\n";
+        await File.WriteAllTextAsync(path, code);
+
+        var host = new TestHost();
+        await using var parser = new TypeScriptParser();
+        parser.Initialize(host);
+
+        var (nodes, _) = await parser.ParseAsync(path, code);
+
+        var cls = Assert.Single(nodes, n => n.Type == "Class" && n.Name == "Api");
+        // Chosen semantics: one logical method = one node (the bodyless overload signatures are NOT emitted
+        // as separate member nodes). See sidecar/nodeIds.js for the rationale.
+        var foo = Assert.Single(nodes, n => n.Type == "Method" && n.Name == "foo");
+        Assert.Equal($"{cls.Id}::foo", foo.Id);
+        // The node is anchored at the implementation (line 4), not a bodyless signature.
+        Assert.Equal(4, foo.StartLine);
+
+        // Distinct-id invariant holds against the overload set (before #317 it emitted three `::Api::foo`).
+        Assert.Equal(nodes.Count, nodes.Select(n => n.Id).Distinct().Count());
+    }
+
+    // ---- AC#3: the distinct-id invariant, hardened against a combined get/set + overload fixture ----
+
+    [Fact]
+    public async Task MemberIds_AreDistinct_AcrossAccessorsAndOverloads_NoSilentOverwrite()
+    {
+        var dir = NewProjectDir();
+        var path = Path.Combine(dir, "Combined.ts");
+        var code =
+            "export class Combined {\n" +
+            "  get value(): number { return 0; }\n" +
+            "  set value(v: number) {}\n" +
+            "  bar(x: number): void;\n" +
+            "  bar(x: string): void;\n" +
+            "  bar(x: any): void {}\n" +
+            "}\n";
+        await File.WriteAllTextAsync(path, code);
+
+        var host = new TestHost();
+        await using var parser = new TypeScriptParser();
+        parser.Initialize(host);
+
+        var (nodes, _) = await parser.ParseAsync(path, code);
+
+        // value:get, value:set, bar -> three member nodes, all distinct; the overload signatures add none.
+        var members = nodes.Where(n => n.Type == "Method").ToList();
+        Assert.Equal(3, members.Count);
+        // Every id is unique across the whole node set — no silent overwrite under ON CONFLICT(Id).
+        Assert.Equal(nodes.Count, nodes.Select(n => n.Id).Distinct().Count());
+    }
+
     // ---- test doubles ----
 
     private sealed class TestHost : IPluginHost

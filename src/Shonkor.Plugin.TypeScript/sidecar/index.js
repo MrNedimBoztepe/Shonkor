@@ -29,6 +29,10 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 
+// The node-ID scheme is the shared source of truth (#317): the same helpers back this parser and the
+// semantic linker (#294), so symbols referenced as edge targets are derived identically everywhere.
+const { componentIdFor, symbolIdFor, memberIdFor } = require('./nodeIds');
+
 const PROBE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
 
 // Cache the resolved typescript module per resolution key so we don't re-require per file.
@@ -199,29 +203,13 @@ function collectImports(ts, sourceFile, filePath, componentNodeId, edges) {
 }
 
 /*
- * #293 symbol extraction.
- *
- * Node id scheme (documented, collision-proof). The module/JSComponent node is `${filePath}::${basename}`
- * (2 `::`-segments). A top-level symbol is `${moduleId}::${name}` (3 segments); a member is
- * `${moduleId}::${ownerName}::${memberName}` (4 segments). Because the module node has strictly fewer id
- * segments than any symbol, a class named exactly like its file (Button.tsx -> `class Button`, ubiquitous
- * for React class components) can NEVER share an id with — and thus never overwrite via the store's
- * ON CONFLICT(Id) upsert — the signal-bearing JSComponent node. That is the BUG-012 family (id collisions
- * -> node loss / dead edges), which AC#6 pins. Ids are CASE-SENSITIVE: names are used verbatim, never
- * lowercased, so edges resolve on case-preserving stores / Windows paths.
+ * #293 symbol extraction. The node-id scheme (module/symbol/member ids, case-sensitivity, and the #317
+ * member qualification for accessors and overloads) lives in ./nodeIds.js — the shared source of truth.
  *
  * Heritage is resolved SAME-FILE only (ticket scope): an EXTENDS/IMPLEMENTS edge is emitted only when the
  * referenced base name is a top-level type declared in this very file. Cross-file / semantic resolution is
  * #294; final EXTRACTED tiering is #295 (these edges are non-structural, so the host stamps them INFERRED).
  */
-function symbolIdFor(moduleId, name) {
-  return `${moduleId}::${name}`;
-}
-
-function memberIdFor(moduleId, ownerName, memberName) {
-  return `${moduleId}::${ownerName}::${memberName}`;
-}
-
 function lineOf(sourceFile, pos) {
   try {
     return sourceFile.getLineAndCharacterOfPosition(pos).line + 1;
@@ -260,18 +248,34 @@ function pushSymbolNode(nodes, edges, sourceFile, node, id, name, type, filePath
   }
 }
 
-/** Emit Method/Property nodes for the members of a class or interface declaration. */
+/**
+ * Emit Method/Property nodes for the members of a class or interface declaration.
+ *
+ * Member ids are qualified so each logical member gets exactly one node (#317):
+ *  - get/set ACCESSORS of the same name carry their kind in the id (`::value:get` vs `::value:set`) -> two
+ *    distinct nodes, never collapsed onto one another;
+ *  - method OVERLOADS (the bodyless signatures plus the implementation) share one id and are DE-DUPLICATED
+ *    to a single node here (KISS: one logical method = one node at this syntactic tier). When several
+ *    declarations share an id, the node is anchored at the IMPLEMENTATION (the body-bearing declaration) so
+ *    its line provenance points at the code, falling back to the first declaration (e.g. interface overloads
+ *    that have no implementation) — deterministic by source order.
+ */
 function collectMembers(ts, decl, ownerId, ownerName, moduleId, filePath, sourceFile, nodes, edges) {
   const members = decl.members || [];
+  const seen = new Map(); // member id -> { index in nodes, hasBody }
   for (const member of members) {
     let type = null;
     let memberName = null;
-    if (
-      ts.isMethodDeclaration(member) ||
-      ts.isMethodSignature(member) ||
-      ts.isGetAccessorDeclaration(member) ||
-      ts.isSetAccessorDeclaration(member)
-    ) {
+    let accessorKind = null;
+    if (ts.isGetAccessorDeclaration(member)) {
+      type = 'Method';
+      memberName = declaredName(ts, member);
+      accessorKind = 'get';
+    } else if (ts.isSetAccessorDeclaration(member)) {
+      type = 'Method';
+      memberName = declaredName(ts, member);
+      accessorKind = 'set';
+    } else if (ts.isMethodDeclaration(member) || ts.isMethodSignature(member)) {
       type = 'Method';
       memberName = declaredName(ts, member);
     } else if (ts.isConstructorDeclaration(member)) {
@@ -284,8 +288,23 @@ function collectMembers(ts, decl, ownerId, ownerName, moduleId, filePath, source
       continue; // index signatures, static blocks, etc. are out of scope for the foundation ticket.
     }
     if (!memberName) continue;
-    const id = memberIdFor(moduleId, ownerName, memberName);
+
+    const id = memberIdFor(moduleId, ownerName, memberName, accessorKind);
+    const hasBody = !!member.body;
+    const existing = seen.get(id);
+    if (existing) {
+      // Overload / duplicate declaration: keep a single node. Prefer the implementation (body) as the anchor
+      // so line provenance points at real code rather than a bodyless signature.
+      if (hasBody && !existing.hasBody) {
+        const node = nodes[existing.index];
+        node.startLine = lineOf(sourceFile, member.getStart(sourceFile));
+        node.endLine = lineOf(sourceFile, member.getEnd());
+        existing.hasBody = true;
+      }
+      continue;
+    }
     pushSymbolNode(nodes, edges, sourceFile, member, id, memberName, type, filePath, ownerId);
+    seen.set(id, { index: nodes.length - 1, hasBody });
   }
 }
 
@@ -374,7 +393,7 @@ function parseRequest(req) {
   const tsconfig = loadTsconfig(ts, projectDir, diagnostics);
 
   const componentName = filePath ? path.basename(filePath).replace(/\.[^.]+$/, '') : 'module';
-  const componentNodeId = `${filePath}::${componentName}`;
+  const componentNodeId = componentIdFor(filePath, componentName);
 
   const properties = {};
   // Parity with the former host parser: Sitecore JSS / Next.js signature hints on the JSComponent node.
