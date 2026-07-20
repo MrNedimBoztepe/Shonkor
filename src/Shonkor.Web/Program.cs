@@ -66,10 +66,12 @@ builder.Services.AddSingleton(sp => new ProjectManager(
 _ = typeof(YamlDotNet.Serialization.Deserializer);
 
 // Core file parsers used by the indexing endpoint.
+// JS/TS parsing moved out of the host into the first-party `shonkor-typescript` base plugin (#292): a Node
+// sidecar running the real TypeScript Compiler API, with an in-plugin Esprima fallback. No host parser for
+// .js/.ts here — a second one would double-emit the JSComponent/IMPORTS shape via BuildParserMap.
 builder.Services.AddSingleton<IEnumerable<IFileParser>>(_ => new List<IFileParser>
 {
     new RoslynAstParser(),
-    new JavaScriptParser(),
     new PhpModuleParser(),
     new MarkdownHierarchyParser(),
     new GraphQLParser()

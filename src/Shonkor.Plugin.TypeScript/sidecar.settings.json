@@ -1,0 +1,5 @@
+{
+  "//": "Self-provisioned config read from the plugin folder at load time. NodePath: absolute path to the node executable; leave null to auto-discover (PATH, then common install locations). TimeoutSeconds: per-request parse budget before a timeout diagnostic fires.",
+  "NodePath": null,
+  "TimeoutSeconds": 30
+}

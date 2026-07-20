@@ -241,10 +241,10 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
             using var storage = new SqliteGraphStorageProvider(config.DatabasePath);
             await storage.InitializeAsync();
 
+            // JS/TS parsing lives in the first-party `shonkor-typescript` base plugin (#292), not the host.
             var parsers = new List<IFileParser>
             {
                 new RoslynAstParser(),
-                new JavaScriptParser(),
                 new PhpModuleParser(),
                 new MarkdownHierarchyParser(),
                 new GraphQLParser()
@@ -253,7 +253,9 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
             // Merge in the workspace's ACTIVE plugins (pre-built assemblies; installation is inert).
             var pluginWorkspace = Environment.GetEnvironmentVariable("SHONKOR_WORKSPACE");
             if (string.IsNullOrWhiteSpace(pluginWorkspace)) pluginWorkspace = ResolveWorkspacePath();
-            using var pluginLoad = AssemblyPluginLoader.LoadActive(pluginWorkspace);
+            // stderr is the CLI's log channel (stdout carries MCP JSON-RPC), so plugin diagnostics (#292
+            // sidecar timeouts / degradation) surface through a logger that writes there.
+            using var pluginLoad = AssemblyPluginLoader.LoadActive(pluginWorkspace, CliPluginHost.Instance);
             if (pluginLoad.Parsers.Count > 0)
             {
                 parsers.AddRange(pluginLoad.Parsers);
@@ -675,14 +677,20 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
 
             // Parsers enable reindex_file: the stdio CLI runs in the project directory, so it can re-index
             // a file the AI just edited and refresh the graph before the next query.
+            // JS/TS lives in the `shonkor-typescript` plugin (#292), so the active plugins are merged in here
+            // too — otherwise reindex_file would lose JS/TS support once the in-host parser was removed. The
+            // load is held for the MCP server's lifetime and disposed on shutdown (tears down the sidecar).
             var mcpParsers = new List<IFileParser>
             {
                 new RoslynAstParser(),
-                new JavaScriptParser(),
                 new PhpModuleParser(),
                 new MarkdownHierarchyParser(),
                 new GraphQLParser()
             };
+            var mcpPluginWorkspace = Environment.GetEnvironmentVariable("SHONKOR_WORKSPACE");
+            if (string.IsNullOrWhiteSpace(mcpPluginWorkspace)) mcpPluginWorkspace = ResolveWorkspacePath();
+            using var mcpPluginLoad = AssemblyPluginLoader.LoadActive(mcpPluginWorkspace, CliPluginHost.Instance);
+            mcpParsers.AddRange(mcpPluginLoad.Parsers);
             // Wire an embedding service when a backend is reachable, so search_semantic works over a graph
             // that has embeddings (built with `shonkor index --embed`). Absent backend → null → FTS-only
             // (unchanged behaviour, no startup delay: connection-refused returns immediately).

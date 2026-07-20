@@ -69,8 +69,12 @@ public static class IndexEndpoints
                     // Load the workspace's ACTIVE plugins (pre-built assemblies; no compilation). Installation
                     // is inert — only plugins the user explicitly activated load here.
                     var activeParsers = new List<IFileParser>(parsers);
+                    // Pass a host so plugins that opt into IPluginInitializable (#306) — e.g. the TypeScript
+                    // sidecar (#292) — can surface diagnostics (timeouts, Node-unavailable degradation, parse
+                    // errors) through the host log pipeline.
+                    var pluginHost = new PluginHost(loggerFactory.CreateLogger("Shonkor.Plugin"));
                     using var pluginLoad = PluginsEnabled(config)
-                        ? AssemblyPluginLoader.LoadActive(pm.WorkspacePath)
+                        ? AssemblyPluginLoader.LoadActive(pm.WorkspacePath, pluginHost)
                         : AssemblyPluginLoadResult.Empty;
                     activeParsers.AddRange(pluginLoad.Parsers);
 
