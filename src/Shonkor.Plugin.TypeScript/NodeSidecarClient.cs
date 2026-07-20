@@ -25,6 +25,11 @@ internal sealed class SidecarNode
     public string Name { get; set; } = string.Empty;
     public string Type { get; set; } = string.Empty;
     public string? FilePath { get; set; }
+
+    /// <summary>1-based start/end line of the declaration (#293 symbol nodes); null for the module node.</summary>
+    public int? StartLine { get; set; }
+    public int? EndLine { get; set; }
+
     public Dictionary<string, string> Properties { get; set; } = new();
 }
 
