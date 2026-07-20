@@ -380,6 +380,23 @@ public class AssemblyPluginLoaderTests
     }
 
     [Fact]
+    public void SharedContractAssemblies_IncludeLoggingAbstractions_SoHostLoggerKeepsOneTypeAcrossTheAlcBoundary()
+    {
+        // IPluginHost.Logger (Microsoft.Extensions.Logging.ILogger) crosses the ALC boundary. If a plugin
+        // ships its own Logging.Abstractions the resolver would load it privately and casting the host logger
+        // would throw InvalidCastException. The assembly must therefore be served from the host, like
+        // Shonkor.Core. This pins that intent so removing the entry is caught as a regression.
+        var field = typeof(AssemblyPluginLoader).GetField(
+            "SharedContractAssemblies",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(field);
+        var shared = Assert.IsAssignableFrom<IEnumerable<string>>(field!.GetValue(null));
+
+        Assert.Contains("Shonkor.Core", shared);
+        Assert.Contains("Microsoft.Extensions.Logging.Abstractions", shared);
+    }
+
+    [Fact]
     public async Task PlainPlugin_WithoutNewInterfaces_LoadsParsesAndDisposes_Unchanged()
     {
         var ws = Path.Combine(Path.GetTempPath(), $"shonkor_pluginplain_{Guid.NewGuid():N}");

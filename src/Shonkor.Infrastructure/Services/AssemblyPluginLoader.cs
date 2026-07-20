@@ -90,7 +90,12 @@ public static class AssemblyPluginLoader
     /// <summary>Assemblies that must be shared from the host (never loaded privately) to keep type identity.</summary>
     private static readonly HashSet<string> SharedContractAssemblies = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Shonkor.Core"
+        "Shonkor.Core",
+        // The host-supplied IPluginHost.Logger is a Microsoft.Extensions.Logging.ILogger that crosses the ALC
+        // boundary. If a plugin ships its own copy of Logging.Abstractions, the resolver would load it
+        // privately, yielding a SECOND ILogger type — casting the host logger to it throws InvalidCastException.
+        // Serving this assembly from the host (like Shonkor.Core) keeps one ILogger identity across the boundary.
+        "Microsoft.Extensions.Logging.Abstractions"
     };
 
     /// <summary>
