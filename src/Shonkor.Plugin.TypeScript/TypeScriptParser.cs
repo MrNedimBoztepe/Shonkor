@@ -68,9 +68,21 @@ public sealed class TypeScriptParser : IFileParser, IPluginInitializable, IAsync
     public Provenance DefaultProvenance => Provenance.Inferred;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The module-level <c>JSComponent</c> (kept for parity + cross-tech coexistence) plus the #293 symbol
+    /// nodes the sidecar now emits from the real TS AST — analogous to <c>RoslynAstParser</c>'s type/member
+    /// node types. Properties (Property) are activated on demand; the coarser symbols are visible by default.
+    /// </remarks>
     public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
     {
-        new NodeTypeDescriptor("JSComponent", "Code", true)
+        new NodeTypeDescriptor("JSComponent", "Code", true),
+        new NodeTypeDescriptor("Class", "Code", true),
+        new NodeTypeDescriptor("Interface", "Code", true),
+        new NodeTypeDescriptor("Function", "Code", true),
+        new NodeTypeDescriptor("Enum", "Code", true),
+        new NodeTypeDescriptor("TypeAlias", "Code", true),
+        new NodeTypeDescriptor("Method", "Code", true),
+        new NodeTypeDescriptor("Property", "Code", false)
     };
 
     /// <inheritdoc />
@@ -225,6 +237,9 @@ public sealed class TypeScriptParser : IFileParser, IPluginInitializable, IAsync
                 Name = n.Name,
                 Type = string.IsNullOrEmpty(n.Type) ? "JSComponent" : n.Type,
                 FilePath = n.FilePath ?? filePath,
+                // #293: symbol nodes carry 1-based line provenance; the module node leaves these null.
+                StartLine = n.StartLine,
+                EndLine = n.EndLine,
                 Properties = n.Properties ?? new Dictionary<string, string>()
             });
         }

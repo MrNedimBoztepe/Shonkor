@@ -15,7 +15,11 @@
  * ticket. #294 revisits richer resolution.
  *
  * Scope of #292: transport + adapter contract + tsconfig LOADING (basis for #294) + diagnostics that are
- * never swallowed. No symbol nodes (#293), no semantic edges (#294).
+ * never swallowed.
+ * Scope of #293 (this file also): SYMBOL NODES (Class/Interface/Function/Method/Property/Enum/TypeAlias)
+ * emitted from the real TS AST, plus purely-syntactic SAME-FILE heritage edges (extends -> EXTENDS,
+ * implements -> IMPLEMENTS). No cross-file/semantic edges (CALLS/REFERENCES_TYPE) and no final EXTRACTED
+ * tiering — those are #294/#295.
  *
  * Parent-death safety net (belt-and-suspenders with the host-side Job Object): when the parent process
  * exits, our stdin closes; we exit on that so we never linger as an orphan on any platform.
@@ -194,6 +198,172 @@ function collectImports(ts, sourceFile, filePath, componentNodeId, edges) {
   }
 }
 
+/*
+ * #293 symbol extraction.
+ *
+ * Node id scheme (documented, collision-proof). The module/JSComponent node is `${filePath}::${basename}`
+ * (2 `::`-segments). A top-level symbol is `${moduleId}::${name}` (3 segments); a member is
+ * `${moduleId}::${ownerName}::${memberName}` (4 segments). Because the module node has strictly fewer id
+ * segments than any symbol, a class named exactly like its file (Button.tsx -> `class Button`, ubiquitous
+ * for React class components) can NEVER share an id with — and thus never overwrite via the store's
+ * ON CONFLICT(Id) upsert — the signal-bearing JSComponent node. That is the BUG-012 family (id collisions
+ * -> node loss / dead edges), which AC#6 pins. Ids are CASE-SENSITIVE: names are used verbatim, never
+ * lowercased, so edges resolve on case-preserving stores / Windows paths.
+ *
+ * Heritage is resolved SAME-FILE only (ticket scope): an EXTENDS/IMPLEMENTS edge is emitted only when the
+ * referenced base name is a top-level type declared in this very file. Cross-file / semantic resolution is
+ * #294; final EXTRACTED tiering is #295 (these edges are non-structural, so the host stamps them INFERRED).
+ */
+function symbolIdFor(moduleId, name) {
+  return `${moduleId}::${name}`;
+}
+
+function memberIdFor(moduleId, ownerName, memberName) {
+  return `${moduleId}::${ownerName}::${memberName}`;
+}
+
+function lineOf(sourceFile, pos) {
+  try {
+    return sourceFile.getLineAndCharacterOfPosition(pos).line + 1;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The declared name of a declaration, verbatim (case-preserving); null for anonymous/unsupported names. */
+function declaredName(ts, node) {
+  const name = node.name;
+  if (!name) return null;
+  if (ts.isIdentifier(name)) return name.text;
+  if (ts.isStringLiteralLike && ts.isStringLiteralLike(name)) return name.text;
+  try {
+    return name.getText();
+  } catch {
+    return null;
+  }
+}
+
+function pushSymbolNode(nodes, edges, sourceFile, node, id, name, type, filePath, containerId) {
+  nodes.push({
+    id,
+    name,
+    type,
+    filePath,
+    startLine: lineOf(sourceFile, node.getStart(sourceFile)),
+    endLine: lineOf(sourceFile, node.getEnd()),
+    properties: {},
+  });
+  if (containerId) {
+    // Structural containment (module -> symbol, type -> member). The host keeps CONTAINS at its deterministic
+    // Extracted tier; only the syntactic heritage edges below are downgraded to INFERRED.
+    edges.push({ sourceId: containerId, targetId: id, relationship: 'CONTAINS' });
+  }
+}
+
+/** Emit Method/Property nodes for the members of a class or interface declaration. */
+function collectMembers(ts, decl, ownerId, ownerName, moduleId, filePath, sourceFile, nodes, edges) {
+  const members = decl.members || [];
+  for (const member of members) {
+    let type = null;
+    let memberName = null;
+    if (
+      ts.isMethodDeclaration(member) ||
+      ts.isMethodSignature(member) ||
+      ts.isGetAccessorDeclaration(member) ||
+      ts.isSetAccessorDeclaration(member)
+    ) {
+      type = 'Method';
+      memberName = declaredName(ts, member);
+    } else if (ts.isConstructorDeclaration(member)) {
+      type = 'Method';
+      memberName = 'constructor';
+    } else if (ts.isPropertyDeclaration(member) || ts.isPropertySignature(member)) {
+      type = 'Property';
+      memberName = declaredName(ts, member);
+    } else {
+      continue; // index signatures, static blocks, etc. are out of scope for the foundation ticket.
+    }
+    if (!memberName) continue;
+    const id = memberIdFor(moduleId, ownerName, memberName);
+    pushSymbolNode(nodes, edges, sourceFile, member, id, memberName, type, filePath, ownerId);
+  }
+}
+
+/** Simple identifier names referenced by a heritage clause of the given keyword (qualified names skipped). */
+function heritageNames(ts, decl, keyword) {
+  const out = [];
+  const clauses = decl.heritageClauses || [];
+  for (const clause of clauses) {
+    if (clause.token !== keyword) continue;
+    for (const t of clause.types) {
+      const expr = t.expression;
+      if (ts.isIdentifier(expr)) out.push(expr.text);
+      // Qualified expressions (e.g. React.Component) are necessarily external -> not same-file -> skipped.
+    }
+  }
+  return out;
+}
+
+/** Emit SAME-FILE EXTENDS/IMPLEMENTS edges for one declaration, resolving targets against declaredTypes. */
+function emitHeritageEdges(ts, decl, sourceId, declaredTypes, edges) {
+  for (const name of heritageNames(ts, decl, ts.SyntaxKind.ExtendsKeyword)) {
+    const targetId = declaredTypes.get(name);
+    if (targetId) edges.push({ sourceId, targetId, relationship: 'EXTENDS', properties: { targetName: name } });
+  }
+  for (const name of heritageNames(ts, decl, ts.SyntaxKind.ImplementsKeyword)) {
+    const targetId = declaredTypes.get(name);
+    if (targetId) edges.push({ sourceId, targetId, relationship: 'IMPLEMENTS', properties: { targetName: name } });
+  }
+}
+
+/**
+ * Two-pass walk of the top-level statements: pass 1 indexes type-like declarations by name (so heritage
+ * resolves SAME-FILE only), pass 2 emits the symbol nodes, their members, and the heritage edges.
+ */
+function collectSymbols(ts, sourceFile, filePath, moduleId, nodes, edges) {
+  const declaredTypes = new Map(); // name -> symbol id, for same-file heritage resolution
+  for (const stmt of sourceFile.statements) {
+    if (
+      ts.isClassDeclaration(stmt) ||
+      ts.isInterfaceDeclaration(stmt) ||
+      ts.isEnumDeclaration(stmt) ||
+      ts.isTypeAliasDeclaration(stmt)
+    ) {
+      const name = declaredName(ts, stmt);
+      if (name) declaredTypes.set(name, symbolIdFor(moduleId, name));
+    }
+  }
+
+  for (const stmt of sourceFile.statements) {
+    const name = declaredName(ts, stmt);
+    if (ts.isClassDeclaration(stmt)) {
+      if (!name) continue; // anonymous default-export class: no stable id in this ticket.
+      const id = symbolIdFor(moduleId, name);
+      pushSymbolNode(nodes, edges, sourceFile, stmt, id, name, 'Class', filePath, moduleId);
+      collectMembers(ts, stmt, id, name, moduleId, filePath, sourceFile, nodes, edges);
+      emitHeritageEdges(ts, stmt, id, declaredTypes, edges);
+    } else if (ts.isInterfaceDeclaration(stmt)) {
+      if (!name) continue;
+      const id = symbolIdFor(moduleId, name);
+      pushSymbolNode(nodes, edges, sourceFile, stmt, id, name, 'Interface', filePath, moduleId);
+      collectMembers(ts, stmt, id, name, moduleId, filePath, sourceFile, nodes, edges);
+      emitHeritageEdges(ts, stmt, id, declaredTypes, edges);
+    } else if (ts.isFunctionDeclaration(stmt)) {
+      if (!name) continue; // anonymous default-export function.
+      const id = symbolIdFor(moduleId, name);
+      pushSymbolNode(nodes, edges, sourceFile, stmt, id, name, 'Function', filePath, moduleId);
+    } else if (ts.isEnumDeclaration(stmt)) {
+      if (!name) continue;
+      const id = symbolIdFor(moduleId, name);
+      pushSymbolNode(nodes, edges, sourceFile, stmt, id, name, 'Enum', filePath, moduleId);
+    } else if (ts.isTypeAliasDeclaration(stmt)) {
+      if (!name) continue;
+      const id = symbolIdFor(moduleId, name);
+      pushSymbolNode(nodes, edges, sourceFile, stmt, id, name, 'TypeAlias', filePath, moduleId);
+    }
+  }
+}
+
 function parseRequest(req) {
   const diagnostics = [];
   const filePath = req.filePath;
@@ -248,6 +418,7 @@ function parseRequest(req) {
   }
 
   collectImports(ts, sourceFile, filePath, componentNodeId, edges);
+  collectSymbols(ts, sourceFile, filePath, componentNodeId, nodes, edges);
 
   return {
     nodes,
