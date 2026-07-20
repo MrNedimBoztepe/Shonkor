@@ -253,9 +253,12 @@ public static class WebhookEndpoints
                         var storage = await pm.GetStorageProviderAsync(project.Name, scanCt);
 
                         // Load the workspace's ACTIVE plugins (pre-built assemblies; install is inert).
+                        // Pass an IPluginHost so plugin diagnostics (#292 sidecar timeouts/degradation/parse
+                        // errors) surface through the webhook logger rather than a NullLogger on this
+                        // unattended background path.
                         var activeParsers = new List<IFileParser>(parsers);
                         using var pluginLoad = config.GetValue("Security:EnablePlugins", true)
-                            ? AssemblyPluginLoader.LoadActive(pm.WorkspacePath)
+                            ? AssemblyPluginLoader.LoadActive(pm.WorkspacePath, new PluginHost(webhookLogger))
                             : AssemblyPluginLoadResult.Empty;
                         activeParsers.AddRange(pluginLoad.Parsers);
 

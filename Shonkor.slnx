@@ -7,6 +7,7 @@
     <Project Path="src/Shonkor.Plugin.Sitecore/Shonkor.Plugin.Sitecore.csproj" />
     <Project Path="src/Shonkor.Plugin.Kentico/Shonkor.Plugin.Kentico.csproj" />
     <Project Path="src/Shonkor.Plugin.Optimizely/Shonkor.Plugin.Optimizely.csproj" />
+    <Project Path="src/Shonkor.Plugin.TypeScript/Shonkor.Plugin.TypeScript.csproj" />
     <Project Path="src/Shonkor.Web/Shonkor.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">

@@ -1,3 +1,6 @@
+# Node (TypeScript plugin sidecar deps are materialised by `npm ci` at build; never committed)
+node_modules/
+
 # .NET
 bin/
 obj/
