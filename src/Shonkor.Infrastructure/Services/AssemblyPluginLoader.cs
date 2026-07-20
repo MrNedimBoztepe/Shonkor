@@ -32,11 +32,43 @@ public sealed class AssemblyPluginLoadResult : IDisposable
     public void Dispose()
     {
         if (_contexts == null) return;
+
+        // Tear the loaded components down BEFORE their load contexts are unloaded — once an ALC is unloaded
+        // its types are gone, so a component's Dispose can only run while the context is still alive. This is
+        // what lets a plugin owning a long-lived resource (e.g. a sidecar process) shut it down. Parser and
+        // post-processor share this path since both are constructed identically via Activator.CreateInstance.
+        foreach (var parser in Parsers) DisposeComponent(parser);
+        foreach (var postProcessor in PostProcessors) DisposeComponent(postProcessor);
+
         foreach (var ctx in _contexts)
         {
             if (ctx.IsCollectible) ctx.Unload();
         }
         _contexts = null;
+    }
+
+    /// <summary>
+    /// Disposes one loaded plugin component, preferring <see cref="IAsyncDisposable"/> over
+    /// <see cref="IDisposable"/>. A failure is isolated (swallowed) so one plugin's faulty teardown never
+    /// blocks the remaining components or the ALC unload — mirroring the load-time failure isolation.
+    /// </summary>
+    private static void DisposeComponent(object component)
+    {
+        try
+        {
+            if (component is IAsyncDisposable asyncDisposable)
+            {
+                asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            else if (component is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+        catch
+        {
+            // Intentionally swallowed: a plugin's teardown must not block the others or the context unload.
+        }
     }
 }
 
@@ -58,7 +90,12 @@ public static class AssemblyPluginLoader
     /// <summary>Assemblies that must be shared from the host (never loaded privately) to keep type identity.</summary>
     private static readonly HashSet<string> SharedContractAssemblies = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Shonkor.Core"
+        "Shonkor.Core",
+        // The host-supplied IPluginHost.Logger is a Microsoft.Extensions.Logging.ILogger that crosses the ALC
+        // boundary. If a plugin ships its own copy of Logging.Abstractions, the resolver would load it
+        // privately, yielding a SECOND ILogger type — casting the host logger to it throws InvalidCastException.
+        // Serving this assembly from the host (like Shonkor.Core) keeps one ILogger identity across the boundary.
+        "Microsoft.Extensions.Logging.Abstractions"
     };
 
     /// <summary>
@@ -66,13 +103,13 @@ public static class AssemblyPluginLoader
     /// marked <see cref="Shonkor.Core.Models.PluginState.Failed"/> in the registry and skipped, so one bad
     /// plugin never blocks the others. The returned result must be disposed once the parsers are done.
     /// </summary>
-    public static AssemblyPluginLoadResult LoadActive(string workspacePath)
+    public static AssemblyPluginLoadResult LoadActive(string workspacePath, IPluginHost? host = null)
     {
         var registry = new PluginRegistry(workspacePath);
-        return LoadActive(registry);
+        return LoadActive(registry, host);
     }
 
-    public static AssemblyPluginLoadResult LoadActive(PluginRegistry registry)
+    public static AssemblyPluginLoadResult LoadActive(PluginRegistry registry, IPluginHost? host = null)
     {
         var active = registry.ActivePlugins();
         if (active.Count == 0) return AssemblyPluginLoadResult.Empty;
@@ -115,11 +152,13 @@ public static class AssemblyPluginLoader
 
                     if (typeof(IFileParser).IsAssignableFrom(type) && Activator.CreateInstance(type) is IFileParser parser)
                     {
+                        Initialize(parser, host);
                         parsers.Add(parser);
                         found++;
                     }
                     else if (typeof(IGraphPostProcessor).IsAssignableFrom(type) && Activator.CreateInstance(type) is IGraphPostProcessor postProcessor)
                     {
+                        Initialize(postProcessor, host);
                         postProcessors.Add(postProcessor);
                         found++;
                     }
@@ -143,6 +182,20 @@ public static class AssemblyPluginLoader
         return parsers.Count == 0 && postProcessors.Count == 0
             ? AssemblyPluginLoadResult.Empty
             : new AssemblyPluginLoadResult(parsers, postProcessors, contexts);
+    }
+
+    /// <summary>
+    /// Optional, additive init hook: a component that opts into <see cref="IPluginInitializable"/> receives
+    /// the host exactly once, right after construction. With no host (the default), nothing is called — the
+    /// status quo for every existing plugin, none of which implement the interface. A throwing
+    /// <c>Initialize</c> propagates and marks the plugin failed, consistent with load-time failure isolation.
+    /// </summary>
+    private static void Initialize(object component, IPluginHost? host)
+    {
+        if (host != null && component is IPluginInitializable initializable)
+        {
+            initializable.Initialize(host);
+        }
     }
 
     private static string Sha256OfFile(string path)
