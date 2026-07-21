@@ -56,7 +56,16 @@ public sealed class ReindexFileTool : IMcpTool
         // incrementally; otherwise the plain single-file path (fast name-mode structure).
         var semantic = ctx.IsSemanticProject(projectName);
 
-        var scanner = new GraphIndexScanner(storage, ctx.FileParsers, semanticCsharp: semantic, compilationCache: ctx.CompilationCache);
+        // Construct the scanner exactly like the Web/CLI index (#319): pass the active plugins' post-processors
+        // so a MCP-driven reindex is configured identically to those paths, closing the wiring inconsistency.
+        // Post-processors are a WHOLE-GRAPH phase (IGraphPostProcessor): the scanner runs them on a full
+        // ScanDirectoryAsync only, never on a single-file reindex — which is exactly what both branches below
+        // do. So the plugin enrichment (e.g. the #294 JS/TS semantic linker) is NOT re-run per edited file
+        // here; it refreshes on the next full scan. This mirrors the drift reconcile path
+        // (DriftReconciliationService → ReconcileDriftAsync → ScanFileAsync), which passes the post-processors
+        // the same way for construction consistency without executing them per file.
+        var scanner = new GraphIndexScanner(storage, ctx.FileParsers, semanticCsharp: semantic,
+            compilationCache: ctx.CompilationCache, postProcessors: ctx.PostProcessors);
         var result = semantic
             ? await scanner.ReconcilePathsAsync(basePath, new[] { resolved }).ConfigureAwait(false)
             : await scanner.ScanFileAsync(resolved).ConfigureAwait(false);
@@ -67,7 +76,7 @@ public sealed class ReindexFileTool : IMcpTool
             return SendToolResponse(id, $"Cleared '{handle}' from the graph (file missing, unparsable, or empty).");
         }
         return SendToolResponse(id,
-            $"Reindexed {handle}: {result.NodesCreated} node(s), {result.EdgesCreated} edge(s) in {result.Duration.TotalMilliseconds:F0} ms. (REFERENCES_TYPE relinked for this file; other cross-tech links refresh on a full scan.)");
+            $"Reindexed {handle}: {result.NodesCreated} node(s), {result.EdgesCreated} edge(s) in {result.Duration.TotalMilliseconds:F0} ms. (REFERENCES_TYPE relinked for this file; other cross-tech links and plugin graph enrichment refresh on a full scan.)");
     }
 }
 
@@ -179,6 +188,8 @@ public sealed class FreshnessTool : IMcpTool
             // #105: contained by the dispatcher before this tool was entered.
             var resolved = rawPath!;
 
+            // No post-processors here (#319): CheckFreshnessAsync is a read-only hash comparison that never
+            // writes to the graph, so the whole-graph post-processor phase does not apply.
             var fileScanner = new GraphIndexScanner(storage, ctx.FileParsers);
             var state = await fileScanner.CheckFreshnessAsync(resolved).ConfigureAwait(false);
             var handle = ToHandle(System.IO.Path.GetFullPath(resolved), fileBase);
@@ -198,6 +209,8 @@ public sealed class FreshnessTool : IMcpTool
         var resolvedName = ctx.ResolveProjectName(projectName) ?? ctx.ProjectManager.GetActiveProjectName();
         var excludePatterns = ctx.ProjectManager.GetProjectConfig(resolvedName).ExcludePatterns;
 
+        // No post-processors here (#319): DetectDriftAsync only compares on-disk hashes against the graph and
+        // never mutates it, so the whole-graph post-processor phase does not apply.
         var scanner = new GraphIndexScanner(storage, ctx.FileParsers);
         var drift = await scanner.DetectDriftAsync(basePath, excludePatterns).ConfigureAwait(false);
 

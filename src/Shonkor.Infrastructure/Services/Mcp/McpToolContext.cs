@@ -25,6 +25,16 @@ public sealed class McpToolContext
     /// <summary>Optional file parsers for filesystem-aware tools (reindex/check_edit/freshness); null when remote.</summary>
     public IEnumerable<IFileParser>? FileParsers { get; }
 
+    /// <summary>
+    /// The active plugin graph post-processors (#293/#294), loaded once with the parsers at server startup.
+    /// Handed to the <see cref="GraphIndexScanner"/> on the reindex path so a MCP-driven scan is constructed
+    /// exactly like the Web/CLI index (#319). These are a WHOLE-GRAPH phase (<see cref="IGraphPostProcessor"/>):
+    /// the scanner runs them only on a full <c>ScanDirectoryAsync</c>, never on a single-file reindex — so on
+    /// the edit loop they take effect on the next full scan, not per edited file. Empty when no plugins are
+    /// active or on the remote/tenant-locked relay.
+    /// </summary>
+    public IReadOnlyList<IGraphPostProcessor> PostProcessors { get; }
+
     /// <summary>Optional shared Roslyn compilation cache for incremental semantic relinking; null = name mode.</summary>
     public SemanticCompilationCache? CompilationCache { get; }
 
@@ -59,7 +69,8 @@ public sealed class McpToolContext
         IEmbeddingService? embeddingService,
         IEnumerable<IFileParser>? fileParsers,
         SemanticCompilationCache? compilationCache,
-        bool persistentSession = true)
+        bool persistentSession = true,
+        IReadOnlyList<IGraphPostProcessor>? postProcessors = null)
     {
         ProjectManager = projectManager ?? throw new ArgumentNullException(nameof(projectManager));
         Synthesizer = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
@@ -69,6 +80,7 @@ public sealed class McpToolContext
         FileParsers = fileParsers;
         CompilationCache = compilationCache;
         PersistentSession = persistentSession;
+        PostProcessors = postProcessors ?? Array.Empty<IGraphPostProcessor>();
     }
 
     /// <summary>

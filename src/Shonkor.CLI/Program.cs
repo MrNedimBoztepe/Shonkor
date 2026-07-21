@@ -701,8 +701,14 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
                 ? "[MCP] Embedding backend detected — semantic search enabled (requires embeddings in the graph)."
                 : "[MCP] No embedding backend — keyword (FTS) + graph search only.");
 
+            // Also carry the active plugins' graph post-processors (#293/#294), so a reindex_file over this
+            // server constructs its GraphIndexScanner exactly like the CLI/Web index (#319). They are a
+            // whole-graph phase — the scanner runs them on a full scan only, not on the single-file reindex —
+            // so on the edit loop they take effect on the next full scan; the wiring keeps the two paths
+            // consistent. The IPluginHost (CliPluginHost) was already supplied to LoadActive above (#311).
             var server = new McpRequestHandler(pm, synthesizer, contextProjectName, fileParsers: mcpParsers,
-                compilationCache: new SemanticCompilationCache(), embeddingService: embeddingService);
+                compilationCache: new SemanticCompilationCache(), embeddingService: embeddingService,
+                postProcessors: mcpPluginLoad.PostProcessors);
 
             await server.StartAsync().ConfigureAwait(false);
             return 0;
