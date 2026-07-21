@@ -64,7 +64,15 @@ public sealed class TypeScriptParser : IFileParser, IPluginInitializable, IAsync
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".ts", ".tsx", ".js", ".jsx" }.ToFrozenSet();
 
     /// <inheritdoc />
-    /// <remarks>Syntactic parse without cross-file semantic resolution — heuristic, so never Extracted (#294 escalates).</remarks>
+    /// <remarks>
+    /// Stays <see cref="Provenance.Inferred"/> by design (#295 AC#4, ratified Option A — deliberately NOT flipped
+    /// to <see cref="Provenance.Extracted"/>). The #293 parser edges (same-file heritage EXTENDS/IMPLEMENTS, IMPORTS)
+    /// are purely SYNTACTIC — no cross-file type resolution — so they are heuristic and must never claim EXTRACTED.
+    /// EXTRACTED for typed TS is minted per-edge by the whole-program <c>TypeScriptSemanticLinker</c> (#294) from
+    /// the type checker; the store's MIN-provenance upsert then sharpens a coinciding INFERRED heritage edge without
+    /// touching this default. Flipping the default to EXTRACTED would make <c>GraphIndexScanner.StampProvenance</c>
+    /// stamp every syntactic parser edge EXTRACTED, breaking the honesty contract and <c>ProvenanceIntegrityTests</c>.
+    /// </remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
     /// <inheritdoc />

@@ -167,9 +167,13 @@ public sealed class TypeScriptSemanticLinker : IGraphPostProcessor, IPluginIniti
                 SourceId = e.SourceId,
                 TargetId = e.TargetId,
                 Relationship = e.Relationship,
-                // Type-checker-resolved -> EXTRACTED (AC#5). The store's MIN-provenance upsert sharpens any
-                // coinciding #293 INFERRED heritage edge to EXTRACTED (AC#3) without mutating phase-1 data.
-                Provenance = Provenance.Extracted
+                // Provenance tiering (#295): a type-checker-resolved reference with a SINGLE candidate is
+                // EXTRACTED; one that resolves to multiple distinct candidates (a union-typed CALLS/
+                // REFERENCES_TYPE) is flagged ambiguous by the sidecar and lands as AMBIGUOUS — a weak edge
+                // instead of a false hard link. The store keeps the MIN provenance on conflict, so an EXTRACTED
+                // edge still sharpens a coinciding #293 INFERRED heritage edge; and because AMBIGUOUS(2) is the
+                // weakest tier, an ambiguous edge can never be silently promoted to EXTRACTED(0) by MIN.
+                Provenance = e.Ambiguous ? Provenance.Ambiguous : Provenance.Extracted
             });
         }
 
