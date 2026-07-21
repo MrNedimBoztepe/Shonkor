@@ -93,4 +93,46 @@
     <Message Importance="high" Text="TypeScript plugin sidecar copied to $(OutDir)sidecar" />
   </Target>
 
+  <!--
+    AC#7 (loud release): the NpmInstallSidecar step is best-effort (ContinueOnError) so a dev machine without
+    npm/network still compiles and the adapter degrades to Esprima at runtime. But a RELEASE artifact that
+    ships without the sidecar deps would be a silently-degraded package (no real TS Compiler API), so in
+    Release we FAIL the build loudly if the pinned typescript is not materialised — it must never be shipped
+    that way. Debug is unaffected (dev build keeps compiling).
+  -->
+  <Target Name="VerifySidecarReleaseDeps" BeforeTargets="PackPluginZip" Condition="'$(Configuration)' == 'Release'">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\sidecar\node_modules\typescript\package.json')"
+           Text="Release packaging of the TypeScript plugin requires the Node sidecar's node_modules (pinned typescript), but 'npm ci' did not materialise it (no npm/network on this machine?). A release artifact must not ship without the sidecar deps — install Node/npm so 'npm ci' can run, then rebuild. (A local Debug build still compiles and degrades to Esprima at runtime.)" />
+  </Target>
+
+  <!--
+    AC#1 (installable package): stage the full plugin (manifest + entry DLL + the private Esprima fallback +
+    the WHOLE sidecar tree incl. node_modules) and zip it to $(OutDir)$(AssemblyName).zip. Mirrors the Kentico
+    PackPluginZip shape, but a TS plugin is not a lone DLL — the Node sidecar and its pinned typescript are
+    part of the artifact. DependsOnTargets guarantees the Esprima.dll copy has already run; the sidecar is
+    staged from the project's source tree (the source of truth for node_modules) rather than racing the
+    OutDir copy. This same ZIP is embedded by Shonkor.Infrastructure to seed the plugin default-active (#313).
+  -->
+  <Target Name="PackPluginZip" AfterTargets="Build" DependsOnTargets="CopyEsprimaToOutput">
+    <PropertyGroup>
+      <PluginStage>$(IntermediateOutputPath)pluginpack\</PluginStage>
+      <PluginZip>$(OutDir)$(AssemblyName).zip</PluginZip>
+    </PropertyGroup>
+    <RemoveDir Directories="$(PluginStage)" />
+    <MakeDir Directories="$(PluginStage)" />
+    <Copy SourceFiles="plugin.json" DestinationFolder="$(PluginStage)" />
+    <Copy SourceFiles="$(OutDir)$(AssemblyName).dll" DestinationFolder="$(PluginStage)" />
+    <Copy SourceFiles="$(OutDir)Esprima.dll" DestinationFolder="$(PluginStage)" />
+    <Copy SourceFiles="sidecar.settings.json" DestinationFolder="$(PluginStage)" Condition="Exists('sidecar.settings.json')" />
+    <ItemGroup>
+      <_PackSidecarFiles Include="$(MSBuildProjectDirectory)\sidecar\**\*"
+                         Exclude="$(MSBuildProjectDirectory)\sidecar\node_modules\.cache\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PackSidecarFiles)"
+          DestinationFiles="@(_PackSidecarFiles->'$(PluginStage)sidecar\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Delete Files="$(PluginZip)" />
+    <ZipDirectory SourceDirectory="$(PluginStage)" DestinationFile="$(PluginZip)" />
+    <Message Importance="high" Text="Plugin package: $(PluginZip)" />
+  </Target>
+
 </Project>

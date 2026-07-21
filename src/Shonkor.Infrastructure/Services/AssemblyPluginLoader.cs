@@ -106,6 +106,14 @@ public static class AssemblyPluginLoader
     public static AssemblyPluginLoadResult LoadActive(string workspacePath, IPluginHost? host = null)
     {
         var registry = new PluginRegistry(workspacePath);
+
+        // Fresh-deploy seeding (#313): make the first-party standard plugins (JS/TS) install + active out of the
+        // box so their file types are parsed without a manual step — otherwise JS/TS parsing silently vanishes
+        // after #292 removed the in-host parser. This workspace-path overload is the single seam every host
+        // uses (both Shonkor.Web and Shonkor.CLI, and every load call site), so seeding here covers both paths
+        // with no per-host wiring (the #179 lesson). It is idempotent and cheap once the plugin is registered.
+        StandardPluginSeeder.EnsureSeeded(registry);
+
         return LoadActive(registry, host);
     }
 
