@@ -32,6 +32,8 @@ const readline = require('readline');
 // The node-ID scheme is the shared source of truth (#317): the same helpers back this parser and the
 // semantic linker (#294), so symbols referenced as edge targets are derived identically everywhere.
 const { componentIdFor, symbolIdFor, memberIdFor } = require('./nodeIds');
+// The whole-program semantic linker (#294) — a separate request kind handled below.
+const { link } = require('./linker');
 
 const PROBE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
 
@@ -451,6 +453,19 @@ function parseRequest(req) {
   };
 }
 
+/**
+ * #294 whole-program semantic link request. Resolves the TypeScript to use from the project directory (the
+ * same precedence as a parse), builds ONE program over the request's rootNames via ./linker, and returns the
+ * cross-file edges. The per-file parse path (parseRequest) is untouched.
+ */
+function linkRequest(req) {
+  const rootNames = Array.isArray(req.rootNames) ? req.rootNames : [];
+  const projectDir = req.projectDir || (rootNames.length > 0 ? path.dirname(rootNames[0]) : null);
+  const { ts } = resolveTypeScript(projectDir);
+  const result = link(ts, req);
+  return { nodes: [], edges: result.edges, diagnostics: result.diagnostics, meta: result.meta };
+}
+
 function handleLine(line) {
   const trimmed = line.trim();
   if (trimmed.length === 0) return;
@@ -474,7 +489,7 @@ function handleLine(line) {
 
   let payload;
   try {
-    payload = parseRequest(req);
+    payload = req.kind === 'link' ? linkRequest(req) : parseRequest(req);
   } catch (e) {
     // A failure inside the sidecar must still produce a response (id → exactly one answer) with a diagnostic,
     // so the host never deadlocks waiting and the file is not silently dropped.
