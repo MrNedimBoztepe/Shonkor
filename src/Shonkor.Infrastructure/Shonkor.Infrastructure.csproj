@@ -2,6 +2,30 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Shonkor.Core\Shonkor.Core.csproj" />
+    <!--
+      Build-order + artifact dependency ONLY (#313): Infrastructure embeds the TypeScript plugin's installable
+      ZIP (below) to seed it default-active on a fresh deploy. ReferenceOutputAssembly=false + Private=false so
+      the plugin DLL is NOT pulled next to the host — a plugin must load solely through its isolated ALC from
+      the seeded workspace, never as an ordinary host dependency. The reference merely forces the plugin (and
+      its PackPluginZip target) to build before Infrastructure's compile, so the embedded ZIP exists.
+    -->
+    <ProjectReference Include="..\Shonkor.Plugin.TypeScript\Shonkor.Plugin.TypeScript.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The standard first-party plugins shipped inside the host as embedded resources; StandardPluginSeeder
+      materialises + installs + activates them on a fresh workspace (#313). node_modules stays gitignored and
+      is materialised by 'npm ci' at the plugin's build time, then carried into this ZIP — so the seed artifact
+      is reproducible from source. LogicalName is stable regardless of the on-disk build path.
+    -->
+    <EmbeddedResource Include="..\Shonkor.Plugin.TypeScript\bin\$(Configuration)\net10.0\Shonkor.Plugin.TypeScript.zip">
+      <LogicalName>Shonkor.Infrastructure.StandardPlugins.Shonkor.Plugin.TypeScript.zip</LogicalName>
+      <Visible>false</Visible>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>
