@@ -93,10 +93,16 @@ public static class McpEndpoints
             // the host's logging like any other API error (#256) rather than straight to the process's stderr.
             try
             {
+                // Carry the active plugins' graph post-processors too (#319), so a reindex_file over this
+                // relay constructs its GraphIndexScanner exactly like the Web index (IndexEndpoints). They are
+                // a whole-graph phase run on a full scan only, never on the single-file reindex — so on this
+                // path they never execute; the wiring keeps the construction consistent across entry points.
+                // Tenant-locked relays get none (no local files → reindex_file is already disabled above).
                 var handler = new McpRequestHandler(projectManager, synthesizer, projectName,
                     lockToContextProject: isTenantLocked, embeddingService: embeddingService, fileParsers: fileParsers,
                     compilationCache: compilationCache, persistentSession: false,
-                    logger: context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Shonkor.Mcp"));
+                    logger: context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Shonkor.Mcp"),
+                    postProcessors: pluginLoad.PostProcessors);
 
                 using var reader = new StreamReader(context.Request.Body);
                 var body = await reader.ReadToEndAsync();
