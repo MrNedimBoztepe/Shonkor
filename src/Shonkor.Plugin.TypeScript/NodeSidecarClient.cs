@@ -128,7 +128,24 @@ internal sealed class NodeSidecarClient : IAsyncDisposable
     /// via <see cref="Task.WaitAsync(TimeSpan)"/>. A timeout throws <see cref="TimeoutException"/>; a dead
     /// transport throws so the adapter can surface a diagnostic and fall back — never a deadlock.
     /// </summary>
-    public async Task<SidecarResponse> SendAsync(string filePath, string content, TimeSpan timeout)
+    public Task<SidecarResponse> SendAsync(string filePath, string content, TimeSpan timeout) =>
+        SendEnvelopeAsync(id => new { id, filePath, content }, timeout);
+
+    /// <summary>
+    /// Sends a #294 whole-program <c>link</c> request (<c>{ id, kind:"link", rootNames, projectDir }</c>) and
+    /// awaits its id-correlated response. The sidecar builds ONE program + type-checker over
+    /// <paramref name="rootNames"/> and returns cross-file semantic edges. Same timeout/deadlock guarantees as
+    /// <see cref="SendAsync"/>.
+    /// </summary>
+    public Task<SidecarResponse> SendLinkAsync(IReadOnlyCollection<string> rootNames, string projectDir, TimeSpan timeout) =>
+        SendEnvelopeAsync(id => new { id, kind = "link", rootNames, projectDir }, timeout);
+
+    /// <summary>
+    /// Shared request path: assigns a correlation id, serialises the caller's envelope, writes one line, and
+    /// awaits the id-correlated response bounded by <paramref name="timeout"/>. A timeout throws
+    /// <see cref="TimeoutException"/>; a dead transport throws — never a deadlock.
+    /// </summary>
+    private async Task<SidecarResponse> SendEnvelopeAsync(Func<int, object> makeEnvelope, TimeSpan timeout)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!IsAlive) throw new InvalidOperationException("Node sidecar is not running.");
@@ -139,7 +156,7 @@ internal sealed class NodeSidecarClient : IAsyncDisposable
 
         try
         {
-            var line = JsonSerializer.Serialize(new { id, filePath, content }, JsonOptions);
+            var line = JsonSerializer.Serialize(makeEnvelope(id), JsonOptions);
             await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
