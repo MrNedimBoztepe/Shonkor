@@ -24,7 +24,14 @@ public sealed class JavaScriptParser : IFileParser
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".js", ".ts", ".jsx", ".tsx" }.ToFrozenSet();
 
     /// <inheritdoc />
-    /// <remarks>Name-based import extraction without cross-file type resolution — heuristic, not proven.</remarks>
+    /// <remarks>
+    /// Stays <see cref="Provenance.Inferred"/> by design (#295 AC#4, ratified Option A — deliberately NOT flipped).
+    /// Name-based IMPORTS extraction without cross-file type resolution is heuristic, so it must never claim
+    /// <see cref="Provenance.Extracted"/>. Untyped JS (<c>.js/.jsx</c>) is not eligible for EXTRACTED at all — only
+    /// the typed-TS whole-program linker (#294) mints EXTRACTED, per-edge, from the type checker. Flipping this
+    /// default would let <c>GraphIndexScanner.StampProvenance</c> mark every syntactic edge EXTRACTED, breaking the
+    /// honesty contract and <c>ProvenanceIntegrityTests</c>.
+    /// </remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
     /// <inheritdoc />

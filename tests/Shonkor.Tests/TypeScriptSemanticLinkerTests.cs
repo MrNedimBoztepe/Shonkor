@@ -4,6 +4,8 @@ using Microsoft.Extensions.Logging;
 
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
+using Shonkor.Infrastructure.Services;
+using Shonkor.Infrastructure.Storage;
 using Shonkor.Plugin.TypeScript;
 
 namespace Shonkor.Tests;
@@ -286,6 +288,169 @@ public sealed class TypeScriptSemanticLinkerTests : IDisposable
         var enrichment = await LinkAsync(graph);
 
         Assert.Empty(enrichment.Edges);
+    }
+
+    // ---- #295 AC#3: a union-typed reference resolving to multiple candidates is AMBIGUOUS ----
+
+    [Fact]
+    public async Task UnionTypedCall_ResolvingToMultipleCandidates_IsAmbiguous()
+    {
+        var dir = NewProjectDir();
+        await WriteTsconfig(dir);
+        var typesPath = Path.Combine(dir, "types.ts");
+        var consumerPath = Path.Combine(dir, "consumer.ts");
+        await File.WriteAllTextAsync(typesPath,
+            "export class A { m(): void {} }\n" +
+            "export class B { m(): void {} }\n");
+        await File.WriteAllTextAsync(consumerPath,
+            "import { A, B } from './types';\n" +
+            "export class Consumer {\n" +
+            "  union(x: A | B): void { x.m(); }\n" +
+            "  single(a: A): void { a.m(); }\n" +
+            "}\n");
+
+        var (graph, _) = await ParseAllAsync(dir);
+        var edges = (await LinkAsync(graph)).Edges;
+
+        // `x: A | B; x.m()` — the type checker resolves the callee to TWO distinct candidate method nodes.
+        // The linker emits ONE CALLS edge per candidate, each flagged ambiguous by the sidecar -> the host
+        // stamps AMBIGUOUS: a low-confidence edge to each possibility rather than a false hard link to one.
+        var toA = Assert.Single(edges, e => e.Relationship == "CALLS"
+            && e.SourceId == $"{consumerPath}::consumer::Consumer::union"
+            && e.TargetId == $"{typesPath}::types::A::m");
+        var toB = Assert.Single(edges, e => e.Relationship == "CALLS"
+            && e.SourceId == $"{consumerPath}::consumer::Consumer::union"
+            && e.TargetId == $"{typesPath}::types::B::m");
+        Assert.Equal(Provenance.Ambiguous, toA.Provenance);
+        Assert.Equal(Provenance.Ambiguous, toB.Provenance);
+
+        // Contrast (pins the trigger): a single-typed callee resolves to exactly ONE candidate -> EXTRACTED.
+        var single = Assert.Single(edges, e => e.Relationship == "CALLS"
+            && e.SourceId == $"{consumerPath}::consumer::Consumer::single"
+            && e.TargetId == $"{typesPath}::types::A::m");
+        Assert.Equal(Provenance.Extracted, single.Provenance);
+    }
+
+    // ---- #295 MIN-merge: an AMBIGUOUS edge is never silently promoted to EXTRACTED ----
+
+    [Fact]
+    public async Task AmbiguousEdge_MinMerge_PinsRatifiedBehaviour()
+    {
+        // The store keeps the MIN provenance on conflict (AMBIGUOUS=2 > INFERRED=1 > EXTRACTED=0). This pins the
+        // #295 safety property: an AMBIGUOUS union edge can never SPONTANEOUSLY become EXTRACTED (2 -> 0 needs an
+        // actual proven EXTRACTED input, which the union case never produces). If it merely coincides with a
+        // #293 INFERRED heritage edge, INFERRED wins — still not EXTRACTED. Deliberate, not a bug.
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+        await storage.UpsertNodesAsync(new[]
+        {
+            new GraphNode { Id = "a", Name = "A", Type = "Class" },
+            new GraphNode { Id = "b", Name = "B", Type = "Class" }
+        });
+
+        // AMBIGUOUS alone stays AMBIGUOUS (nothing lowers it).
+        await storage.UpsertEdgesAsync(new[] { new GraphEdge { SourceId = "a", TargetId = "b", Relationship = "CALLS", Provenance = Provenance.Ambiguous } });
+        var (only, _) = await storage.GetIncidentEdgesAsync("a");
+        Assert.Equal(Provenance.Ambiguous, Assert.Single(only, e => e.Relationship == "CALLS").Provenance);
+
+        // A coinciding #293 INFERRED edge on the same triple -> MIN(2,1) = INFERRED (never EXTRACTED).
+        await storage.UpsertEdgesAsync(new[] { new GraphEdge { SourceId = "a", TargetId = "b", Relationship = "CALLS", Provenance = Provenance.Inferred } });
+        var (merged, _) = await storage.GetIncidentEdgesAsync("a");
+        Assert.Equal(Provenance.Inferred, Assert.Single(merged, e => e.Relationship == "CALLS").Provenance);
+    }
+
+    // ---- #295 AC#2: untyped JS parser edges are INFERRED, never EXTRACTED ----
+
+    [Fact]
+    public async Task UntypedJavaScript_ParserEdges_AreInferred_NeverExtracted()
+    {
+        var dir = NewProjectDir();
+        var jsPath = Path.Combine(dir, "plain.js");
+        await File.WriteAllTextAsync(jsPath,
+            "import { X } from './other';\n" +
+            "export class Animal { speak() {} }\n" +
+            "export class Dog extends Animal {}\n");
+
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+        await using var parser = new TypeScriptParser();
+        var scanner = new GraphIndexScanner(storage, new IFileParser[] { parser });
+        await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+        var all = await storage.GetAllEdgesAsync();
+
+        // The #293 same-file heritage the parser emits from untyped JS is purely SYNTACTIC -> INFERRED.
+        var extends = Assert.Single(all, e => e.Relationship == "EXTENDS");
+        Assert.Equal(Provenance.Inferred, extends.Provenance);
+
+        // No non-structural EXTRACTED edge originates from untyped JS (CONTAINS/DEFINED_IN membership is exempt).
+        var structural = new HashSet<string>(StringComparer.Ordinal) { "CONTAINS", "DEFINED_IN" };
+        Assert.All(all.Where(e => !structural.Contains(e.Relationship)),
+            e => Assert.NotEqual(Provenance.Extracted, e.Provenance));
+    }
+
+    // ---- #295 AC#5: integrity invariant across a mixed graph — EXTRACTED lives only in the linker enrichment ----
+
+    [Fact]
+    public async Task MixedGraph_OnlyTypedTsLinkerEdgesAreExtracted_IntegrityGuard()
+    {
+        var dir = NewProjectDir();
+        await WriteTsconfig(dir);
+
+        // typed .ts: cross-file heritage (base in another module) — only the whole-program linker can resolve it.
+        var basePath = Path.Combine(dir, "base.ts");
+        var derivedPath = Path.Combine(dir, "derived.ts");
+        await File.WriteAllTextAsync(basePath, "export class Base {}\n");
+        await File.WriteAllTextAsync(derivedPath,
+            "import { Base } from './base';\n" +
+            "export class Derived extends Base {}\n");
+
+        // untyped .js: same-file heritage — must stay INFERRED (the linker never mints EXTRACTED from .js).
+        var jsPath = Path.Combine(dir, "legacy.js");
+        await File.WriteAllTextAsync(jsPath,
+            "export class Animal { speak() {} }\n" +
+            "export class Dog extends Animal {}\n");
+
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+        await using var parser = new TypeScriptParser();
+        var linker = new TypeScriptSemanticLinker();
+        linker.Initialize(new TestHost());
+        var scanner = new GraphIndexScanner(storage, new IFileParser[] { parser },
+            postProcessors: new IGraphPostProcessor[] { linker });
+        await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+        var all = await storage.GetAllEdgesAsync();
+
+        // (a) Whitelist guard (mirrors ProvenanceIntegrityTests): no EXTRACTED edge outside the eligible set.
+        var extractedEligible = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "CONTAINS", "DEFINED_IN",
+            "EXTENDS", "IMPLEMENTS", "REFERENCES_TYPE", "CALLS", "OVERRIDES", "IMPLEMENTS_MEMBER"
+        };
+        var offenders = all
+            .Where(e => e.Provenance == Provenance.Extracted && !extractedEligible.Contains(e.Relationship))
+            .Select(e => $"{e.Relationship} ({e.SourceId} -> {e.TargetId})")
+            .Distinct()
+            .ToList();
+        Assert.True(offenders.Count == 0,
+            "no EXTRACTED edge may exist outside the deterministic whitelist; offenders: " + string.Join("; ", offenders));
+
+        // (b) IMPORTS is a heuristic name-based edge — positively INFERRED, never EXTRACTED.
+        var imports = all.Where(e => e.Relationship == "IMPORTS").ToList();
+        Assert.NotEmpty(imports);
+        Assert.All(imports, e => Assert.NotEqual(Provenance.Extracted, e.Provenance));
+
+        // (c) The untyped-.js same-file EXTENDS stays INFERRED — no EXTRACTED edge originates from .js.
+        var jsExtends = Assert.Single(all, e => e.Relationship == "EXTENDS"
+            && e.SourceId == $"{jsPath}::legacy::Dog");
+        Assert.Equal(Provenance.Inferred, jsExtends.Provenance);
+
+        // (d) The typed-.ts cross-file EXTENDS IS EXTRACTED — proving EXTRACTED lives ONLY in the linker enrichment.
+        var tsExtends = Assert.Single(all, e => e.Relationship == "EXTENDS"
+            && e.SourceId == $"{derivedPath}::derived::Derived"
+            && e.TargetId == $"{basePath}::base::Base");
+        Assert.Equal(Provenance.Extracted, tsExtends.Provenance);
     }
 
     // ---- test doubles ----

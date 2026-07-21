@@ -170,6 +170,45 @@ function nodeIdForSymbol(ts, checker, symbol, preferKind) {
   return declarationNodeId(ts, pickDeclaration(ts, symbol, preferKind));
 }
 
+/**
+ * The candidate declarations of a symbol for the DISTINCT-node-id set (#295 AC#3). Unlike pickDeclaration,
+ * this keeps ALL declarations (optionally narrowed to a matching accessor kind) so the caller can detect real
+ * ambiguity: a union-typed property access `x: A|B; x.m()` yields ONE synthetic symbol whose declarations are
+ * `A.m` and `B.m` (empirically verified — spike on #295). An overload set is also multiple declarations, but
+ * they share owner+name → ONE node id → the caller's set collapses to size 1 (not ambiguous). A get/set pair
+ * is likewise collapsed: the accessor filter keeps only the one matching the usage kind.
+ */
+function candidateDeclarations(ts, symbol, preferKind) {
+  const decls = (symbol && symbol.declarations) || [];
+  if (decls.length === 0) return [];
+  if (preferKind) {
+    const matched = decls.filter((d) =>
+      preferKind === 'get' ? ts.isGetAccessorDeclaration(d) : ts.isSetAccessorDeclaration(d));
+    if (matched.length > 0) return matched;
+  }
+  return decls;
+}
+
+/**
+ * The DISTINCT set of node ids a resolved (already-unaliased) symbol maps to, honouring an accessor kind.
+ * `size == 0` -> no node (external / metadata-only, skip). `size == 1` -> a single unambiguous target.
+ * `size > 1` -> genuine multi-candidate ambiguity (only a union-typed property access reaches here in practice).
+ */
+function idSetFromResolved(ts, resolved, preferKind) {
+  if (!resolved) return [];
+  const ids = new Set();
+  for (const decl of candidateDeclarations(ts, resolved, preferKind)) {
+    const id = declarationNodeId(ts, decl);
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+/** The distinct node-id set for a plain symbol reference (REFERENCES_TYPE — no accessor context). */
+function symbolIdSet(ts, checker, symbol) {
+  return idSetFromResolved(ts, unalias(ts, checker, symbol), null);
+}
+
 /** Whether a reference node sits in a write position (the LHS of a plain `=`), so an accessor means the setter. */
 function isWritePosition(ts, node) {
   const p = node.parent;
@@ -177,18 +216,18 @@ function isWritePosition(ts, node) {
 }
 
 /**
- * Resolve the node id of a symbol referenced AT a usage site. When the symbol is an accessor, the read/write
- * context of the usage decides `:get` vs `:set` (ratified Ergänzung 1) — a bare `owner::name` node never
- * exists.
+ * The distinct node-id set for a symbol referenced AT a usage site (CALLS). When the symbol is an accessor,
+ * the read/write context of the usage decides `:get` vs `:set` (ratified Ergänzung 1) — a bare `owner::name`
+ * node never exists. A union-typed callee (`x: A|B; x.m()`) yields >1 id -> the caller marks each edge ambiguous.
  */
-function nodeIdForReference(ts, checker, usageNode, symbol) {
+function referenceIdSet(ts, checker, usageNode, symbol) {
   const resolved = unalias(ts, checker, symbol);
-  if (!resolved) return null;
+  if (!resolved) return [];
   let preferKind = null;
   if (resolved.flags & (ts.SymbolFlags.GetAccessor | ts.SymbolFlags.SetAccessor)) {
     preferKind = isWritePosition(ts, usageNode) ? 'set' : 'get';
   }
-  return declarationNodeId(ts, pickDeclaration(ts, resolved, preferKind));
+  return idSetFromResolved(ts, resolved, preferKind);
 }
 
 /** The id of the nearest enclosing declaration matching `predicate` that maps to a node, else null. */
@@ -288,23 +327,27 @@ function walkFile(ts, checker, sourceFile, addEdge) {
     }
 
     // CALLS — invocation -> callee (method/function). `new Foo()` is INSTANTIATES (out of scope) and is a
-    // NewExpression, so it is naturally excluded here.
+    // NewExpression, so it is naturally excluded here. A union-typed callee resolves to >1 candidate node id
+    // (#295 AC#3): one CALLS edge per candidate, each flagged ambiguous so the host stamps AMBIGUOUS.
     if (ts.isCallExpression(node)) {
       const sym = checker.getSymbolAtLocation(node.expression);
-      const targetId = nodeIdForReference(ts, checker, node.expression, sym);
-      if (targetId) {
+      const targetIds = referenceIdSet(ts, checker, node.expression, sym);
+      if (targetIds.length > 0) {
         const sourceId = enclosingNodeId(ts, node, callablePred);
-        addEdge(sourceId, targetId, 'CALLS');
+        const ambiguous = targetIds.length > 1;
+        for (const targetId of targetIds) addEdge(sourceId, targetId, 'CALLS', ambiguous);
       }
     }
 
-    // REFERENCES_TYPE — every type usage, attributed to the enclosing type-level declaration.
+    // REFERENCES_TYPE — every type usage, attributed to the enclosing type-level declaration. A union type
+    // alias reference resolving to >1 target is ambiguous the same way (#295 AC#3).
     if (ts.isTypeReferenceNode(node)) {
       const sym = checker.getSymbolAtLocation(node.typeName);
-      const targetId = nodeIdForSymbol(ts, checker, sym, null);
-      if (targetId) {
+      const targetIds = symbolIdSet(ts, checker, sym);
+      if (targetIds.length > 0) {
         const sourceId = enclosingNodeId(ts, node, typeLevelPred);
-        addEdge(sourceId, targetId, 'REFERENCES_TYPE');
+        const ambiguous = targetIds.length > 1;
+        for (const targetId of targetIds) addEdge(sourceId, targetId, 'REFERENCES_TYPE', ambiguous);
       }
     }
 
@@ -374,14 +417,20 @@ function link(ts, req) {
   const program = ts.createProgram(rootNames, options);
   const checker = program.getTypeChecker();
 
-  const edges = [];
-  const seen = new Set();
-  const addEdge = (sourceId, targetId, relationship) => {
+  // Deduplicate by triple. `ambiguous` is additive/optional in the wire contract: emitted ONLY when true, so
+  // an absent field means a normal (host-stamped EXTRACTED) edge — backward compatible. If the same triple is
+  // reached both ambiguously and unambiguously, the unambiguous resolution wins (clear the flag): the edge IS
+  // provable from at least one site, so it must not be downgraded to AMBIGUOUS.
+  const byKey = new Map();
+  const addEdge = (sourceId, targetId, relationship, ambiguous = false) => {
     if (!sourceId || !targetId || sourceId === targetId) return;
     const key = `${sourceId} ${targetId} ${relationship}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    edges.push({ sourceId, targetId, relationship });
+    const existing = byKey.get(key);
+    if (existing) {
+      if (!ambiguous) existing.ambiguous = false;
+      return;
+    }
+    byKey.set(key, { sourceId, targetId, relationship, ambiguous });
   };
 
   let filesWalked = 0;
@@ -393,6 +442,13 @@ function link(ts, req) {
     walkFile(ts, checker, sourceFile, addEdge);
     filesWalked++;
   }
+
+  // Serialise: drop the `ambiguous` field when false so the payload stays byte-identical to the pre-#295 wire
+  // format for the common (unambiguous) case.
+  const edges = [...byKey.values()].map((e) =>
+    e.ambiguous
+      ? { sourceId: e.sourceId, targetId: e.targetId, relationship: e.relationship, ambiguous: true }
+      : { sourceId: e.sourceId, targetId: e.targetId, relationship: e.relationship });
 
   return { edges, diagnostics, meta: { rootCount: rootNames.length, filesWalked, edgeCount: edges.length } };
 }

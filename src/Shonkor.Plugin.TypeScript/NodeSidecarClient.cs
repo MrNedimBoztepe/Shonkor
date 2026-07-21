@@ -38,6 +38,16 @@ internal sealed class SidecarEdge
     public string SourceId { get; set; } = string.Empty;
     public string TargetId { get; set; } = string.Empty;
     public string Relationship { get; set; } = string.Empty;
+
+    /// <summary>
+    /// #295 (AC#3): the sidecar sets this on a CALLS/REFERENCES_TYPE edge whose reference resolves to more than
+    /// one distinct candidate node (a union-typed property access <c>x: A|B; x.m()</c> -> <c>A.m</c> + <c>B.m</c>).
+    /// Each candidate becomes one edge flagged <c>ambiguous</c> so the host stamps <see cref="Provenance.Ambiguous"/>
+    /// instead of a false <see cref="Provenance.Extracted"/> hard link. The field is emitted ONLY when true, so an
+    /// absent value deserialises to <c>false</c> — additive and backward compatible with the pre-#295 wire format.
+    /// </summary>
+    public bool Ambiguous { get; set; }
+
     public Dictionary<string, string> Properties { get; set; } = new();
 }
 
