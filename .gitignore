@@ -68,3 +68,8 @@ bench/rag-chunk-cache.json
 bench/rag-chunk-cache-enriched.json
 bench/answers-report.md
 bench/answers-metrics.json
+
+# Local agent tooling — kept local, never committed (see #308 mishap)
+.claude/agents/
+.claude/commands/
+.claude/loop-state.md
