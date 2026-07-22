@@ -1,5 +1,5 @@
 {
-  "//": "Self-provisioned config read from the plugin folder at load time. NodePath: absolute path to the node executable; leave null to auto-discover (PATH, then common install locations). TimeoutSeconds: per-request parse budget before a timeout diagnostic fires.",
+  "//": "Self-provisioned config read from the plugin folder at load time. The JS/TS sidecar uses a bring-your-own Node runtime (Node is NOT bundled) and requires Node >= v18 (current LTS recommended, https://nodejs.org). NodePath: absolute path to the node executable; when set it OVERRIDES auto-discovery and is authoritative. Leave null to auto-discover (PATH, then common install locations). If Node is missing or too old, JS/TS files degrade to the in-plugin Esprima fallback with a single diagnostic. TimeoutSeconds: per-request parse budget before a timeout diagnostic fires.",
   "NodePath": null,
   "TimeoutSeconds": 30
 }

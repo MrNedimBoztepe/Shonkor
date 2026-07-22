@@ -519,6 +519,195 @@ public sealed class TypeScriptPluginTests : IDisposable
         Assert.Equal(nodes.Count, nodes.Select(n => n.Id).Distinct().Count());
     }
 
+    // ====================================================================================================
+    // #303: BYO Node onboarding — discovery, version gate (>= v18), first-run report-once, actionable UX.
+    // The gate + messages are driven deterministically through an injected probe (no real old/absent Node).
+    // ====================================================================================================
+
+    // ---- AC#1: a Node >= the required major passes the gate and is reported as usable ----
+
+    [Fact]
+    public void Discover_ModernNode_PassesGate_AndIsUsable()
+    {
+        var state = NodeDiscovery.Discover("/opt/node", NodeDiscovery.RequiredMajorVersion,
+            _ => (true, "v20.11.1"));
+
+        Assert.Equal(NodeAvailability.Available, state.Availability);
+        Assert.True(state.IsUsable);
+        Assert.Equal(20, state.Major);
+        Assert.Equal("/opt/node", state.Path);
+        Assert.True(state.Major >= NodeDiscovery.RequiredMajorVersion);
+    }
+
+    // ---- AC#1 (integration): a real modern Node is reported once with its version, and the sidecar runs ----
+
+    [Fact]
+    public async Task RealNode_IsReportedOnce_WithVersion_AndSidecarRuns()
+    {
+        var dir = NewProjectDir();
+        var path = Path.Combine(dir, "index.ts");
+        var code = "export const n = 1;\n";
+        await File.WriteAllTextAsync(path, code);
+
+        var host = new TestHost();
+        await using var parser = new TypeScriptParser();
+        parser.Initialize(host);
+
+        var (nodes, _) = await parser.ParseAsync(path, code);
+
+        // The real sidecar produced the symbol node (proof it launched — Node in the test env is >= v18) ...
+        Assert.Contains(nodes, n => n.Type == "JSComponent");
+        // ... and the onboarding state was reported once, naming the concrete Node version.
+        Assert.Single(host.Logger.Messages, m => m.Contains("using Node v", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ---- AC#3 (the core version gate): a working-but-too-old Node is refused with found-vs-required ----
+
+    [Fact]
+    public void Discover_OldNode_IsGated_WithFoundVsRequiredMessage()
+    {
+        var state = NodeDiscovery.Discover("/opt/node", NodeDiscovery.RequiredMajorVersion,
+            _ => (true, "v16.20.2"));
+
+        Assert.Equal(NodeAvailability.TooOld, state.Availability);
+        Assert.False(state.IsUsable);
+        Assert.Equal(16, state.Major);
+        Assert.Contains("16", state.Message);                              // found
+        Assert.Contains($"v{NodeDiscovery.RequiredMajorVersion}", state.Message); // required
+        Assert.Contains("too old", state.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- AC#3 (end-to-end): a too-old Node makes the parser refuse cleanly and degrade — no cryptic error ----
+
+    [Fact]
+    public async Task OldNode_ParserRefusesCleanly_DegradesToEsprima_WithFoundVsRequired()
+    {
+        var dir = NewProjectDir();
+        var path = Path.Combine(dir, "Plain.js");
+        var code = "import a from './a';\nexport const foo = 1;\n";
+        await File.WriteAllTextAsync(path, code);
+
+        var settings = new SidecarSettings { NodePath = Path.Combine(dir, "fake-old-node") };
+        var host = new TestHost();
+        await using var parser = new TypeScriptParser(settings, nodeProbeOverride: _ => (true, "v16.20.2"));
+        parser.Initialize(host);
+
+        var (nodes, edges) = await parser.ParseAsync(path, code); // must not throw
+
+        // Degraded to the Esprima fallback — the scan continues.
+        Assert.Contains(nodes, n => n.Type == "JSComponent");
+        Assert.Contains(edges, e => e.Relationship == "IMPORTS");
+
+        // The gate's found-vs-required message is surfaced ...
+        var stateMsg = Assert.Single(host.Logger.Messages, m => m.Contains("too old", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("16", stateMsg);
+        Assert.Contains($"v{NodeDiscovery.RequiredMajorVersion}", stateMsg);
+        // ... and no obscure sidecar transport/start error was produced (it never tried to start it).
+        Assert.DoesNotContain(host.Logger.Messages, m => m.Contains("transport", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(host.Logger.Messages, m => m.Contains("Failed to start", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ---- AC#2: Node missing -> one actionable message (requirement + how to install), scan continues ----
+
+    [Fact]
+    public void Discover_NoNode_ReportsNotFound_WithActionableInstallMessage()
+    {
+        var state = NodeDiscovery.Discover(configuredPath: null, requiredMajor: NodeDiscovery.RequiredMajorVersion,
+            probe: _ => (false, null));
+
+        Assert.Equal(NodeAvailability.NotFound, state.Availability);
+        Assert.False(state.IsUsable);
+        Assert.Contains("nodejs.org", state.Message);                       // how to install
+        Assert.Contains($"v{NodeDiscovery.RequiredMajorVersion}", state.Message); // the requirement
+    }
+
+    [Fact]
+    public async Task MissingNode_ParserEmitsOneActionableMessage_AndScanContinues()
+    {
+        var dir = NewProjectDir();
+        var path = Path.Combine(dir, "Plain.js");
+        var code = "export const foo = 1;\n";
+        await File.WriteAllTextAsync(path, code);
+
+        var settings = new SidecarSettings { NodePath = Path.Combine(dir, "no-such-node.exe") };
+        var host = new TestHost();
+        await using var parser = new TypeScriptParser(settings, nodeProbeOverride: _ => (false, null));
+        parser.Initialize(host);
+
+        var (nodes, _) = await parser.ParseAsync(path, code); // must not throw — scan continues
+
+        Assert.Contains(nodes, n => n.Type == "JSComponent"); // Esprima fallback
+        // Exactly one onboarding message, and it is actionable (requirement + install URL).
+        var stateMsg = Assert.Single(host.Logger.Messages, m => m.Contains("nodejs.org"));
+        Assert.Contains($"v{NodeDiscovery.RequiredMajorVersion}", stateMsg);
+    }
+
+    // ---- AC#4: a configured NodePath overrides auto-discovery and is authoritative ----
+
+    [Fact]
+    public void Discover_ConfiguredPath_OverridesDiscovery_AndPathIsNeverBypassed()
+    {
+        var probed = new List<string>();
+        var state = NodeDiscovery.Discover("/opt/mynode", NodeDiscovery.RequiredMajorVersion,
+            p => { probed.Add(p); return p == "/opt/mynode" ? (true, "v20.0.0") : (true, "v22.0.0"); });
+
+        Assert.Equal(NodeAvailability.Available, state.Availability);
+        Assert.Equal("/opt/mynode", state.Path);
+        // Only the configured path was consulted — PATH / common locations are never probed when it is set.
+        Assert.Equal(new[] { "/opt/mynode" }, probed);
+    }
+
+    [Fact]
+    public void Discover_ConfiguredPathTooOld_IsAuthoritative_DoesNotFallThroughToPath()
+    {
+        // Even though a newer Node exists on PATH, the explicit (too-old) NodePath wins and is reported too old,
+        // rather than being silently masked by a different runtime.
+        var state = NodeDiscovery.Discover("/opt/mynode", NodeDiscovery.RequiredMajorVersion,
+            p => p == "/opt/mynode" ? (true, "v16.0.0") : (true, "v20.0.0"));
+
+        Assert.Equal(NodeAvailability.TooOld, state.Availability);
+        Assert.Equal("/opt/mynode", state.Path);
+    }
+
+    // ---- AC#5: Node state is probed once and reported once — not re-probed on every path-taking call ----
+
+    [Fact]
+    public async Task NodeState_IsProbedOnce_AndReportedOnce_AcrossManyParses()
+    {
+        var dir = NewProjectDir();
+        var path = Path.Combine(dir, "A.js");
+        var code = "export const a = 1;\n";
+        await File.WriteAllTextAsync(path, code);
+
+        var probeCalls = 0;
+        var settings = new SidecarSettings { NodePath = Path.Combine(dir, "missing-node") };
+        var host = new TestHost();
+        await using var parser = new TypeScriptParser(settings,
+            nodeProbeOverride: _ => { Interlocked.Increment(ref probeCalls); return (false, null); });
+        parser.Initialize(host);
+
+        for (var i = 0; i < 3; i++)
+        {
+            await parser.ParseAsync(path, code);
+        }
+
+        Assert.Equal(1, probeCalls); // discovered once; never re-probed on subsequent parses
+        // The first-run state report appears exactly once (identified by the actionable install URL).
+        Assert.Single(host.Logger.Messages, m => m.Contains("nodejs.org"));
+    }
+
+    // ---- version parsing robustness (leading v, whitespace, pre-release, no-v) ----
+
+    [Theory]
+    [InlineData("v18.19.0", 18)]
+    [InlineData("  v20.11.1\n", 20)]
+    [InlineData("v22.0.0-nightly20240101", 22)]
+    [InlineData("24.4.1", 24)]
+    [InlineData("", null)]
+    [InlineData("not-a-version", null)]
+    public void ParseMajor_ExtractsMajorVersion_Robustly(string input, int? expected)
+        => Assert.Equal(expected, NodeDiscovery.ParseMajor(input));
+
     // ---- test doubles ----
 
     private sealed class TestHost : IPluginHost
