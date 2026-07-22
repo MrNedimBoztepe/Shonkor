@@ -29,11 +29,13 @@ public sealed class TypeScriptParser : IFileParser, IPluginInitializable, IAsync
     private readonly string _scriptPath;
     private readonly SidecarSettings _settings;
     private readonly TimeSpan _timeout;
+    private readonly Func<string, (bool Started, string? VersionOutput)>? _nodeProbeOverride;
 
     private ILogger _logger = NullLogger.Instance;
     private NodeSidecarClient? _client;
     private bool _discoveryDone;
     private string? _nodePath;
+    private bool _nodeStateReported;
     private bool _nodeUnavailableLogged;
     private int _consecutiveTimeouts;
     private volatile bool _disposed;
@@ -49,14 +51,18 @@ public sealed class TypeScriptParser : IFileParser, IPluginInitializable, IAsync
     /// <summary>
     /// Test-only constructor: injects explicit settings (Node path / timeout) so a test can exercise
     /// degradation and timeout paths deterministically without touching the on-disk settings file. The
-    /// sidecar script is still resolved from the plugin folder.
+    /// sidecar script is still resolved from the plugin folder. <paramref name="nodeProbeOverride"/> replaces
+    /// the real <c>node --version</c> probe so the #303 version gate (found / too old / missing) can be driven
+    /// deterministically without spawning a real Node.
     /// </summary>
-    internal TypeScriptParser(SidecarSettings settings, string? pluginDirectoryOverride = null)
+    internal TypeScriptParser(SidecarSettings settings, string? pluginDirectoryOverride = null,
+        Func<string, (bool Started, string? VersionOutput)>? nodeProbeOverride = null)
     {
         _pluginDirectory = pluginDirectoryOverride ?? ResolvePluginDirectory();
         _scriptPath = Path.Combine(_pluginDirectory, "sidecar", "index.js");
         _settings = settings;
         _timeout = settings.ResolveTimeout();
+        _nodeProbeOverride = nodeProbeOverride;
     }
 
     /// <inheritdoc />
@@ -194,8 +200,12 @@ public sealed class TypeScriptParser : IFileParser, IPluginInitializable, IAsync
                 }
                 else
                 {
-                    _nodePath = NodeDiscovery.Discover(_settings.NodePath, out var reason);
-                    if (_nodePath == null) LogNodeUnavailableOnce(reason);
+                    // #303: probe + version-gate Node exactly once per scan, then report the state once (below).
+                    var state = _nodeProbeOverride is null
+                        ? NodeDiscovery.Discover(_settings.NodePath)
+                        : NodeDiscovery.Discover(_settings.NodePath, NodeDiscovery.RequiredMajorVersion, _nodeProbeOverride);
+                    ReportNodeStateOnce(state);
+                    _nodePath = state.IsUsable ? state.Path : null;
                 }
             }
 
@@ -217,6 +227,31 @@ public sealed class TypeScriptParser : IFileParser, IPluginInitializable, IAsync
         {
             _initLock.Release();
         }
+    }
+
+    /// <summary>
+    /// #303 (AC#5): reports the resolved Node state (found + version + path, or the actionable unavailable
+    /// message) exactly once per scan — the first-run diagnostic. Discovery itself already runs once (guarded by
+    /// <see cref="_discoveryDone"/>); this guarantees the human-visible report is not repeated per parse either.
+    /// </summary>
+    private void ReportNodeStateOnce(NodeState state)
+    {
+        if (_nodeStateReported) return;
+        _nodeStateReported = true;
+
+        if (state.IsUsable)
+        {
+            _logger.LogInformation(
+                "TypeScript Node sidecar: using Node {Version} at '{Path}' (minimum required v{Required}).",
+                state.Version, state.Path, NodeDiscovery.RequiredMajorVersion);
+            return;
+        }
+
+        // Missing or too old: one clear, actionable message (names the requirement + how to install). The scan
+        // continues via the Esprima fallback — the "unavailable" token keeps parity with the #292 degradation.
+        _logger.LogWarning(
+            "TypeScript Node sidecar unavailable: {Message} JS/TS files will be parsed with the Esprima fallback.",
+            state.Message);
     }
 
     private void LogNodeUnavailableOnce(string reason)

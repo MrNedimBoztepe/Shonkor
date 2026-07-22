@@ -106,12 +106,15 @@ public sealed class TypeScriptSemanticLinker : IGraphPostProcessor, IPluginIniti
         {
             return Diagnostic(DiagnosticSeverity.Warning, $"Sidecar script not found at '{_scriptPath}'; skipped TS semantic linking.");
         }
-        var nodePath = NodeDiscovery.Discover(_settings.NodePath, out var reason);
-        if (nodePath is null)
+        // #303: same discovery + version gate as the parser — a missing or too-old Node skips linking cleanly
+        // instead of starting the sidecar and failing cryptically.
+        var nodeState = NodeDiscovery.Discover(_settings.NodePath);
+        if (!nodeState.IsUsable)
         {
-            _logger.LogWarning("TypeScript semantic linker: Node unavailable ({Reason}); cross-file semantic edges skipped.", reason);
-            return Diagnostic(DiagnosticSeverity.Info, $"Node unavailable ({reason}); TS cross-file semantic edges skipped.");
+            _logger.LogWarning("TypeScript semantic linker: Node unavailable ({Reason}); cross-file semantic edges skipped.", nodeState.Message);
+            return Diagnostic(DiagnosticSeverity.Info, $"Node unavailable ({nodeState.Message}); TS cross-file semantic edges skipped.");
         }
+        var nodePath = nodeState.Path!;
 
         NodeSidecarClient client;
         try
