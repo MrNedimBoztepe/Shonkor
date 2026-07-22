@@ -255,7 +255,7 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
             if (string.IsNullOrWhiteSpace(pluginWorkspace)) pluginWorkspace = ResolveWorkspacePath();
             // stderr is the CLI's log channel (stdout carries MCP JSON-RPC), so plugin diagnostics (#292
             // sidecar timeouts / degradation) surface through a logger that writes there.
-            using var pluginLoad = AssemblyPluginLoader.LoadActive(pluginWorkspace, CliPluginHost.Instance);
+            await using var pluginLoad = AssemblyPluginLoader.LoadActive(pluginWorkspace, CliPluginHost.Instance);
             if (pluginLoad.Parsers.Count > 0)
             {
                 parsers.AddRange(pluginLoad.Parsers);
@@ -689,7 +689,7 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
             };
             var mcpPluginWorkspace = Environment.GetEnvironmentVariable("SHONKOR_WORKSPACE");
             if (string.IsNullOrWhiteSpace(mcpPluginWorkspace)) mcpPluginWorkspace = ResolveWorkspacePath();
-            using var mcpPluginLoad = AssemblyPluginLoader.LoadActive(mcpPluginWorkspace, CliPluginHost.Instance);
+            await using var mcpPluginLoad = AssemblyPluginLoader.LoadActive(mcpPluginWorkspace, CliPluginHost.Instance);
             mcpParsers.AddRange(mcpPluginLoad.Parsers);
             // Wire an embedding service when a backend is reachable, so search_semantic works over a graph
             // that has embeddings (built with `shonkor index --embed`). Absent backend → null → FTS-only

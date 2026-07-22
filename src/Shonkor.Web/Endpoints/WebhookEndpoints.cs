@@ -257,7 +257,7 @@ public static class WebhookEndpoints
                         // errors) surface through the webhook logger rather than a NullLogger on this
                         // unattended background path.
                         var activeParsers = new List<IFileParser>(parsers);
-                        using var pluginLoad = config.GetValue("Security:EnablePlugins", true)
+                        await using var pluginLoad = config.GetValue("Security:EnablePlugins", true)
                             ? AssemblyPluginLoader.LoadActive(pm.WorkspacePath, new PluginHost(webhookLogger))
                             : AssemblyPluginLoadResult.Empty;
                         activeParsers.AddRange(pluginLoad.Parsers);

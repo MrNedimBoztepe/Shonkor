@@ -213,6 +213,83 @@ public class AssemblyPluginLoaderTests
         """;
 
     /// <summary>
+    /// An <see cref="IAsyncDisposable"/> parser whose <c>DisposeAsync</c> writes its marker only AFTER a real
+    /// <c>await</c> continuation (<c>Task.Yield()</c>). Driven through the async teardown path the marker
+    /// proves the continuation actually ran — i.e. the component was awaited, not merely started — which is
+    /// exactly what the sync-over-async bridge is there to avoid. The marker's presence after teardown also
+    /// proves (as in the sync test) that disposal ran while the collectible ALC was still loaded, BEFORE the
+    /// unload — after unload the plugin's type is gone and its code can no longer run.
+    /// </summary>
+    private static string AsyncDisposableParserSource(string markerPath) => $$"""
+        using System;
+        using System.IO;
+        using System.Collections.Generic;
+        using System.Threading.Tasks;
+        using Shonkor.Core.Interfaces;
+        using Shonkor.Core.Models;
+
+        namespace AsyncDisposablePlugin;
+
+        public sealed class AsyncDisposableParser : IFileParser, IAsyncDisposable
+        {
+            public IReadOnlySet<string> SupportedExtensions { get; } = new HashSet<string> { ".adisp" };
+            public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new List<NodeTypeDescriptor>();
+
+            public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(string filePath, string content)
+                => Task.FromResult<(IReadOnlyList<GraphNode>, IReadOnlyList<GraphEdge>)>((new List<GraphNode>(), new List<GraphEdge>()));
+
+            public async ValueTask DisposeAsync()
+            {
+                await Task.Yield();
+                File.WriteAllText(@"{{markerPath.Replace("\\", "/")}}", "disposed-async");
+            }
+        }
+        """;
+
+    /// <summary>
+    /// Two <see cref="IAsyncDisposable"/> parsers in one plugin: <c>ThrowingParser</c> throws from
+    /// <c>DisposeAsync</c>, <c>MarkerParser</c> writes a marker. Proves per-component exception isolation on
+    /// the async path — the throwing teardown must not stop the other component's teardown, so the marker is
+    /// written regardless of the order the loader disposes them in.
+    /// </summary>
+    private static string ThrowingAndMarkerAsyncParsersSource(string markerPath) => $$"""
+        using System;
+        using System.IO;
+        using System.Collections.Generic;
+        using System.Threading.Tasks;
+        using Shonkor.Core.Interfaces;
+        using Shonkor.Core.Models;
+
+        namespace ThrowingAsyncPlugin;
+
+        public sealed class ThrowingParser : IFileParser, IAsyncDisposable
+        {
+            public IReadOnlySet<string> SupportedExtensions { get; } = new HashSet<string> { ".throw" };
+            public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new List<NodeTypeDescriptor>();
+            public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(string filePath, string content)
+                => Task.FromResult<(IReadOnlyList<GraphNode>, IReadOnlyList<GraphEdge>)>((new List<GraphNode>(), new List<GraphEdge>()));
+            public async ValueTask DisposeAsync()
+            {
+                await Task.Yield();
+                throw new InvalidOperationException("teardown boom");
+            }
+        }
+
+        public sealed class MarkerParser : IFileParser, IAsyncDisposable
+        {
+            public IReadOnlySet<string> SupportedExtensions { get; } = new HashSet<string> { ".mark" };
+            public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new List<NodeTypeDescriptor>();
+            public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(string filePath, string content)
+                => Task.FromResult<(IReadOnlyList<GraphNode>, IReadOnlyList<GraphEdge>)>((new List<GraphNode>(), new List<GraphEdge>()));
+            public async ValueTask DisposeAsync()
+            {
+                await Task.Yield();
+                File.WriteAllText(@"{{markerPath.Replace("\\", "/")}}", "disposed-async");
+            }
+        }
+        """;
+
+    /// <summary>
     /// A parser that implements the optional <see cref="IPluginInitializable"/> hook. On
     /// <c>Initialize(host)</c> it writes a marker file (proving the hook ran) and logs through the host's
     /// <see cref="IPluginHost.Logger"/> (proving the supplied logger is usable). With no host the loader must
@@ -416,6 +493,84 @@ public class AssemblyPluginLoaderTests
             Assert.Single(nodes);
 
             loaded.Dispose(); // no IDisposable to call; must complete cleanly, exactly as before
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task DisposeAsync_AwaitsAsyncDisposableComponent_BeforeUnloadingItsLoadContext()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_pluginadispose_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var marker = Path.Combine(ws, "adisposed.marker");
+        try
+        {
+            var registry = InstallAndActivate(ws, AsyncDisposableParserSource(marker), "AsyncDisposablePlugin", "adisp");
+
+            var loaded = AssemblyPluginLoader.LoadActive(registry);
+            Assert.Single(loaded.Parsers);
+            Assert.False(File.Exists(marker)); // not disposed while still in use
+
+            // Async teardown path (#308): the component's DisposeAsync is awaited, not bridged via
+            // sync-over-async. Its marker is written only after an inner await continuation, so the marker's
+            // presence proves the continuation actually completed — and, as in the sync test, that teardown
+            // ran while the ALC was still loaded (BEFORE the unload — after unload the type would be gone).
+            await loaded.DisposeAsync();
+
+            Assert.True(File.Exists(marker));
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task DisposeAsync_IsolatesAThrowingComponent_SoTheOthersStillTearDown()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_pluginadispiso_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var marker = Path.Combine(ws, "iso.marker");
+        try
+        {
+            var registry = InstallAndActivate(ws, ThrowingAndMarkerAsyncParsersSource(marker), "ThrowingAsyncPlugin", "athrow");
+
+            var loaded = AssemblyPluginLoader.LoadActive(registry);
+            Assert.Equal(2, loaded.Parsers.Count);
+
+            // One parser's DisposeAsync throws; the exception must be swallowed and must not abort the other
+            // component's teardown, mirroring the sync path's per-component isolation.
+            await loaded.DisposeAsync(); // must not throw
+
+            Assert.True(File.Exists(marker)); // the non-throwing component was still torn down
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task DisposeAsync_IsIdempotent_AndSafeAfterSyncDispose()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_pluginadispidem_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var marker = Path.Combine(ws, "idem.marker");
+        try
+        {
+            var registry = InstallAndActivate(ws, AsyncDisposableParserSource(marker), "AsyncDisposablePlugin", "adisp");
+
+            var loaded = AssemblyPluginLoader.LoadActive(registry);
+            loaded.Dispose(); // sync path first
+            Assert.True(File.Exists(marker));
+
+            // A subsequent async teardown is a no-op (already unloaded) and must not throw — both paths guard
+            // on the same _contexts sentinel, so mixing them across the dual API is safe.
+            await loaded.DisposeAsync();
+            await loaded.DisposeAsync();
         }
         finally
         {
