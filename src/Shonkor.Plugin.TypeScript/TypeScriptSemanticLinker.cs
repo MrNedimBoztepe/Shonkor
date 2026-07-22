@@ -187,6 +187,19 @@ public sealed class TypeScriptSemanticLinker : IGraphPostProcessor, IPluginIniti
                 _ => DiagnosticSeverity.Info
             };
             diagnostics.Add(new GraphDiagnostic(Name, severity, d.Message));
+
+            // #323: an id-parity miss (silent under-linking, e.g. symlink/realpath) arrives as a WARNING WITH
+            // THE FILE NAME from the sidecar. Escalate warning/error diagnostics to the logger so the missing
+            // edges are visible in logs, not just in the returned diagnostic list — the generic "N dangling
+            // skipped" info-line below never named the file.
+            if (severity == DiagnosticSeverity.Warning)
+            {
+                _logger.LogWarning("TypeScript semantic linker: {Message}", d.Message);
+            }
+            else if (severity == DiagnosticSeverity.Error)
+            {
+                _logger.LogError("TypeScript semantic linker: {Message}", d.Message);
+            }
         }
 
         _logger.LogInformation(
