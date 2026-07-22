@@ -212,6 +212,57 @@ public sealed class TypeScriptSemanticLinkerTests : IDisposable
         Assert.All(edges, e => Assert.Contains(e.TargetId, known));
     }
 
+    // ---- #323: a path round-trip miss (symlink/realpath-like) surfaces as a WARNING, not a silent drop ----
+
+    [Fact]
+    public async Task IdParityMiss_SurfacesAsWarningWithFileName_NotSilentUnderLinking()
+    {
+        // A symlink/realpath miss = TS's normalised `sourceFile.fileName` differs from the original `rootName`
+        // beyond slash normalisation, so `originalPathOf` cannot round-trip it and the file's edges are dropped
+        // by the knownIds backstop. We provoke that miss DETERMINISTICALLY (no fragile real symlinks) by feeding
+        // the #293 parser a rootName that carries an un-normalised `..` segment: TS collapses it to `<dir>/dep.ts`,
+        // which no longer matches the original `<dir>/sub/../dep.ts` key -> exactly the round-trip miss.
+        var dir = NewProjectDir();
+        await WriteTsconfig(dir);
+
+        // Physical files at their real locations (TS reads the normalised path off disk).
+        var depRealPath = Path.Combine(dir, "dep.ts");
+        var consumerPath = Path.Combine(dir, "consumer.ts");
+        await File.WriteAllTextAsync(depRealPath, "export class Dep { run(): void {} }\n");
+        await File.WriteAllTextAsync(consumerPath,
+            "import { Dep } from './dep';\n" +
+            "export class Consumer {\n" +
+            "  use(d: Dep): void { d.run(); }\n" +
+            "}\n");
+
+        // The un-normalised path the parser (and hence the linker's rootName) sees for dep.ts.
+        var depRootName = Path.Combine(dir, "sub", "..", "dep.ts"); // "<dir>\sub\..\dep.ts" — `..` kept literal
+
+        var host = new TestHost();
+        var nodes = new List<GraphNode>();
+        await using (var parser = new TypeScriptParser())
+        {
+            parser.Initialize(host);
+            var (depNodes, _) = await parser.ParseAsync(depRootName, await File.ReadAllTextAsync(depRealPath));
+            var (consumerNodes, _) = await parser.ParseAsync(consumerPath, await File.ReadAllTextAsync(consumerPath));
+            nodes.AddRange(depNodes);
+            nodes.AddRange(consumerNodes);
+        }
+
+        var graph = new FakeGraphView(nodes);
+        var enrichment = await LinkAsync(graph);
+
+        // AC#1/AC#3: the miss is VISIBLE — a warning naming the file, not a silent drop.
+        var parityWarning = Assert.Single(enrichment.Diagnostics,
+            d => d.Severity == DiagnosticSeverity.Warning && d.Message.Contains("id-parity miss"));
+        Assert.Contains("dep.ts", parityWarning.Message);
+
+        // The under-linking the warning surfaces is real: the cross-file edges into the mis-mapped file ARE
+        // dropped (the id built from the un-round-trippable path matches no parser node) — so the warning is the
+        // ONLY signal that these edges are missing.
+        Assert.DoesNotContain(enrichment.Edges, e => e.TargetId.Contains("Dep"));
+    }
+
     // ---- AC#5: type-checker-resolved edges are EXTRACTED ----
 
     [Fact]

@@ -50,9 +50,42 @@ const TYPED_EXTS = new Set(['.ts', '.tsx']);
  */
 let originalPathOf = (fileName) => fileName;
 
+/*
+ * Under-linking observability (#323). The ONLY degeneration mode of this linker is SILENT under-linking: when
+ * `originalPathOf` cannot map a program source file's forward-slash `fileName` back to an original `rootName`
+ * (real with symlink/realpath — TS runs default `preserveSymlinks:false` and resolves declarations to a
+ * realpath OUTSIDE the rootNames; pnpm/monorepo trees), the derived id is the unmapped forward-slash variant,
+ * which matches NO #293 parser node -> the host's knownIds backstop drops ALL of that file's edges quietly.
+ *
+ * We surface it (WITHOUT resolving the symlink itself — that is a separate ticket). `isRootFile` answers "is
+ * this TS fileName one of the input rootNames?"; when a real PROJECT source file (typed TS, not a `.d.ts`, not
+ * node_modules) is NOT a rootName, its id will not round-trip, so we record it in `parityMisses` and link()
+ * emits a per-file warning. External symbols (`.d.ts`/node_modules) legitimately have no node and are still
+ * skipped silently (AC#4 of #294) — only the rootName-miss (a project file that SHOULD have mapped) warns.
+ */
+let isRootFile = () => false;
+const parityMisses = new Set();
+
+/** True for a path inside a node_modules tree — an external dependency, never a first-party project file. */
+function isExternalPath(fileName) {
+  return /[\\/]node_modules[\\/]/.test(fileName);
+}
+
 /** The module / JSComponent node id for a source file (parity with index.js's parseRequest). */
 function moduleIdOf(sourceFile) {
-  const fp = originalPathOf(sourceFile.fileName);
+  const fileName = sourceFile.fileName;
+  // Record a parity miss (#323): a typed-TS project source file (not a `.d.ts`, not node_modules) whose TS
+  // fileName is not one of the rootNames — its id will fall through to the unmapped variant and be dropped by
+  // the host backstop. `.js`/`.jsx` targets are owned by #293/#295 (never linked here), so they never warn.
+  if (
+    TYPED_EXTS.has(path.extname(fileName).toLowerCase()) &&
+    !sourceFile.isDeclarationFile &&
+    !isExternalPath(fileName) &&
+    !isRootFile(fileName)
+  ) {
+    parityMisses.add(fileName);
+  }
+  const fp = originalPathOf(fileName);
   const componentName = path.basename(fp).replace(/\.[^.]+$/, '');
   return componentIdFor(fp, componentName);
 }
@@ -412,6 +445,11 @@ function link(ts, req) {
   for (const r of rootNames) rootByNormalized.set(r.replace(/\\/g, '/'), r);
   originalPathOf = (fileName) =>
     rootByNormalized.get(fileName) || rootByNormalized.get(fileName.replace(/\\/g, '/')) || fileName;
+  // Parity-miss detection (#323): a fileName that round-trips through the map is a rootName; anything else is
+  // an unmapped project file (or an external/.d.ts, which moduleIdOf filters out before recording a miss).
+  isRootFile = (fileName) =>
+    rootByNormalized.has(fileName) || rootByNormalized.has(fileName.replace(/\\/g, '/'));
+  parityMisses.clear();
 
   const options = loadCompilerOptions(ts, projectDir, diagnostics);
   const program = ts.createProgram(rootNames, options);
@@ -450,7 +488,33 @@ function link(ts, req) {
       ? { sourceId: e.sourceId, targetId: e.targetId, relationship: e.relationship, ambiguous: true }
       : { sourceId: e.sourceId, targetId: e.targetId, relationship: e.relationship });
 
-  return { edges, diagnostics, meta: { rootCount: rootNames.length, filesWalked, edgeCount: edges.length } };
+  // #323 (AC#1): surface each parity miss as a WARNING WITH THE FILE NAME instead of a silent drop. Every edge
+  // touching this file is under-linked (dropped by the host's knownIds backstop), so the cross-file semantic
+  // links for it are missing — the exact risk the generic "N dangling skipped" info-log hid.
+  const parityMissFiles = [...parityMisses];
+  for (const fileName of parityMissFiles) {
+    diagnostics.push({
+      severity: 'warning',
+      message:
+        `link: id-parity miss for project file '${fileName}' — its TS path did not map back to an input ` +
+        `rootName, so its cross-file edges are dropped (silent under-linking). Likely a symlink/realpath ` +
+        `(TS default preserveSymlinks:false resolves declarations to a realpath outside the rootNames).`,
+    });
+  }
+
+  // #323 (AC#2): a coarse parity summary (miss count) rides along in meta so a regression is observable at a
+  // glance without parsing the per-file warnings.
+  return {
+    edges,
+    diagnostics,
+    meta: {
+      rootCount: rootNames.length,
+      filesWalked,
+      edgeCount: edges.length,
+      parityMissCount: parityMissFiles.length,
+      parityMissFiles,
+    },
+  };
 }
 
 module.exports = { link };
