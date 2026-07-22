@@ -115,7 +115,7 @@ public sealed class DriftReconciliationService : BackgroundService
                 // Pass an IPluginHost so a plugin that opts into IPluginInitializable (#306) — e.g. the #292
                 // TypeScript sidecar — surfaces its diagnostics (timeouts/degradation/parse errors) through
                 // this background service's logger instead of silently discarding them into a NullLogger.
-                using var pluginLoad = enablePlugins
+                await using var pluginLoad = enablePlugins
                     ? AssemblyPluginLoader.LoadActive(_projectManager.WorkspacePath, new PluginHost(_logger))
                     : AssemblyPluginLoadResult.Empty;
                 activeParsers.AddRange(pluginLoad.Parsers);

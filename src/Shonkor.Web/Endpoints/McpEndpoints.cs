@@ -129,7 +129,9 @@ public static class McpEndpoints
             {
                 // Per-request teardown: dispose the plugin load so any sidecar process (e.g. #292 TypeScript)
                 // is killed instead of leaking one process per relay request. Empty when no plugins loaded.
-                pluginLoad.Dispose();
+                // Async teardown (#308): this handler is already async, so await the sidecar's graceful kill
+                // rather than blocking a threadpool thread on it via sync-over-async.
+                await pluginLoad.DisposeAsync();
             }
         })
         .WithName("RelayMcpMessage")

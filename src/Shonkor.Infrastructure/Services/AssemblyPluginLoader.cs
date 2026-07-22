@@ -9,9 +9,18 @@ namespace Shonkor.Infrastructure.Services;
 
 /// <summary>
 /// The parsers loaded from the currently-active plugin assemblies, together with the collectible load
-/// contexts they live in. Dispose to unload them and reclaim memory.
+/// contexts they live in. Tear down to unload them and reclaim memory.
 /// </summary>
-public sealed class AssemblyPluginLoadResult : IDisposable
+/// <remarks>
+/// Two teardown paths exist (#308). Prefer <see cref="DisposeAsync"/> (<c>await using</c>) wherever the
+/// caller is already async: it disposes an <see cref="IAsyncDisposable"/> component by awaiting it — no
+/// sync-over-async — so a plugin whose teardown is real async I/O (e.g. the #292 TypeScript sidecar's
+/// graceful Node-process kill with timeout) does not block a threadpool thread. The synchronous
+/// <see cref="Dispose"/> stays for genuinely-sync call sites and falls back to sync-over-async for those
+/// async components. Both paths hold the #306 invariant: components are torn down BEFORE their load
+/// contexts are unloaded, and a failing component's teardown is isolated from the rest.
+/// </remarks>
+public sealed class AssemblyPluginLoadResult : IDisposable, IAsyncDisposable
 {
     private List<AssemblyLoadContext>? _contexts;
 
@@ -40,7 +49,34 @@ public sealed class AssemblyPluginLoadResult : IDisposable
         foreach (var parser in Parsers) DisposeComponent(parser);
         foreach (var postProcessor in PostProcessors) DisposeComponent(postProcessor);
 
-        foreach (var ctx in _contexts)
+        UnloadContexts();
+    }
+
+    /// <summary>
+    /// Asynchronous teardown (#308). Identical ordering and isolation guarantees as <see cref="Dispose"/>,
+    /// but an <see cref="IAsyncDisposable"/> component is awaited instead of blocked on via sync-over-async,
+    /// so a plugin whose teardown is genuine async I/O (e.g. the #292 sidecar's graceful process kill with
+    /// timeout) never pins a threadpool thread.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (_contexts == null) return;
+
+        // Same #306 invariant as the sync path: components are torn down while their ALC is still alive,
+        // BEFORE the unload below — otherwise the plugin's types are gone and its teardown can no longer run.
+        foreach (var parser in Parsers) await DisposeComponentAsync(parser).ConfigureAwait(false);
+        foreach (var postProcessor in PostProcessors) await DisposeComponentAsync(postProcessor).ConfigureAwait(false);
+
+        UnloadContexts();
+    }
+
+    /// <summary>
+    /// Unloads the collectible load contexts once their components have been torn down, and marks this result
+    /// disposed so a second teardown (of either kind) is a no-op. Shared by both teardown paths.
+    /// </summary>
+    private void UnloadContexts()
+    {
+        foreach (var ctx in _contexts!)
         {
             if (ctx.IsCollectible) ctx.Unload();
         }
@@ -48,9 +84,11 @@ public sealed class AssemblyPluginLoadResult : IDisposable
     }
 
     /// <summary>
-    /// Disposes one loaded plugin component, preferring <see cref="IAsyncDisposable"/> over
-    /// <see cref="IDisposable"/>. A failure is isolated (swallowed) so one plugin's faulty teardown never
-    /// blocks the remaining components or the ALC unload — mirroring the load-time failure isolation.
+    /// Disposes one loaded plugin component on the synchronous path, preferring <see cref="IAsyncDisposable"/>
+    /// over <see cref="IDisposable"/>. An async component is bridged via sync-over-async here — the cost the
+    /// async path (<see cref="DisposeComponentAsync"/>) exists to avoid. A failure is isolated (swallowed) so
+    /// one plugin's faulty teardown never blocks the remaining components or the ALC unload — mirroring the
+    /// load-time failure isolation.
     /// </summary>
     private static void DisposeComponent(object component)
     {
@@ -59,6 +97,31 @@ public sealed class AssemblyPluginLoadResult : IDisposable
             if (component is IAsyncDisposable asyncDisposable)
             {
                 asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            else if (component is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+        catch
+        {
+            // Intentionally swallowed: a plugin's teardown must not block the others or the context unload.
+        }
+    }
+
+    /// <summary>
+    /// Disposes one loaded plugin component on the asynchronous path, preferring <see cref="IAsyncDisposable"/>
+    /// (awaited, never sync-over-async) over <see cref="IDisposable"/>. Exactly like <see cref="DisposeComponent"/>,
+    /// a failure is isolated (swallowed) so one plugin's faulty teardown never blocks the remaining components
+    /// or the ALC unload.
+    /// </summary>
+    private static async ValueTask DisposeComponentAsync(object component)
+    {
+        try
+        {
+            if (component is IAsyncDisposable asyncDisposable)
+            {
+                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
             }
             else if (component is IDisposable disposable)
             {

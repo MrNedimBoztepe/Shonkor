@@ -73,7 +73,7 @@ public static class IndexEndpoints
                     // sidecar (#292) — can surface diagnostics (timeouts, Node-unavailable degradation, parse
                     // errors) through the host log pipeline.
                     var pluginHost = new PluginHost(loggerFactory.CreateLogger("Shonkor.Plugin"));
-                    using var pluginLoad = PluginsEnabled(config)
+                    await using var pluginLoad = PluginsEnabled(config)
                         ? AssemblyPluginLoader.LoadActive(pm.WorkspacePath, pluginHost)
                         : AssemblyPluginLoadResult.Empty;
                     activeParsers.AddRange(pluginLoad.Parsers);
