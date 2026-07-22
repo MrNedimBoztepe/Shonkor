@@ -2,6 +2,8 @@
 
 using System.Text.Json;
 
+using Microsoft.Extensions.DependencyInjection;
+
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
 using Shonkor.Core.Services;
@@ -48,6 +50,49 @@ public class McpRelayPluginParserTests
             new List<IFileParser> { new FakeTsParser() });
 
         // Tenant-locked (SaaS): no parsers -> reindex_file stays disabled, never touching a tenant's graph.
+        Assert.Null(result);
+    }
+
+    // ---- The endpoint's wiring seam (the merge as the relay actually resolves it) ----
+    // These drive ResolveRelayFileParsers, the seam extracted from McpEndpoints.MapMcpEndpoints, so the
+    // non-tenant-locked relay branch is covered: the HTTP pipeline never reaches it (ApiKeyMiddleware always
+    // tenant-locks /api/mcp), yet the endpoint MUST merge the active plugin parsers into the list it hands
+    // reindex_file. A regression that reverts the endpoint to the pre-#292
+    // `isTenantLocked ? null : GetService<IEnumerable<IFileParser>>()` (dropping the plugin merge) turns the
+    // next test red — unlike the BuildRelayFileParsers helper tests above, which such a revert leaves green.
+
+    [Fact]
+    public void ResolveRelayFileParsers_NotTenantLocked_MergesDiParsersWithActivePlugins()
+    {
+        // The relay resolves its base parsers from request DI, exactly as the endpoint does. Register a base
+        // parser so we can prove the seam keeps BOTH it and the active plugin parser.
+        var services = new ServiceCollection()
+            .AddSingleton<IFileParser, RoslynAstParser>()
+            .BuildServiceProvider();
+        var pluginParsers = new List<IFileParser> { new FakeTsParser() };
+
+        var result = EndpointHelpers.ResolveRelayFileParsers(
+            services, isTenantLocked: false, pluginParsers);
+
+        Assert.NotNull(result);
+        var list = result!.ToList();
+        // Base parser from DI is preserved AND the active plugin's JS/TS parser is merged in — so a
+        // reindex_file of a .ts/.tsx/.js/.jsx file over the relay finds a parser and does not clear its nodes.
+        Assert.Contains(list, p => p is RoslynAstParser);
+        Assert.Contains(list, p => p is FakeTsParser);
+    }
+
+    [Fact]
+    public void ResolveRelayFileParsers_TenantLocked_ReturnsNull_DisablingReindex()
+    {
+        var services = new ServiceCollection()
+            .AddSingleton<IFileParser, RoslynAstParser>()
+            .BuildServiceProvider();
+
+        var result = EndpointHelpers.ResolveRelayFileParsers(
+            services, isTenantLocked: true, new List<IFileParser> { new FakeTsParser() });
+
+        // SaaS: the seam disables reindex_file regardless of any registered or active parsers.
         Assert.Null(result);
     }
 

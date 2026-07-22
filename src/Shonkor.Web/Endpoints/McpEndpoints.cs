@@ -76,10 +76,8 @@ public static class McpEndpoints
                     context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Shonkor.Plugin"));
                 pluginLoad = AssemblyPluginLoader.LoadActive(projectManager.WorkspacePath, pluginHost);
             }
-            var fileParsers = BuildRelayFileParsers(
-                isTenantLocked,
-                context.RequestServices.GetService<IEnumerable<IFileParser>>(),
-                pluginLoad.Parsers);
+            var fileParsers = ResolveRelayFileParsers(
+                context.RequestServices, isTenantLocked, pluginLoad.Parsers);
             // Shared compilation cache (singleton) so a semantic-project reindex_file refreshes CALLS
             // incrementally. Only for trusted-local sessions, alongside the file parsers it depends on.
             var compilationCache = isTenantLocked ? null : context.RequestServices.GetService<SemanticCompilationCache>();

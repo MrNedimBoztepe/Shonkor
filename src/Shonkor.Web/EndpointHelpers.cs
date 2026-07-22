@@ -120,6 +120,28 @@ public static class EndpointHelpers
     }
 
     /// <summary>
+    /// The MCP relay's parser-list wiring seam: resolves the host's base file parsers from
+    /// <paramref name="services"/> and merges the active plugin parsers via <see cref="BuildRelayFileParsers"/>.
+    /// <para>
+    /// Extracted verbatim from <c>McpEndpoints.MapMcpEndpoints</c> so this composition — resolving the DI
+    /// parsers AND merging the plugin parsers, rather than the pre-#292 <c>isTenantLocked ? null :
+    /// GetService&lt;IEnumerable&lt;IFileParser&gt;&gt;()</c> — is reachable by a unit test. The relay's
+    /// non-tenant-locked branch is unreachable over the HTTP pipeline (<see cref="Middleware.ApiKeyMiddleware"/>
+    /// always tenant-locks <c>/api/mcp</c>), so without this seam a regression that drops the plugin merge in
+    /// the endpoint would leave every existing test green. Exercising this method with a plugin parser proves
+    /// the endpoint keeps it.
+    /// </para>
+    /// </summary>
+    public static IEnumerable<IFileParser>? ResolveRelayFileParsers(
+        IServiceProvider services,
+        bool isTenantLocked,
+        IReadOnlyList<IFileParser> activePluginParsers) =>
+        BuildRelayFileParsers(
+            isTenantLocked,
+            services.GetService<IEnumerable<IFileParser>>(),
+            activePluginParsers);
+
+    /// <summary>
     /// Whether to use exact semantic C# resolution when indexing <paramref name="project"/>: the
     /// per-project <see cref="Project.SemanticCSharp"/> setting wins; otherwise the global
     /// <c>Indexing:SemanticCSharp</c> setting applies, which itself defaults to ON when unset (semantic
