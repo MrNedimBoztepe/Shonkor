@@ -1,6 +1,13 @@
 // Licensed to Shonkor under the MIT License.
 
+using System.Runtime.Loader;
+using System.Text;
 using System.Text.Json;
+
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 using Shonkor.Core.Interfaces;
 using Shonkor.Core.Models;
@@ -8,6 +15,7 @@ using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Services;
 using Shonkor.Infrastructure.Storage;
 using Shonkor.Web;
+using Shonkor.Web.Endpoints;
 
 namespace Shonkor.Tests;
 
@@ -49,6 +57,48 @@ public class McpRelayPluginParserTests
 
         // Tenant-locked (SaaS): no parsers -> reindex_file stays disabled, never touching a tenant's graph.
         Assert.Null(result);
+    }
+
+    // ---- The endpoint WIRING itself: McpEndpoints.RelayAsync must merge the active plugin parsers ----
+    // This drives the real relay handler (not the isolated helper) against a non-tenant-locked context — the
+    // branch the HTTP pipeline can never reach, since ApiKeyMiddleware always tenant-locks /api/mcp. It proves
+    // the endpoint actually merges the active plugin parser into the list it hands reindex_file: with the
+    // plugin's .ts parser present the seeded node survives; if the endpoint reverted to the pre-#292 wiring
+    // (`isTenantLocked ? null : GetService<IEnumerable<IFileParser>>()`, dropping the merge) the .ts file
+    // would find no parser and its node would be CLEARED. Unlike the BuildRelayFileParsers helper tests above,
+    // this one goes red on a regression in the ENDPOINT, not just in the helper.
+
+    [Fact]
+    public async Task RelayEndpoint_NotTenantLocked_MergesActivePluginParser_SoReindexKeepsTsNodes()
+    {
+        var (pm, synth, _, db, tsPath) = await SetupProjectWithSeededTsNodeAsync();
+
+        // A fake plugin loader stands in for the real assembly loader so the test supplies a KNOWN active
+        // plugin parser (the JS/TS one) without a plugin on disk or a live sidecar. This DI override is the
+        // only substitution — everything else runs the real McpEndpoints.RelayAsync handler.
+        RelayPluginLoader fakeLoader = (_, _) => new AssemblyPluginLoadResult(
+            new List<IFileParser> { new FakeTsParser() },
+            Array.Empty<IGraphPostProcessor>(),
+            new List<AssemblyLoadContext>());
+
+        var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build()) // plugins enabled by default
+            .AddLogging()
+            .AddSingleton<IFileParser, RoslynAstParser>() // the host's DI parsers carry NO .ts parser (#292)
+            .AddSingleton(fakeLoader)                      // the active plugin parser source
+            .BuildServiceProvider();
+
+        var context = new DefaultHttpContext { RequestServices = services };
+        context.Request.Headers["X-Project-Name"] = "P";
+        // No AuthenticatedProjectName in Items => isTenantLocked = false: the trusted-local relay branch.
+        context.Request.Body = new MemoryStream(
+            Encoding.UTF8.GetBytes(ReindexCall(Path.GetFileName(tsPath))));
+
+        await McpEndpoints.RelayAsync(context, pm, synth);
+
+        // The endpoint merged the plugin's .ts parser into the reindex parser list, so the file was re-parsed
+        // (its node kept) instead of cleared. Dropping the merge in the endpoint => no .ts parser => count 0.
+        Assert.True(await NodeCountForFileAsync(db, tsPath) > 0);
     }
 
     // ---- The consequence the fix prevents: reindex of a .ts file must not delete its nodes ----
