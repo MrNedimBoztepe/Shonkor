@@ -3,6 +3,7 @@
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
 using Shonkor.Core.Interfaces;
 
 namespace Shonkor.Infrastructure.Services;
@@ -24,16 +25,22 @@ public sealed class AssemblyPluginLoadResult : IDisposable, IAsyncDisposable
 {
     private List<AssemblyLoadContext>? _contexts;
 
+    // The host's diagnostics channel (#306), threaded through from the load so the teardown helpers can
+    // surface a component's Dispose failure instead of swallowing it silently (#309). Null when the result
+    // was loaded without a host — then teardown failures stay silent, exactly as before.
+    private readonly ILogger? _logger;
+
     public IReadOnlyList<IFileParser> Parsers { get; }
 
     /// <summary>The graph-aware "phase 2" post-processors loaded from the active plugin assemblies.</summary>
     public IReadOnlyList<IGraphPostProcessor> PostProcessors { get; }
 
-    internal AssemblyPluginLoadResult(IReadOnlyList<IFileParser> parsers, IReadOnlyList<IGraphPostProcessor> postProcessors, List<AssemblyLoadContext> contexts)
+    internal AssemblyPluginLoadResult(IReadOnlyList<IFileParser> parsers, IReadOnlyList<IGraphPostProcessor> postProcessors, List<AssemblyLoadContext> contexts, ILogger? logger = null)
     {
         Parsers = parsers;
         PostProcessors = postProcessors;
         _contexts = contexts;
+        _logger = logger;
     }
 
     public static AssemblyPluginLoadResult Empty { get; } = new(Array.Empty<IFileParser>(), Array.Empty<IGraphPostProcessor>(), new List<AssemblyLoadContext>());
@@ -86,11 +93,11 @@ public sealed class AssemblyPluginLoadResult : IDisposable, IAsyncDisposable
     /// <summary>
     /// Disposes one loaded plugin component on the synchronous path, preferring <see cref="IAsyncDisposable"/>
     /// over <see cref="IDisposable"/>. An async component is bridged via sync-over-async here — the cost the
-    /// async path (<see cref="DisposeComponentAsync"/>) exists to avoid. A failure is isolated (swallowed) so
-    /// one plugin's faulty teardown never blocks the remaining components or the ALC unload — mirroring the
-    /// load-time failure isolation.
+    /// async path (<see cref="DisposeComponentAsync"/>) exists to avoid. A failure is isolated (not rethrown)
+    /// so one plugin's faulty teardown never blocks the remaining components or the ALC unload — mirroring the
+    /// load-time failure isolation — but is surfaced through the host logger (#309) instead of vanishing.
     /// </summary>
-    private static void DisposeComponent(object component)
+    private void DisposeComponent(object component)
     {
         try
         {
@@ -103,19 +110,20 @@ public sealed class AssemblyPluginLoadResult : IDisposable, IAsyncDisposable
                 disposable.Dispose();
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Intentionally swallowed: a plugin's teardown must not block the others or the context unload.
+            LogTeardownFailure(component, ex);
         }
     }
 
     /// <summary>
     /// Disposes one loaded plugin component on the asynchronous path, preferring <see cref="IAsyncDisposable"/>
     /// (awaited, never sync-over-async) over <see cref="IDisposable"/>. Exactly like <see cref="DisposeComponent"/>,
-    /// a failure is isolated (swallowed) so one plugin's faulty teardown never blocks the remaining components
-    /// or the ALC unload.
+    /// a failure is isolated (not rethrown) so one plugin's faulty teardown never blocks the remaining
+    /// components or the ALC unload, and is surfaced through the host logger (#309) — this is the path that
+    /// carries the real async sidecar teardown, so a hung/failing Node-process kill must not vanish silently.
     /// </summary>
-    private static async ValueTask DisposeComponentAsync(object component)
+    private async ValueTask DisposeComponentAsync(object component)
     {
         try
         {
@@ -128,10 +136,23 @@ public sealed class AssemblyPluginLoadResult : IDisposable, IAsyncDisposable
                 disposable.Dispose();
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Intentionally swallowed: a plugin's teardown must not block the others or the context unload.
+            LogTeardownFailure(component, ex);
         }
+    }
+
+    /// <summary>
+    /// Surfaces an isolated teardown failure as a warning through the host logger (#309). Shared by both
+    /// dispose paths. With no host logger (the default, e.g. <see cref="Empty"/>) this is a no-op — the
+    /// failure stays silent exactly as before, so a hostless load never crashes on a faulty teardown.
+    /// </summary>
+    private void LogTeardownFailure(object component, Exception ex)
+    {
+        _logger?.LogWarning(
+            ex,
+            "Plugin component teardown failed for {Component}; isolated so the remaining components and the load-context unload still proceed.",
+            component.GetType().FullName);
     }
 }
 
@@ -252,7 +273,7 @@ public static class AssemblyPluginLoader
 
         return parsers.Count == 0 && postProcessors.Count == 0
             ? AssemblyPluginLoadResult.Empty
-            : new AssemblyPluginLoadResult(parsers, postProcessors, contexts);
+            : new AssemblyPluginLoadResult(parsers, postProcessors, contexts, host?.Logger);
     }
 
     /// <summary>
