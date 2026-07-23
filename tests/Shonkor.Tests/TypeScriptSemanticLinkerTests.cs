@@ -138,12 +138,16 @@ public sealed class TypeScriptSemanticLinkerTests : IDisposable
         var aPath = Path.Combine(dir, "a.ts");
         var bPath = Path.Combine(dir, "b.ts");
         var usePath = Path.Combine(dir, "use.ts");
-        await File.WriteAllTextAsync(aPath, "export class Model { a(): void {} }\n");
-        await File.WriteAllTextAsync(bPath, "export class Model { b(): void {} }\n");
+        // Two DISTINCT modules export a same-named `Model` with IDENTICAL members (m + shared). The members
+        // are name-for-name interchangeable, so a naive name match cannot tell a.ts's from b.ts's Model —
+        // only the type checker (which module the reference was imported from) can. The consumer imports
+        // Model from './b' ONLY, so every resolution must land on b.ts, never on a.ts.
+        await File.WriteAllTextAsync(aPath, "export class Model { m(): void {} shared(): void {} }\n");
+        await File.WriteAllTextAsync(bPath, "export class Model { m(): void {} shared(): void {} }\n");
         await File.WriteAllTextAsync(usePath,
             "import { Model } from './b';\n" +
             "export class Consumer {\n" +
-            "  go(m: Model): void { m.b(); }\n" +
+            "  go(model: Model): void { model.shared(); }\n" +
             "}\n");
 
         var (graph, _) = await ParseAllAsync(dir);
@@ -156,10 +160,13 @@ public sealed class TypeScriptSemanticLinkerTests : IDisposable
         Assert.DoesNotContain(edges, e => e.Relationship == "REFERENCES_TYPE"
             && e.TargetId == $"{aPath}::a::Model");
 
-        // Likewise the call lands on b.ts's Model.b, not a.ts (which has no `b`, so a name match could never
-        // hit it anyway — this asserts the positive: the checker chose the right module).
+        // Likewise the call lands on b.ts's Model.shared. Because a.ts's Model has a member of the SAME name,
+        // a naive name match would be genuinely ambiguous between the two modules — so the positive assertion
+        // on the b-id AND the negative assertion on the a-id together prove the checker chose the right module.
         Assert.Contains(edges, e => e.Relationship == "CALLS"
-            && e.TargetId == $"{bPath}::b::Model::b");
+            && e.TargetId == $"{bPath}::b::Model::shared");
+        Assert.DoesNotContain(edges, e => e.Relationship == "CALLS"
+            && e.TargetId == $"{aPath}::a::Model::shared");
     }
 
     // ---- AC#3: cross-file `A extends B` sharpens the syntactic (same-file-only) #293 variant ----
