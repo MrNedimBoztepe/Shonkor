@@ -290,6 +290,55 @@ public class AssemblyPluginLoaderTests
         """;
 
     /// <summary>
+    /// A post-processor whose synchronous <see cref="IDisposable.Dispose"/> throws. Drives the sync teardown
+    /// path (<c>DisposeComponent</c>) into its isolated catch so a test can assert the failure is surfaced
+    /// through the host logger (#309) rather than swallowed silently.
+    /// </summary>
+    private const string ThrowingSyncDisposablePostProcessorSource = """
+        using System;
+        using System.Threading.Tasks;
+        using Shonkor.Core.Interfaces;
+        using Shonkor.Core.Models;
+
+        namespace ThrowingSyncPpPlugin;
+
+        public sealed class ThrowingPostProcessor : IGraphPostProcessor, IDisposable
+        {
+            public string Name => "throwing.sync.pp";
+            public Task<GraphEnrichment> ProcessAsync(IGraphView graph) => Task.FromResult(GraphEnrichment.Empty);
+            public void Dispose() => throw new InvalidOperationException("sync teardown boom");
+        }
+        """;
+
+    /// <summary>
+    /// A parser whose asynchronous <see cref="IAsyncDisposable.DisposeAsync"/> throws. Drives the async
+    /// teardown path (<c>DisposeComponentAsync</c>) — the one that carries real sidecar teardown — into its
+    /// isolated catch so a test can assert the failure is surfaced through the host logger (#309).
+    /// </summary>
+    private const string ThrowingAsyncDisposableParserSource = """
+        using System;
+        using System.Collections.Generic;
+        using System.Threading.Tasks;
+        using Shonkor.Core.Interfaces;
+        using Shonkor.Core.Models;
+
+        namespace ThrowingAsyncOnlyPlugin;
+
+        public sealed class ThrowingAsyncParser : IFileParser, IAsyncDisposable
+        {
+            public IReadOnlySet<string> SupportedExtensions { get; } = new HashSet<string> { ".athrow" };
+            public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new List<NodeTypeDescriptor>();
+            public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(string filePath, string content)
+                => Task.FromResult<(IReadOnlyList<GraphNode>, IReadOnlyList<GraphEdge>)>((new List<GraphNode>(), new List<GraphEdge>()));
+            public async ValueTask DisposeAsync()
+            {
+                await Task.Yield();
+                throw new InvalidOperationException("async teardown boom");
+            }
+        }
+        """;
+
+    /// <summary>
     /// A parser that implements the optional <see cref="IPluginInitializable"/> hook. On
     /// <c>Initialize(host)</c> it writes a marker file (proving the hook ran) and logs through the host's
     /// <see cref="IPluginHost.Logger"/> (proving the supplied logger is usable). With no host the loader must
@@ -322,14 +371,19 @@ public class AssemblyPluginLoaderTests
         }
         """;
 
-    /// <summary>Captures log messages so a test can assert the host-supplied logger was actually usable.</summary>
+    /// <summary>Captures log entries so a test can assert the host-supplied logger was actually usable.</summary>
     private sealed class CapturingLogger : ILogger
     {
         public List<string> Messages { get; } = new();
+        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = new();
         IDisposable? ILogger.BeginScope<TState>(TState state) => null;
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Messages.Add(formatter(state, exception));
+        {
+            var message = formatter(state, exception);
+            Messages.Add(message);
+            Entries.Add((logLevel, message, exception));
+        }
     }
 
     private sealed class TestPluginHost : IPluginHost
@@ -546,6 +600,85 @@ public class AssemblyPluginLoaderTests
             await loaded.DisposeAsync(); // must not throw
 
             Assert.True(File.Exists(marker)); // the non-throwing component was still torn down
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    // ---- #309: teardown failures surface through the host logger instead of being swallowed silently ----
+
+    [Fact]
+    public void Dispose_WhenComponentTeardownThrows_LogsWarningThroughHost_ButStillIsolates()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_pluginsynctdlog_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        try
+        {
+            var registry = InstallAndActivate(ws, ThrowingSyncDisposablePostProcessorSource, "ThrowingSyncPpPlugin", "syncthrow");
+
+            var host = new TestPluginHost();
+            var loaded = AssemblyPluginLoader.LoadActive(registry, host);
+            Assert.Single(loaded.PostProcessors);
+
+            // The sync teardown path hits DisposeComponent's isolated catch: must not rethrow (isolation) and
+            // must surface a warning that names the failing component (#309), instead of swallowing it silently.
+            loaded.Dispose();
+
+            var warning = Assert.Single(host.Captured.Entries, e => e.Level == LogLevel.Warning);
+            Assert.Contains("ThrowingPostProcessor", warning.Message);
+            Assert.NotNull(warning.Exception);
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WhenComponentTeardownThrows_LogsWarningThroughHost_ButStillIsolates()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_pluginasynctdlog_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        try
+        {
+            var registry = InstallAndActivate(ws, ThrowingAsyncDisposableParserSource, "ThrowingAsyncOnlyPlugin", "asyncthrow");
+
+            var host = new TestPluginHost();
+            var loaded = AssemblyPluginLoader.LoadActive(registry, host);
+            Assert.Single(loaded.Parsers);
+
+            // The async teardown path — the one carrying real sidecar teardown (#308) — hits
+            // DisposeComponentAsync's isolated catch: must not rethrow and must surface a warning naming the
+            // failing component (#309). This is the case #309 exists for: silent async-teardown failures.
+            await loaded.DisposeAsync();
+
+            var warning = Assert.Single(host.Captured.Entries, e => e.Level == LogLevel.Warning);
+            Assert.Contains("ThrowingAsyncParser", warning.Message);
+            Assert.NotNull(warning.Exception);
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WhenComponentTeardownThrows_WithoutHost_DoesNotCrash_AndLogsNothing()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_pluginasynctdnohost_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        try
+        {
+            var registry = InstallAndActivate(ws, ThrowingAsyncDisposableParserSource, "ThrowingAsyncOnlyPlugin", "asyncthrow");
+
+            // No host supplied: there is no logger, so the failure stays silent exactly as before — and, crucially,
+            // the missing logger must not turn a swallowed teardown failure into a crash/NRE.
+            var loaded = AssemblyPluginLoader.LoadActive(registry);
+            Assert.Single(loaded.Parsers);
+
+            await loaded.DisposeAsync(); // must not throw despite the component's throwing DisposeAsync
         }
         finally
         {
