@@ -265,7 +265,9 @@ public static class WebhookEndpoints
                         var scanner = new GraphIndexScanner(storage, activeParsers, webhookLogger,
                             semanticCsharp: EndpointHelpers.UseSemanticCSharp(project, config), compilationCache: compilationCache,
                             // The first-party security post-processors are appended by the scanner itself (#332),
-                            // so this path passes only the plugins' — appending them here too would run them twice.
+                            // so this path passes only the plugins'. (Re-appending them here would be dropped by
+                            // the constructor's name filter, not duplicated — but it would falsely suggest the
+                            // call site is what guarantees coverage. It isn't; the constructor is.)
                             postProcessors: pluginLoad.PostProcessors);
                         var projectConfig = pm.GetProjectConfig(project.Name);
 

@@ -19,7 +19,9 @@ All notable changes to Shonkor are documented here. The format follows
   handed over unmarked. It now works on those graphs.
 - **Fixed by construction, not by another call-site list.** `GraphIndexScanner`'s constructor appends the
   first-party post-processors itself, so every ingest path is covered including ones not yet written; the two
-  sites that appended them by hand now pass only the plugins' (they would otherwise run twice). There is
+  sites that appended them by hand now pass only the plugins' (their hand-appended copies would now be dropped
+  by the constructor's name filter anyway — the point is that the call site is no longer what guarantees
+  coverage, and one of those two lists was dead code to begin with). There is
   deliberately **no opt-out flag** — that would be the same gap in a new shape.
 - **A plugin can no longer displace the security phase.** Diagnostics are stored keyed by post-processor `Name`
   and a scan *replaces* the set for that name, so a plugin claiming `security.suspicious-content` and running
@@ -32,7 +34,10 @@ All notable changes to Shonkor are documented here. The format follows
   isolation as a logged warning, so a pathological file can never block a scan.
 - Unchanged: post-processors remain a **whole-graph** phase — they run on a full scan, never on a single-file
   reindex. No graph content changes (`SuspiciousContentPostProcessor` emits diagnostics only); the CLI index cost
-  was measured before/after and is unchanged within noise (~10 s wall, ~300 MB peak working set).
+  was measured before/after and is unchanged within noise (~10 s wall, ~300 MB peak working set) **on a repo of
+  this size** (~320 files). That is the limit of what was measured: these whole-graph passes materialise every
+  node of a type including `Content`, and that cost is *new* for the CLI and index-endpoint paths — the ones
+  large repositories are indexed through. Scaling is untested; see the follow-up on streaming the graph view.
 
 ### Fixed — A JS module queried by its bare stem reported a false all-clear despite real importers (#288)
 - For a JavaScript/TypeScript file the parser emits **two** nodes: a `JSComponent` (`{path}::{stem}`) and, via
