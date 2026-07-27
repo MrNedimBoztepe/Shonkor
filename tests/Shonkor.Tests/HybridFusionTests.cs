@@ -51,6 +51,28 @@ public class HybridFusionTests
     }
 
     [Fact]
+    public void ExactScoreTie_RanksDefiningContainerBeforeItsMember()
+    {
+        // #343: on an exact-name query the defining File/Class and one of its members (e.g. a test Method)
+        // can land at an EXACT RRF tie — each is rank 0 of a different list, so both score 1/(60+1). The
+        // user wants the defining symbol, so the container must win the tie deterministically.
+        static SearchResult Node(string id, string type) =>
+            new(new GraphNode { Id = id, Name = id, Type = type }, 0.0, []);
+
+        // The member is FTS rank 0 (inserted first) AND its id sorts first ordinally — so ONLY the
+        // definition-before-member tie-break can put the File ahead. Drop that rule and the Method wins.
+        var fts = new[] { Node("a/AlphaTests.cs::T::M", "Method") };
+        var vec = new[] { Node("z/Zeta.cs", "File") };
+
+        var fused = HybridFusion.ReciprocalRankFusion(fts, vec, maxResults: 2);
+
+        Assert.Equal(2, fused.Count);
+        Assert.Equal(fused[0].Score, fused[1].Score, 12); // precondition: it really is an exact tie
+        Assert.Equal("File", fused[0].Node.Type);          // the defining container wins the tie
+        Assert.Equal("Method", fused[1].Node.Type);
+    }
+
+    [Fact]
     public void PrefersTheRicherSearchResult_WhenSameNodeAppearsInBoth()
     {
         var edge = new GraphEdge { SourceId = "A", TargetId = "X", Relationship = "REFERENCES_TYPE" };

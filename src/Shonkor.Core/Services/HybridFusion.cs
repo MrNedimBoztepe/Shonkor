@@ -11,6 +11,21 @@ namespace Shonkor.Core.Services;
 /// </summary>
 public static class HybridFusion
 {
+    /// <summary>
+    /// Definition/container node types that outrank their own members (Method/Property/Field) when — and
+    /// only when — the RRF scores are EXACTLY equal (#343). On an exact-name query the user wants the
+    /// defining symbol (the File/Class), not one of its members or tests; at a genuine tie that is the
+    /// deterministic preference. This is a tie-break, not a weight: it never reorders nodes whose scores
+    /// differ, so it is distinct from the type-aware score weighting declined in #110.
+    /// </summary>
+    private static readonly HashSet<string> DefinitionTypes = new(StringComparer.Ordinal)
+    {
+        "File", "Class", "Interface", "Record", "Struct", "Enum"
+    };
+
+    /// <summary>0 for a defining container, 1 otherwise — the ascending secondary sort key so containers win a tie.</summary>
+    private static int TieBreakRank(SearchResult r) => DefinitionTypes.Contains(r.Node.Type) ? 0 : 1;
+
     public static IReadOnlyList<SearchResult> ReciprocalRankFusion(
         IReadOnlyList<SearchResult> primary,
         IReadOnlyList<SearchResult> secondary,
@@ -39,6 +54,12 @@ public static class HybridFusion
 
         return fused
             .OrderByDescending(kv => kv.Value)
+            // Deterministic tie-break, applied ONLY within an exact RRF-score tie (#343): prefer the defining
+            // container over its members, then fall back to the node id. Step 2 is load-bearing, not cosmetic —
+            // without it a tie is broken by the undefined Dictionary enumeration order, so an exact-name query
+            // could return a member or a source file non-reproducibly.
+            .ThenBy(kv => TieBreakRank(nodeById[kv.Key]))
+            .ThenBy(kv => kv.Key, StringComparer.Ordinal)
             .Take(maxResults)
             .Select(kv => nodeById[kv.Key] with { Score = kv.Value })
             .ToList();
