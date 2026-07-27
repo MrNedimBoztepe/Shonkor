@@ -1,6 +1,7 @@
 // Licensed to Shonkor under the MIT License.
 
 using Shonkor.Core.Services;
+using Shonkor.Plugin.TypeScript;
 
 namespace Shonkor.Tests;
 
@@ -9,6 +10,10 @@ namespace Shonkor.Tests;
 /// dangled on Windows paths, and the JSComponent id collided with the File node on all-lowercase paths)
 /// and BUG-013 (metadata.php phantom EXTENDS edges from every 'k' => 'v' pair; abstract/final and
 /// namespaced base classes missed).
+///
+/// <para>The JS cases now drive <see cref="EsprimaFallbackParser"/>: #312 retired the in-host
+/// <c>JavaScriptParser</c>, and the plugin's private Esprima degradation path (#292 AC#3) is the 1:1
+/// successor of that node/edge shape — so BUG-012 must stay fixed there too.</para>
 /// </summary>
 public class JsGraphqlPhpParserRegressionTests
 {
@@ -23,10 +28,10 @@ public class JsGraphqlPhpParserRegressionTests
     // ---------- JavaScript (BUG-012) ----------
 
     [Fact]
-    public async Task JsComponent_Id_PreservesCase_AndIsDistinctFromTheFileNodeId()
+    public void JsComponent_Id_PreservesCase_AndIsDistinctFromTheFileNodeId()
     {
         var filePath = P("/Projects/App/src/Button.tsx");
-        var (nodes, edges) = await new JavaScriptParser().ParseAsync(filePath, "export const Button = () => null;");
+        var (nodes, edges) = EsprimaFallbackParser.Parse(filePath, "export const Button = () => null;");
 
         var component = Assert.Single(nodes);
         Assert.Equal($"{filePath}::Button", component.Id); // original case, not the file id itself
@@ -48,7 +53,7 @@ public class JsGraphqlPhpParserRegressionTests
 
             var appFile = Path.Combine(dir, "App.tsx");
             const string code = "import { Button } from './Button';\nimport * as c from './components';\n";
-            var (_, edges) = await new JavaScriptParser().ParseAsync(appFile, code);
+            var (_, edges) = EsprimaFallbackParser.Parse(appFile, code);
 
             var imports = edges.Where(e => e.Relationship == "IMPORTS").ToList();
             Assert.Equal(2, imports.Count);
