@@ -6,7 +6,7 @@ This chapter describes the static decomposition of the Shonkor system into logic
 
 ## 5.1 Overall System (Level 1)
 
-The system separates layers strictly (Clean Architecture). Four projects carry the runtime; the CMS parsers ship as **separate, pre-built plugin assemblies**, and the benchmark harness is its own project.
+The system separates layers strictly (Clean Architecture). Four projects carry the runtime; the CMS and JS/TS parsers ship as **separate, pre-built plugin assemblies**, and the benchmark harness is its own project.
 
 ```mermaid
 graph TD
@@ -21,17 +21,18 @@ graph TD
       P1[Shonkor.Plugin.Sitecore]
       P2[Shonkor.Plugin.Kentico]
       P3[Shonkor.Plugin.Optimizely]
+      P4[Shonkor.Plugin.TypeScript]
     end
     plugins -.->|IFileParser contract| Core
     Infra -.->|AssemblyPluginLoader, only if Active| plugins
 ```
 
 ### 1. Shonkor.Core (Domain Layer)
-* **Responsibility**: Defines the knowledge graph's data structures and the abstractions for parsing, retrieval and persistence. It holds no *infrastructure* dependencies (no SQLite, no HTTP) — but it is **not dependency-free**: it carries the AST compiler libraries (Roslyn, Esprima, YamlDotNet), because parsing *is* domain work here.
+* **Responsibility**: Defines the knowledge graph's data structures and the abstractions for parsing, retrieval and persistence. It holds no *infrastructure* dependencies (no SQLite, no HTTP) — but it is **not dependency-free**: it carries the AST compiler libraries (Roslyn, YamlDotNet), because parsing *is* domain work here.
 * **Important Building Blocks**:
   * `GraphNode`, `GraphEdge`, `SearchResult`, `GraphStatistics`, `NodeTypeDescriptor` (Models)
   * `IFileParser`, `IGraphStorageProvider`, `IGraphSearch`, `IEmbeddingService` (Interfaces)
-  * Parsers: `RoslynAstParser` (C#, incl. type references), `JavaScriptParser`, `PhpModuleParser`, `GraphQLParser`, `MarkdownHierarchyParser`
+  * Parsers: `RoslynAstParser` (C#, incl. type references), `PhpModuleParser`, `GraphQLParser`, `MarkdownHierarchyParser`. JS/TS is **not** in the host: `TypeScriptParser` ships in the installable `shonkor-typescript` plugin (5.1), which carries its Node sidecar and its private Esprima fallback itself.
   * `ContextCapsuleSynthesizer`: assembles prompt-ready Markdown contexts. Budget-aware (`CapsuleOptions`): seeds render first and in full, the remainder fills a bounded token budget by structural relevance, and a hub cap keeps a 2-hop expansion from exploding the prompt.
   * **`HybridRetrieval`** — see 5.2. The single retrieval entry point.
   * `HybridFusion`: Reciprocal Rank Fusion of two ranked result lists.

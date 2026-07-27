@@ -21,7 +21,7 @@
   { "id": "aq-semantic-linker", "query": "emit exact C# reference edges from a compilation", "expected": ["SemanticCsharpLinker"] },
   { "id": "aq-compilation-cache", "query": "cache the Roslyn compilation and invalidate it on edits", "expected": ["SemanticCompilationCache"] },
   { "id": "aq-tool-context", "query": "shared state available to every MCP tool", "expected": ["McpToolContext"] },
-  { "id": "aq-js-parse", "query": "parse JavaScript and TypeScript imports", "expected": ["JavaScriptParser"] },
+  { "id": "aq-js-parse", "query": "parse JavaScript and TypeScript imports", "expected": ["TypeScriptParser"] },
   { "id": "aq-graphql-parse", "query": "extract queries and fragments from GraphQL files", "expected": ["GraphQLParser"] },
   { "id": "aq-php-parse", "query": "parse OXID modules and Smarty templates", "expected": ["PhpModuleParser"] },
   { "id": "aq-markdown-parse", "query": "index markdown documentation sections", "expected": ["MarkdownHierarchyParser"] },

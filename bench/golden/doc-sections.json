@@ -6,7 +6,7 @@
   { "id": "doc-sec-org-constraints", "query": "GitFlow short lived feature branches develop", "expected": ["2.2 Organizational Constraints"] },
   { "id": "doc-sec-conventions", "query": "PascalCase camelCase underscore prefix private fields", "expected": ["2.3 Conventions"] },
   { "id": "doc-sec-core-concept", "query": "zero dependency portable file checked into the Git repository", "expected": ["4.1 Core Concept: Deterministic Knowledge Graph"] },
-  { "id": "doc-sec-js-parser", "query": "Esprima syntactically analyze JS TS files", "expected": ["4.2 Multi-Language Parser Strategy"] },
+  { "id": "doc-sec-js-parser", "query": "Node sidecar TypeScript Compiler API analyze JS TS files", "expected": ["4.2 Multi-Language Parser Strategy"] },
   { "id": "doc-sec-yaml-parser", "query": "YamlDotNet Sitecore templates layouts", "expected": ["4.2 Multi-Language Parser Strategy"] },
   { "id": "doc-sec-runtime-index", "query": "sequenceDiagram GraphIndexScanner RoslynAstParser", "expected": ["6.1 Scenario 1: Incremental Indexing"] },
   { "id": "doc-sec-ollama-setup", "query": "local Ollama instance port 11434", "expected": ["Step 2: Local LLM Setup (Ollama)"] },

@@ -55,34 +55,9 @@ public class ParserAndStorageTests
         Assert.NotNull(implementsEdge);
     }
 
-    [Fact]
-    public async Task JavaScriptParser_ShouldExtractImports()
-    {
-        // Arrange
-        var parser = new JavaScriptParser();
-        var jsCode = """
-            import { useState, useEffect } from 'react';
-            import UserService from './UserService';
-
-            export default function UserCard() {
-                return "User";
-            }
-            """;
-
-        // Act
-        var (nodes, edges) = await parser.ParseAsync("UserCard.js", jsCode);
-
-        // Assert
-        Assert.NotEmpty(nodes);
-        var componentNode = nodes.FirstOrDefault(n => n.Type == "JSComponent");
-        Assert.NotNull(componentNode);
-
-        // Check imports
-        var importEdges = edges.Where(e => e.Relationship == "IMPORTS").ToList();
-        Assert.NotEmpty(importEdges);
-        Assert.Contains(importEdges, e => e.TargetId.Contains("react"));
-        Assert.Contains(importEdges, e => e.TargetId.Contains("userservice", StringComparison.OrdinalIgnoreCase));
-    }
+    // (#312) The former JavaScriptParser_ShouldExtractImports smoke test is gone with the in-host parser.
+    // JS/TS import extraction is covered sharper by TypeScriptPluginTests (real sidecar) and by the
+    // JsGraphqlPhpParserRegressionTests BUG-012 cases against the plugin's Esprima fallback.
 
     [Fact]
     public async Task PhpModuleParser_ShouldExtractOxidModuleExtensions()
@@ -237,7 +212,11 @@ public class ParserAndStorageTests
         {
             using var storage = new SqliteGraphStorageProvider(":memory:");
             await storage.InitializeAsync();
-            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser(), new JavaScriptParser() });
+            // #312: the JS side is the plugin's TypeScriptParser (DefaultProvenance = Inferred). An explicit
+            // bogus NodePath pins it to the deterministic Esprima fallback — no Node process, same edge shape.
+            await using var jsParser = new Shonkor.Plugin.TypeScript.TypeScriptParser(
+                new Shonkor.Plugin.TypeScript.SidecarSettings { NodePath = Path.Combine(dir, "no-such-node.exe") });
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser(), jsParser });
 
             var csFile = Path.Combine(dir, "Foo.cs");
             await File.WriteAllTextAsync(csFile, "namespace D; public class Foo { public void Bar() {} }");
@@ -252,7 +231,7 @@ public class ParserAndStorageTests
             Assert.NotEmpty(contains);
             Assert.All(contains, e => Assert.Equal(Provenance.Extracted, e.Provenance));
 
-            // Heuristic JS IMPORTS edge → Inferred (stamped from the JavaScriptParser default).
+            // Heuristic JS IMPORTS edge → Inferred (stamped from the TypeScriptParser default).
             var imports = await storage.GetEdgesByRelationshipAsync("IMPORTS");
             Assert.NotEmpty(imports);
             Assert.All(imports, e => Assert.Equal(Provenance.Inferred, e.Provenance));

@@ -192,8 +192,12 @@ public class ProvenanceIntegrityTests
 
             using var storage = new SqliteGraphStorageProvider(":memory:");
             await storage.InitializeAsync();
+            // #312: JS comes from the plugin's TypeScriptParser now. A bogus NodePath keeps the guard
+            // deterministic (Esprima fallback, no Node process) while preserving the Inferred JS IMPORTS edge.
+            await using var jsParser = new Shonkor.Plugin.TypeScript.TypeScriptParser(
+                new Shonkor.Plugin.TypeScript.SidecarSettings { NodePath = Path.Combine(dir, "no-such-node.exe") });
             var scanner = new GraphIndexScanner(storage,
-                new IFileParser[] { new RoslynAstParser(), new GraphQLParser(), new PhpModuleParser(), new JavaScriptParser(), new MarkdownHierarchyParser() },
+                new IFileParser[] { new RoslynAstParser(), new GraphQLParser(), new PhpModuleParser(), jsParser, new MarkdownHierarchyParser() },
                 semanticCsharp: true);
             await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
 

@@ -1,6 +1,7 @@
 // Licensed to Shonkor under the MIT License.
 
 using System.IO.Compression;
+using System.Runtime.Loader;
 
 using Microsoft.Extensions.Logging;
 
@@ -72,6 +73,61 @@ public sealed class StandardPluginPackagingTests : IDisposable
         // The pinned typescript actually present under node_modules (the crux of AC#1: not just the DLL).
         Assert.Contains("sidecar/node_modules/typescript/package.json", entries);
         Assert.Contains(entries, e => e.StartsWith("sidecar/node_modules/typescript/lib/", StringComparison.Ordinal));
+    }
+
+    // ---- #312: the host contract assembly must NOT reference Esprima any more, so no host publish output
+    //      ships it. A file probe on AppContext.BaseDirectory cannot express this (the test host pulls the
+    //      plugin in via ProjectReference, so Esprima.dll is legitimately next to the tests) — the honest
+    //      check is the compile-time metadata of Shonkor.Core itself. ----
+
+    [Fact]
+    public void HostCoreAssembly_DoesNotReferenceEsprima_SoNoHostOutputShipsIt()
+    {
+        Assert.DoesNotContain(
+            typeof(IFileParser).Assembly.GetReferencedAssemblies(),
+            a => a.Name == "Esprima");
+    }
+
+    // ---- #312: Esprima is the PLUGIN's private dependency — it must resolve out of the plugin's own install
+    //      folder inside the plugin ALC, never from the host. This is the guard that makes retiring the in-host
+    //      JavaScriptParser (and the Core Esprima PackageReference) safe: if the fallback were silently served by
+    //      a host-provided Esprima, the assembly would sit in the DEFAULT ALC and this test goes red. ----
+
+    [Fact]
+    public async Task EsprimaFallback_ResolvesFromThePluginInstallFolder_InsideThePluginAlc_NotFromTheHost()
+    {
+        var ws = NewWorkspace();
+        var zipPath = MaterializeEmbeddedZip();
+
+        var registry = new PluginRegistry(ws);
+        Assert.True(registry.InstallFromZip(zipPath).Success);
+        Assert.True(registry.Activate(StandardPluginSeeder.TypeScriptPluginId).Success);
+        var entry = registry.List().Single(p => p.Manifest.Id == StandardPluginSeeder.TypeScriptPluginId);
+
+        // Force the Esprima degradation path deterministically WITHOUT needing Node to be absent: the adapter
+        // reads sidecar.settings.json from its own install folder, so a bogus NodePath there is authoritative
+        // (discovery does not fall through to a real node).
+        await File.WriteAllTextAsync(
+            Path.Combine(entry.InstallPath, "sidecar.settings.json"),
+            $$"""{"nodePath": {{System.Text.Json.JsonSerializer.Serialize(Path.Combine(ws, "no-such-node.exe"))}}}""");
+
+        using var loaded = AssemblyPluginLoader.LoadActive(registry, new TestHost());
+        var parser = Assert.Single(loaded.Parsers);
+
+        var project = NewWorkspace();
+        var path = Path.Combine(project, "Plain.js");
+        var code = "import a from './a';\nexport const foo = 1;\n";
+        await File.WriteAllTextAsync(path, code);
+
+        var (nodes, edges) = await parser.ParseAsync(path, code); // triggers the fallback → loads Esprima
+        Assert.Contains(nodes, n => n.Type == "JSComponent");
+        Assert.Contains(edges, e => e.Relationship == "IMPORTS"); // Esprima really ran
+
+        // The decisive assertion: Esprima lives in the PLUGIN's ALC and was loaded from the install folder.
+        var alc = AssemblyLoadContext.GetLoadContext(parser.GetType().Assembly)!;
+        Assert.NotSame(AssemblyLoadContext.Default, alc);
+        var esprima = Assert.Single(alc.Assemblies, a => a.GetName().Name == "Esprima");
+        Assert.StartsWith(entry.InstallPath, esprima.Location, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- AC#2: the ZIP installs + activates through the REAL registry, and the loader loads it (no hash fail) ----
