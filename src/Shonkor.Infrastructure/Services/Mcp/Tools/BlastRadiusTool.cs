@@ -137,6 +137,19 @@ public sealed class BlastRadiusTool : IMcpTool
             }));
         }
 
+        // #297 (#288 Option 3 for blast_radius): an empty 'affected' set is as misleading as a "safe to
+        // change" all-clear when the seed is a node type that structurally cannot RECEIVE the queried edge.
+        // The normal JSComponent case is already redirected onto its File node in ResolveSeedsAsync, so a
+        // seed that is STILL a JSComponent here is the pathological orphan (its File node is absent from the
+        // graph). Flag it with the same EdgeCarrierRedirectHint the text impact/dependency tools emit, so the
+        // bare 'affected: []' is never read as "nothing depends on it".
+        string? structuralNote = null;
+        if (affectedRows.Count == 0)
+        {
+            var hint = string.Join(" ", seeds.Select(EdgeCarrierRedirectHint).Where(h => !string.IsNullOrEmpty(h))).Trim();
+            if (!string.IsNullOrEmpty(hint)) structuralNote = hint;
+        }
+
         var result = new
         {
             target = seeds.Select(s => ToHandle(s.Id, basePath)).ToArray(),
@@ -152,7 +165,8 @@ public sealed class BlastRadiusTool : IMcpTool
                 .Select(t => new { source = ToHandle(t.Key.Source, basePath), target = ToHandle(t.Key.Target, basePath), relationship = t.Key.Rel, tier = TierName(t.Value) })
                 .OrderBy(x => x.source, StringComparer.Ordinal)
                 .ToArray(),
-            truncatedAtDepth = truncated
+            truncatedAtDepth = truncated,
+            structuralNote
         };
 
         return SendToolResponse(id, JsonSerializer.Serialize(result));

@@ -224,6 +224,39 @@ public class JsStemResolutionTests
         Assert.Contains("orphan.js", plan);
     }
 
+    // ---- #297: the REAL blast_radius tool must not return a bare 'affected: []' for an orphan JSComponent --
+
+    [Fact]
+    public async Task BlastRadius_JsComponentWithoutFileNode_FlagsStructuralNote_NotBareEmptyAffected()
+    {
+        var (handler, _) = await SetupAsync();
+
+        JsonElement Root(string? resp)
+        {
+            using var doc = JsonDocument.Parse(resp!);
+            var text = doc.RootElement.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
+            return JsonDocument.Parse(text).RootElement.Clone();
+        }
+
+        // 'orphan' resolves to a JSComponent whose backing File node is absent, so the #288 redirect cannot
+        // fire. blast_radius therefore finds no dependents — but the empty set must be qualified with the
+        // EdgeCarrierRedirectHint, not left as a bare 'affected: []' that reads like a genuine all-clear.
+        var orphan = Root(await handler.ProcessJsonRpcMessageAsync(ToolCall("blast_radius", new { nodeOrFile = "orphan" })));
+
+        Assert.Empty(orphan.GetProperty("affected").EnumerateArray());
+        var note = orphan.GetProperty("structuralNote").GetString();
+        Assert.False(string.IsNullOrEmpty(note), "orphan JSComponent must carry a structuralNote, not a bare empty affected set");
+        Assert.Contains("JSComponent", note!);
+        Assert.Contains("orphan.js", note!);
+
+        // Regression: the normal case (JSComponent WITH a backing File node) is redirected onto the file and
+        // reports real importers — it must NOT be tagged with a structuralNote.
+        var normal = Root(await handler.ProcessJsonRpcMessageAsync(ToolCall("blast_radius", new { nodeOrFile = "moco-api" })));
+
+        Assert.NotEmpty(normal.GetProperty("affected").EnumerateArray());
+        Assert.True(normal.GetProperty("structuralNote").ValueKind == JsonValueKind.Null);
+    }
+
     // ---- AC4: get_subgraph handle accepts both '/' and '\' separators for the same logical path ----------
 
     [Fact]
