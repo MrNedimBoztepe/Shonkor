@@ -371,6 +371,36 @@ public class AssemblyPluginLoaderTests
         }
         """;
 
+    /// <summary>
+    /// A post-processor that implements the optional <see cref="IPluginInitializable"/> hook. It mirrors
+    /// <see cref="InitializableParserSource"/> but on the post-processor branch (<c>AssemblyPluginLoader</c>'s
+    /// second construction path): on <c>Initialize(host)</c> it writes a marker (proving the hook ran) and logs
+    /// through <see cref="IPluginHost.Logger"/> (proving the supplied logger is usable). One log line lets a
+    /// test assert the hook fired exactly once.
+    /// </summary>
+    private static string InitializablePostProcessorSource(string markerPath) => $$"""
+        using System;
+        using System.IO;
+        using System.Threading.Tasks;
+        using Microsoft.Extensions.Logging;
+        using Shonkor.Core.Interfaces;
+        using Shonkor.Core.Models;
+
+        namespace InitPpPlugin;
+
+        public sealed class InitPostProcessor : IGraphPostProcessor, IPluginInitializable
+        {
+            public string Name => "init.pp";
+            public Task<GraphEnrichment> ProcessAsync(IGraphView graph) => Task.FromResult(GraphEnrichment.Empty);
+
+            public void Initialize(IPluginHost host)
+            {
+                File.WriteAllText(@"{{markerPath.Replace("\\", "/")}}", "initialized");
+                host.Logger.LogInformation("init-postprocessor-initialized");
+            }
+        }
+        """;
+
     /// <summary>Captures log entries so a test can assert the host-supplied logger was actually usable.</summary>
     private sealed class CapturingLogger : ILogger
     {
@@ -431,8 +461,11 @@ public class AssemblyPluginLoaderTests
 
             loaded.Dispose();
 
-            // The marker exists only if DisposeAsync ran; it could not have run after the ALC was unloaded
-            // (the type would be gone), so its presence proves teardown happened BEFORE the unload.
+            // What this directly proves: the marker exists only if DisposeAsync ran, and the plugin's type
+            // could not have run after its collectible ALC was unloaded (the type would be gone) — so teardown
+            // executed WHILE the context was still loaded. The stricter "dispose-then-unload" ordering itself is
+            // not observed here (a plugin can't see the host-side Unload); it follows from Dispose() tearing the
+            // components down and only then calling UnloadContexts. This assertion pins the observable half.
             Assert.True(File.Exists(marker));
         }
         finally
@@ -481,6 +514,32 @@ public class AssemblyPluginLoaderTests
             Assert.Single(loaded.Parsers);
             Assert.True(File.Exists(marker)); // Initialize ran
             Assert.Equal("init-parser-initialized", Assert.Single(host.Captured.Messages)); // exactly once, usable logger
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void InitializablePostProcessor_WithHost_IsInitializedOnce_WithUsableLogger()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_pluginppinit_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var marker = Path.Combine(ws, "ppinit.marker");
+        try
+        {
+            var registry = InstallAndActivate(ws, InitializablePostProcessorSource(marker), "InitPpPlugin", "initpp");
+
+            var host = new TestPluginHost();
+            using var loaded = AssemblyPluginLoader.LoadActive(registry, host);
+
+            // Covers the post-processor construction branch (Activator.CreateInstance + Initialize) which the
+            // parser-focused init tests never exercise: a post-processor opting into IPluginInitializable must
+            // receive Initialize(host) exactly once, with a usable host logger.
+            Assert.Single(loaded.PostProcessors);
+            Assert.True(File.Exists(marker)); // Initialize ran on the post-processor
+            Assert.Equal("init-postprocessor-initialized", Assert.Single(host.Captured.Messages)); // exactly once, usable logger
         }
         finally
         {
@@ -598,6 +657,33 @@ public class AssemblyPluginLoaderTests
             // One parser's DisposeAsync throws; the exception must be swallowed and must not abort the other
             // component's teardown, mirroring the sync path's per-component isolation.
             await loaded.DisposeAsync(); // must not throw
+
+            Assert.True(File.Exists(marker)); // the non-throwing component was still torn down
+        }
+        finally
+        {
+            try { Directory.Delete(ws, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Dispose_IsolatesAThrowingComponent_SoTheOthersStillTearDown()
+    {
+        var ws = Path.Combine(Path.GetTempPath(), $"shonkor_pluginssynciso_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(ws);
+        var marker = Path.Combine(ws, "synciso.marker");
+        try
+        {
+            var registry = InstallAndActivate(ws, ThrowingAndMarkerAsyncParsersSource(marker), "ThrowingAsyncPlugin", "athrow");
+
+            var loaded = AssemblyPluginLoader.LoadActive(registry);
+            Assert.Equal(2, loaded.Parsers.Count);
+
+            // Sync entry point: DisposeComponent drives each component's teardown through its isolated catch.
+            // The #309 sync test only proves a single throwing component does not rethrow out of Dispose();
+            // this two-component case proves the sibling is STILL torn down (its marker written) despite the
+            // other's throwing teardown — the remaining-components guarantee, mirrored from the async path.
+            loaded.Dispose(); // must not throw
 
             Assert.True(File.Exists(marker)); // the non-throwing component was still torn down
         }
