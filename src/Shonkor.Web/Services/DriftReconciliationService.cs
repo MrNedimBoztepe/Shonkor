@@ -121,7 +121,10 @@ public sealed class DriftReconciliationService : BackgroundService
                 activeParsers.AddRange(pluginLoad.Parsers);
 
                 var scanner = new GraphIndexScanner(storage, activeParsers, _logger, semanticCsharp, _compilationCache,
-                    postProcessors: pluginLoad.PostProcessors.Concat(Shonkor.Infrastructure.Services.FirstPartyPostProcessors.Create()));
+                    // The first-party post-processors come from the scanner's constructor now (#332); appending
+                    // them here would duplicate them. (Drift reconcile is not a full scan, so neither runs here —
+                    // they take effect on the next ScanDirectoryAsync.)
+                    postProcessors: pluginLoad.PostProcessors);
                 var projectConfig = _projectManager.GetProjectConfig(project.Name);
 
                 var result = await scanner.ReconcileDriftAsync(project.Path, projectConfig.ExcludePatterns, cancellationToken).ConfigureAwait(false);

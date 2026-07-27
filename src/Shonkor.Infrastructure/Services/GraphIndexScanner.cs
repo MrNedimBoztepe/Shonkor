@@ -64,11 +64,43 @@ public sealed class GraphIndexScanner
 
         _storage = storage;
         _parsers = parsers.ToList();
-        _postProcessors = postProcessors?.ToList() ?? new List<IGraphPostProcessor>();
+        _postProcessors = ComposePostProcessors(postProcessors);
         _postProcessorContext = postProcessorContext ?? GraphPostProcessorContext.Empty;
         _logger = logger;
         _semanticCsharp = semanticCsharp;
         _compilationCache = compilationCache;
+    }
+
+    /// <summary>
+    /// Appends the always-on first-party post-processors (<see cref="FirstPartyPostProcessors"/>) to whatever the
+    /// caller supplied, so the security phase runs on EVERY full scan by construction (#332).
+    ///
+    /// <para>
+    /// It lives here rather than at the call sites because the call sites are exactly what failed: the web index
+    /// endpoint and the CLI never appended them, so a full scan triggered from either produced no
+    /// <c>security.suspicious-instruction-in-content</c> diagnostics — and the RAG prompt's injection flagging
+    /// (which reads that code) was silently inert on those graphs. The constructor is the one point every ingest
+    /// path must pass through, and there is deliberately no opt-out flag: a flag would only be the same gap in a
+    /// new shape.
+    /// </para>
+    ///
+    /// <para>
+    /// Caller-supplied entries whose <see cref="IGraphPostProcessor.Name"/> collides with a first-party one are
+    /// dropped. Diagnostics are stored keyed by that name and a re-scan REPLACES the set for a name, so a plugin
+    /// claiming <c>security.suspicious-content</c> and running after the first-party processor would wipe its
+    /// findings. Filtering by name makes the guarantee independent of ordering.
+    /// </para>
+    /// </summary>
+    private static List<IGraphPostProcessor> ComposePostProcessors(IEnumerable<IGraphPostProcessor>? callerSupplied)
+    {
+        var firstParty = FirstPartyPostProcessors.Create().ToList();
+        var reservedNames = firstParty.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var composed = callerSupplied?
+            .Where(p => p is not null && !reservedNames.Contains(p.Name))
+            .ToList() ?? new List<IGraphPostProcessor>();
+        composed.AddRange(firstParty);
+        return composed;
     }
 
     /// <summary>

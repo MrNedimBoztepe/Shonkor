@@ -21,15 +21,24 @@ public sealed class SuspiciousContentPostProcessor : IGraphPostProcessor
     private static readonly string[] ScannedTypes =
         { "File", "MarkdownSection", "Class", "Interface", "Record", "Struct", "Method", "Property" };
 
+    /// <summary>
+    /// Upper bound per <see cref="Regex.IsMatch(string)"/> call. These patterns run over attacker-controlled
+    /// repository content, and since #332 they run on EVERY full scan rather than only the webhook path — so the
+    /// adjacent <c>\s+</c> quantifiers get an explicit backtracking budget instead of an unbounded one. A
+    /// <see cref="RegexMatchTimeoutException"/> surfaces through the post-processor failure isolation as a logged
+    /// warning, which is the right outcome: a scan is never blocked by a pathological file.
+    /// </summary>
+    private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(1);
+
     // Conservative, case-insensitive patterns — chosen to catch classic injection phrasings while keeping
     // false positives low (each requires an imperative directed at the model, not incidental prose).
     private static readonly Regex[] Patterns =
     {
-        new(@"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|context)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new(@"disregard\s+(the\s+)?(above|previous|earlier)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new(@"you\s+are\s+now\s+", RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new(@"^\s*(system|assistant|developer)\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Multiline),
-        new(@"\bnew\s+instructions\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled)
+        new(@"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|context)", RegexOptions.IgnoreCase | RegexOptions.Compiled, MatchTimeout),
+        new(@"disregard\s+(the\s+)?(above|previous|earlier)", RegexOptions.IgnoreCase | RegexOptions.Compiled, MatchTimeout),
+        new(@"you\s+are\s+now\s+", RegexOptions.IgnoreCase | RegexOptions.Compiled, MatchTimeout),
+        new(@"^\s*(system|assistant|developer)\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Multiline, MatchTimeout),
+        new(@"\bnew\s+instructions\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled, MatchTimeout)
     };
 
     public string Name => "security.suspicious-content";
@@ -70,8 +79,12 @@ public sealed class SuspiciousContentPostProcessor : IGraphPostProcessor
 }
 
 /// <summary>
-/// The always-on, first-party phase-2 post-processors, wired into every index path (CLI, index endpoint,
-/// webhook, drift). Centralized so the set is defined once rather than re-listed at each call site.
+/// The always-on, first-party phase-2 post-processors. Since #332 they are appended by
+/// <see cref="GraphIndexScanner"/>'s constructor rather than re-listed at each call site, so they run on every
+/// full scan by construction — no matter which ingest path (CLI, index endpoint, webhook, MCP) built the
+/// scanner. As a whole-graph phase they run on <c>ScanDirectoryAsync</c> only, never on a single-file reindex.
+/// A caller-supplied post-processor cannot displace one of these: entries whose <c>Name</c> collides with a
+/// first-party name are dropped by the scanner.
 /// </summary>
 public static class FirstPartyPostProcessors
 {
