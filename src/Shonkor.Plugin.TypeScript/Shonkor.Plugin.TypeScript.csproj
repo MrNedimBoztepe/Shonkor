@@ -68,12 +68,25 @@
     either, so the target runs and the body re-globs the real, complete tree. From the second build on the
     list is complete, and a changed package.json/package-lock.json re-triggers packing even if the freshly
     installed node_modules were not visible to this glob.
+
+    A timestamp comparison is blind to DELETIONS: removing a file changes the mtime of its directory, not of
+    any input, so the ZIP would keep shipping a file that no longer exists in the source tree — a green build
+    with a wrong artifact. The list is therefore also written to a stamp file that participates in Inputs; the
+    SDK solves the identical problem the identical way in _GenerateCompileDependencyCache
+    ("This handles cases where items are added or removed from a glob ... and can't otherwise be detected with
+    timestamp comparisons"). WriteOnlyWhenDifferent keeps a no-op build a no-op: the stamp is only rewritten,
+    and only then newer than the ZIP, when the SET of files actually changed.
   -->
   <ItemGroup>
     <_PackPluginZipInput Include="$(MSBuildProjectDirectory)\sidecar\**\*"
                          Exclude="$(MSBuildProjectDirectory)\sidecar\node_modules\.cache\**\*" />
     <_PackPluginZipInput Include="plugin.json;sidecar.settings.json" />
   </ItemGroup>
+
+  <Target Name="WritePackPluginZipInputList">
+    <WriteLinesToFile File="$(IntermediateOutputPath)packinputs.txt" Lines="@(_PackPluginZipInput)"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
 
   <!--
     CopyLocalLockFileAssemblies=false suppresses ALL package runtime assets, so bring Esprima.dll back
@@ -134,9 +147,15 @@
     Incremental (#350): without Inputs/Outputs this target deleted and rewrote 4.85 MB on EVERY build, even a
     no-op one — which churned the one file a second project embeds, and made Infrastructure the only project
     whose csc re-ran on a no-op solution build. It now packs only when the manifest, the assemblies or the
-    sidecar tree actually changed. The ZIP is written into obj first and then MOVED over the bin file, so the
-    window in which the published artifact is unavailable to a concurrent reader is a rename, not a
-    multi-second zip write.
+    sidecar tree actually changed — including when a file is REMOVED from it, which a pure timestamp
+    comparison cannot see (hence the packinputs.txt stamp in the Inputs list; see WritePackPluginZipInputList).
+
+    The ZIP is written into obj and then MOVED over the bin file, which shrinks the window in which the
+    published artifact is unavailable to a concurrent reader from a multi-second zip write to a rename. It
+    does not close it: Move deletes the destination before renaming, and a reader that hits exactly that
+    sub-millisecond gap sees a missing file and fails loudly (MSB3030 — no retry applies to a missing source).
+    That is the deliberate trade. Copying with retries instead would expose a half-written ZIP, i.e. swap a
+    loud failure for silent corruption.
 
     AfterTargets="CoreBuild", NOT "Build" (#350): 'Build' is BeforeBuild;CoreBuild;AfterBuild, so hooking
     CoreBuild puts this target INSIDE the Build target's dependency chain — the Build target cannot report
@@ -146,14 +165,17 @@
     'MSB3030: Could not copy ... Shonkor.Plugin.TypeScript.zip because it was not found'. Everything this
     target needs (the DLL in $(OutDir)) is in place after CoreBuild.
 
-    Both prerequisites are therefore named in DependsOnTargets rather than left to target ordering.
+    Every prerequisite is therefore named in DependsOnTargets rather than left to target ordering.
     NpmInstallSidecar is one of them: BeforeTargets="Build" does NOT run before the compile — Build's
     DependsOnTargets chain (BeforeBuild;CoreBuild;AfterBuild) is resolved first, so 'npm ci' actually runs
     after CoreBuild. Packaging from CoreBuild without declaring that dependency packed a plugin whose
-    node_modules did not exist yet, which the Release guard correctly rejected.
+    node_modules did not exist yet, which the Release guard correctly rejected. WritePackPluginZipInputList is
+    another: DependsOnTargets runs before this target's Inputs/Outputs are evaluated, which is exactly what
+    makes the stamp file usable as an input.
   -->
-  <Target Name="PackPluginZip" AfterTargets="CoreBuild" DependsOnTargets="NpmInstallSidecar;CopyEsprimaToOutput"
-          Inputs="@(_PackPluginZipInput);$(OutDir)$(AssemblyName).dll;$(OutDir)Esprima.dll"
+  <Target Name="PackPluginZip" AfterTargets="CoreBuild"
+          DependsOnTargets="NpmInstallSidecar;CopyEsprimaToOutput;WritePackPluginZipInputList"
+          Inputs="@(_PackPluginZipInput);$(IntermediateOutputPath)packinputs.txt;$(OutDir)$(AssemblyName).dll;$(OutDir)Esprima.dll"
           Outputs="$(OutDir)$(AssemblyName).zip">
     <PropertyGroup>
       <PluginStage>$(IntermediateOutputPath)pluginpack\</PluginStage>

@@ -68,9 +68,12 @@
     Stage the standard-plugin ZIPs into this project's own intermediate folder before compiling (#350). The
     ProjectReference above guarantees the producer has already run, so the source exists.
 
-    Retries are explicit because the Copy task defaults to Retries=0 — without them this would merely move the
-    hard failure from csc to here. $(CopyRetryCount)/$(CopyRetryDelayMilliseconds) are the same defaults the
-    SDK's own copy steps use. A copy that still fails after all retries fails as MSB3021 in this target rather
+    What actually makes a transient lock survivable is the Copy task's own default of 10 retries a second
+    apart — measured: 10x MSB3026, then MSB3027/MSB3021. $(CopyRetryCount)/$(CopyRetryDelayMilliseconds) are
+    NOT defined by the SDK (both evaluate to empty in 10.0.302, and an empty attribute leaves the task default
+    in place), so passing them changes nothing today. They are wired up anyway because that is how the SDK's
+    own copy steps spell it, and it leaves a repo- or CI-wide override hook for the day the default is wrong
+    here. A copy that still fails after the retries fails as MSB3021 in this target, naming the file, rather
     than as a confusing CS1566 in the compiler.
   -->
   <Target Name="StageStandardPluginZips" BeforeTargets="BeforeCompile"
