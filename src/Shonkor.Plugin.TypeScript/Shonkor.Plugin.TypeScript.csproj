@@ -145,8 +145,14 @@
     result and start compiling while this target was still zipping. That is not theory: it failed on CI as
     'MSB3030: Could not copy ... Shonkor.Plugin.TypeScript.zip because it was not found'. Everything this
     target needs (the DLL in $(OutDir)) is in place after CoreBuild.
+
+    Both prerequisites are therefore named in DependsOnTargets rather than left to target ordering.
+    NpmInstallSidecar is one of them: BeforeTargets="Build" does NOT run before the compile — Build's
+    DependsOnTargets chain (BeforeBuild;CoreBuild;AfterBuild) is resolved first, so 'npm ci' actually runs
+    after CoreBuild. Packaging from CoreBuild without declaring that dependency packed a plugin whose
+    node_modules did not exist yet, which the Release guard correctly rejected.
   -->
-  <Target Name="PackPluginZip" AfterTargets="CoreBuild" DependsOnTargets="CopyEsprimaToOutput"
+  <Target Name="PackPluginZip" AfterTargets="CoreBuild" DependsOnTargets="NpmInstallSidecar;CopyEsprimaToOutput"
           Inputs="@(_PackPluginZipInput);$(OutDir)$(AssemblyName).dll;$(OutDir)Esprima.dll"
           Outputs="$(OutDir)$(AssemblyName).zip">
     <PropertyGroup>
