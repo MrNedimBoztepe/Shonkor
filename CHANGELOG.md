@@ -5,6 +5,40 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Security — The first-party security post-processors ran on no regular ingest path at all (#332)
+- The ticket reported an *asymmetry* (webhook/drift append `FirstPartyPostProcessors`, the web index endpoint and
+  the CLI do not). Measuring it showed something worse: post-processors execute **only** in
+  `ScanDirectoryAsync`'s phase 5.5, and of the two paths that *did* append them, the webhook only reaches a full
+  scan when a push names **no** changed files, and drift reconcile never reaches one at all — its
+  `.Concat(FirstPartyPostProcessors.Create())` was **dead code**. So in practice **no** routine ingest produced
+  the security diagnostics. Measured on this repo: a `shonkor index` run yielded **0** diagnostics before, **17**
+  after (6 `security.suspicious-instruction-in-content`, 11 `csharp.ambiguous-type-reference`).
+- **The effect was not cosmetic.** `GroundingPrep` reads `security.suspicious-instruction-in-content` to populate
+  `RagPromptOptions.FlaggedNodeIds`. With no such diagnostics on a Web-/CLI-indexed graph, the RAG prompt's
+  injection flagging was silently inert — retrieved content that looks like an instruction to the model was
+  handed over unmarked. It now works on those graphs.
+- **Fixed by construction, not by another call-site list.** `GraphIndexScanner`'s constructor appends the
+  first-party post-processors itself, so every ingest path is covered including ones not yet written; the two
+  sites that appended them by hand now pass only the plugins' (their hand-appended copies would now be dropped
+  by the constructor's name filter anyway — the point is that the call site is no longer what guarantees
+  coverage, and one of those two lists was dead code to begin with). There is
+  deliberately **no opt-out flag** — that would be the same gap in a new shape.
+- **A plugin can no longer displace the security phase.** Diagnostics are stored keyed by post-processor `Name`
+  and a scan *replaces* the set for that name, so a plugin claiming `security.suspicious-content` and running
+  after the first-party one would erase its findings; only incidental ordering prevented that. Caller-supplied
+  post-processors whose name collides with a first-party one are now dropped, making the guarantee
+  order-independent.
+- **Hardened while the exposure grew (BUG-053).** The injection patterns run over attacker-controlled repository
+  content and now run on *every* index rather than only the webhook, so each `Regex` got an explicit 1 s
+  `matchTimeout`. Semantics are unchanged; a timeout surfaces through the existing post-processor failure
+  isolation as a logged warning, so a pathological file can never block a scan.
+- Unchanged: post-processors remain a **whole-graph** phase — they run on a full scan, never on a single-file
+  reindex. No graph content changes (`SuspiciousContentPostProcessor` emits diagnostics only); the CLI index cost
+  was measured before/after and is unchanged within noise (~10 s wall, ~300 MB peak working set) **on a repo of
+  this size** (~320 files). That is the limit of what was measured: these whole-graph passes materialise every
+  node of a type including `Content`, and that cost is *new* for the CLI and index-endpoint paths — the ones
+  large repositories are indexed through. Scaling is untested; see the follow-up on streaming the graph view.
+
 ### Fixed — A JS module queried by its bare stem reported a false all-clear despite real importers (#288)
 - For a JavaScript/TypeScript file the parser emits **two** nodes: a `JSComponent` (`{path}::{stem}`) and, via
   the scanner, a `File` node (id = the plain path). Every `IMPORTS` edge targets the **File** node; the component
