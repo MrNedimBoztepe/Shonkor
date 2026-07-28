@@ -318,10 +318,12 @@ public sealed class GraphIndexScanner
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    // A cancelled scan is not a failed check. The storage calls above all take the token, so
-                    // without this the generic catch below would swallow the cancellation AND record "the
-                    // security check failed" — turning a user-initiated abort into a false statement about
-                    // the graph.
+                    // A cancelled scan is not a failed check: the storage calls above all take the token, so
+                    // the generic catch below would otherwise swallow the cancellation and let the scan carry
+                    // on to phase 6 as if nothing happened. Cancellation propagates immediately instead.
+                    // (It does not, on today's store, decide whether a marker is written: the marker write
+                    // uses the same cancelled token and fails inside its own best-effort catch. That is an
+                    // implementation detail of the storage provider, not something this catch guarantees.)
                     throw;
                 }
                 catch (Exception ex)

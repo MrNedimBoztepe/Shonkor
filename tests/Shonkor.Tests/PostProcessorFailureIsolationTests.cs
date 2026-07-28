@@ -108,9 +108,10 @@ public class PostProcessorFailureIsolationTests
     }
 
     /// <summary>
-    /// A cancelled scan is not a failed check. Without the dedicated catch the generic handler would swallow
-    /// the <see cref="OperationCanceledException"/> and record "the check did not complete" — a marker stating
-    /// something about the graph that the user's own abort caused.
+    /// A cancelled scan is not a failed check, so it must not leave a marker claiming the check came up short.
+    /// The outcome is pinned end-to-end here; note that it does not isolate the dedicated cancellation catch —
+    /// the marker write uses the same cancelled token and would fail in its own best-effort catch anyway. What
+    /// that catch adds is immediate propagation instead of a scan that quietly continues to phase 6.
     /// </summary>
     [Fact]
     public async Task CancelledScan_RecordsNoIncompleteMarker()
