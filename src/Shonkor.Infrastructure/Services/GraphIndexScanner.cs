@@ -296,8 +296,9 @@ public sealed class GraphIndexScanner
         }
 
         // 5.5 Phase 2: graph-aware post-processors observe the assembled graph and add enrichment
-        //     (nodes/edges) + diagnostics. Additive and isolated — a failing post-processor is logged and
-        //     skipped. Whole-graph concern, so it runs on full scans only (not single-file reindex).
+        //     (nodes/edges) + diagnostics. Additive and isolated — a failing post-processor is logged, skipped
+        //     and recorded as a `postprocessor.incomplete` diagnostic so the gap is visible (#353). Whole-graph
+        //     concern, so it runs on full scans only (not single-file reindex).
         if (_postProcessors.Count > 0)
         {
             var view = new StorageBackedGraphView(_storage);
@@ -315,9 +316,35 @@ public sealed class GraphIndexScanner
                     // refreshes them without touching others.
                     await _storage.ReplaceDiagnosticsAsync(postProcessor.Name, enrichment.Diagnostics, cancellationToken).ConfigureAwait(false);
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // A cancelled scan is not a failed check. The storage calls above all take the token, so
+                    // without this the generic catch below would swallow the cancellation AND record "the
+                    // security check failed" — turning a user-initiated abort into a false statement about
+                    // the graph.
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     Warn($"Post-processor '{postProcessor.Name}' failed: {ex.Message}");
+
+                    // Leave the failure behind as data, not just as a log line (#353) — a stderr warning is
+                    // invisible to get_diagnostics and to the dashboard. The marker is written under the
+                    // SAME source as the processor's findings because ReplaceDiagnosticsAsync is keyed by
+                    // source: that both clears this run's now-stale findings and lets the next successful
+                    // scan clear the marker again. Best-effort in its own try/catch — a store that cannot
+                    // take the marker must not fail the scan at a new place.
+                    try
+                    {
+                        await _storage.ReplaceDiagnosticsAsync(
+                            postProcessor.Name,
+                            new[] { PostProcessorDiagnostics.Incomplete(postProcessor.Name, $"{ex.GetType().Name}: {ex.Message}") },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception markerEx)
+                    {
+                        Warn($"Could not record the incompleteness marker for '{postProcessor.Name}': {markerEx.Message}");
+                    }
                 }
             }
         }
