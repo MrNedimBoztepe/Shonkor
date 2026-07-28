@@ -137,8 +137,16 @@
     sidecar tree actually changed. The ZIP is written into obj first and then MOVED over the bin file, so the
     window in which the published artifact is unavailable to a concurrent reader is a rename, not a
     multi-second zip write.
+
+    AfterTargets="CoreBuild", NOT "Build" (#350): 'Build' is BeforeBuild;CoreBuild;AfterBuild, so hooking
+    CoreBuild puts this target INSIDE the Build target's dependency chain — the Build target cannot report
+    completion before the package exists. Hooked to "Build" it instead ran as a separate entry-point target
+    scheduled after Build's own result was already cached, so a ProjectReference consumer could be handed that
+    result and start compiling while this target was still zipping. That is not theory: it failed on CI as
+    'MSB3030: Could not copy ... Shonkor.Plugin.TypeScript.zip because it was not found'. Everything this
+    target needs (the DLL in $(OutDir)) is in place after CoreBuild.
   -->
-  <Target Name="PackPluginZip" AfterTargets="Build" DependsOnTargets="CopyEsprimaToOutput"
+  <Target Name="PackPluginZip" AfterTargets="CoreBuild" DependsOnTargets="CopyEsprimaToOutput"
           Inputs="@(_PackPluginZipInput);$(OutDir)$(AssemblyName).dll;$(OutDir)Esprima.dll"
           Outputs="$(OutDir)$(AssemblyName).zip">
     <PropertyGroup>
