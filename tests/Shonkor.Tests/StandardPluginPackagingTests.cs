@@ -75,14 +75,23 @@ public sealed class StandardPluginPackagingTests : IDisposable
         Assert.Contains(entries, e => e.StartsWith("sidecar/node_modules/typescript/lib/", StringComparison.Ordinal));
     }
 
-    // ---- #312: the host contract assembly must NOT reference Esprima any more, so no host publish output
-    //      ships it. A file probe on AppContext.BaseDirectory cannot express this (the test host pulls the
-    //      plugin in via ProjectReference, so Esprima.dll is legitimately next to the tests) — the honest
-    //      check is the compile-time metadata of Shonkor.Core itself. ----
+    // ---- #312/#349: the host must take no DEPENDENCY on Esprima, so nothing can resolve it in the default
+    //      ALC. A file probe on AppContext.BaseDirectory cannot express this (the test host pulls the plugin
+    //      in via ProjectReference, so Esprima.dll is legitimately next to the tests), and compile-time
+    //      metadata alone is too loose: GetReferencedAssemblies() only sees packages the code actually USES,
+    //      so an unused PackageReference slips through it — measured in #349, with YamlDotNet as the living
+    //      proof (no .cs file in Core touches it, yet it sits in Core's libraries closure, see #348).
+    //      So the primary check reads the .deps.json Shonkor.Core emits: the manifest the host parses to fill
+    //      its probing paths. No entry there = no host load path. ----
 
     [Fact]
-    public void HostCoreAssembly_DoesNotReferenceEsprima_SoNoHostOutputShipsIt()
+    public void HostCore_HasNoEsprimaDependency_SoNoLooseDllAndNoDepsEntryReachTheHost()
     {
+        // The end state: Esprima is nowhere in the dependency closure the host resolves against.
+        Assert.DoesNotContain("Esprima", BuildArtifacts.PackageClosureOf("Shonkor.Core"));
+
+        // Kept alongside it: this is the narrower "the parser code came back" case, and it says so far more
+        // precisely than a missing manifest entry would.
         Assert.DoesNotContain(
             typeof(IFileParser).Assembly.GetReferencedAssemblies(),
             a => a.Name == "Esprima");
@@ -305,25 +314,14 @@ public sealed class StandardPluginPackagingTests : IDisposable
     [Fact]
     public void ReleasePackaging_HasLoudGuard_AgainstMissingSidecarNodeModules()
     {
-        var csproj = File.ReadAllText(Path.Combine(RepoRoot(), "src", "Shonkor.Plugin.TypeScript", "Shonkor.Plugin.TypeScript.csproj"));
+        var csproj = File.ReadAllText(
+            RepoPaths.File("src", "Shonkor.Plugin.TypeScript", "Shonkor.Plugin.TypeScript.csproj"));
 
         // A Release-only <Error> that fires when the pinned typescript is absent from the sidecar node_modules.
         Assert.Contains("VerifySidecarReleaseDeps", csproj);
         Assert.Contains("'$(Configuration)' == 'Release'", csproj);
         Assert.Contains("node_modules\\typescript\\package.json", csproj);
         Assert.Contains("<Error", csproj);
-    }
-
-    private static string RepoRoot()
-    {
-        // Walk up from the test bin dir to the repo root (the folder that holds Shonkor.slnx).
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Shonkor.slnx")))
-        {
-            dir = dir.Parent;
-        }
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 
     // ---- test double ----
