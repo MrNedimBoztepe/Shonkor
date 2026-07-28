@@ -58,6 +58,24 @@
   </ItemGroup>
 
   <!--
+    Up-to-date INPUT list for PackPluginZip (#350). It exists at project level because a target's `Inputs`
+    attribute is evaluated BEFORE the target body runs — an ItemGroup inside the body (as used for the actual
+    payload below) is still empty at that moment and would make the target permanently out of date.
+
+    It is deliberately NOT reused as the payload: on a clean clone node_modules does not exist yet at
+    evaluation time (NpmInstallSidecar materialises it during the same build), so this list can be short on
+    the very first build. That is harmless for the up-to-date check — the output ZIP does not exist then
+    either, so the target runs and the body re-globs the real, complete tree. From the second build on the
+    list is complete, and a changed package.json/package-lock.json re-triggers packing even if the freshly
+    installed node_modules were not visible to this glob.
+  -->
+  <ItemGroup>
+    <_PackPluginZipInput Include="$(MSBuildProjectDirectory)\sidecar\**\*"
+                         Exclude="$(MSBuildProjectDirectory)\sidecar\node_modules\.cache\**\*" />
+    <_PackPluginZipInput Include="plugin.json;sidecar.settings.json" />
+  </ItemGroup>
+
+  <!--
     CopyLocalLockFileAssemblies=false suppresses ALL package runtime assets, so bring Esprima.dll back
     explicitly: it is the one private dependency the plugin must carry into its own folder.
   -->
@@ -112,10 +130,20 @@
     part of the artifact. DependsOnTargets guarantees the Esprima.dll copy has already run; the sidecar is
     staged from the project's source tree (the source of truth for node_modules) rather than racing the
     OutDir copy. This same ZIP is embedded by Shonkor.Infrastructure to seed the plugin default-active (#313).
+
+    Incremental (#350): without Inputs/Outputs this target deleted and rewrote 4.85 MB on EVERY build, even a
+    no-op one — which churned the one file a second project embeds, and made Infrastructure the only project
+    whose csc re-ran on a no-op solution build. It now packs only when the manifest, the assemblies or the
+    sidecar tree actually changed. The ZIP is written into obj first and then MOVED over the bin file, so the
+    window in which the published artifact is unavailable to a concurrent reader is a rename, not a
+    multi-second zip write.
   -->
-  <Target Name="PackPluginZip" AfterTargets="Build" DependsOnTargets="CopyEsprimaToOutput">
+  <Target Name="PackPluginZip" AfterTargets="Build" DependsOnTargets="CopyEsprimaToOutput"
+          Inputs="@(_PackPluginZipInput);$(OutDir)$(AssemblyName).dll;$(OutDir)Esprima.dll"
+          Outputs="$(OutDir)$(AssemblyName).zip">
     <PropertyGroup>
       <PluginStage>$(IntermediateOutputPath)pluginpack\</PluginStage>
+      <PluginStageZip>$(IntermediateOutputPath)$(AssemblyName).zip</PluginStageZip>
       <PluginZip>$(OutDir)$(AssemblyName).zip</PluginZip>
     </PropertyGroup>
     <RemoveDir Directories="$(PluginStage)" />
@@ -130,8 +158,8 @@
     </ItemGroup>
     <Copy SourceFiles="@(_PackSidecarFiles)"
           DestinationFiles="@(_PackSidecarFiles->'$(PluginStage)sidecar\%(RecursiveDir)%(Filename)%(Extension)')" />
-    <Delete Files="$(PluginZip)" />
-    <ZipDirectory SourceDirectory="$(PluginStage)" DestinationFile="$(PluginZip)" />
+    <ZipDirectory SourceDirectory="$(PluginStage)" DestinationFile="$(PluginStageZip)" Overwrite="true" />
+    <Move SourceFiles="$(PluginStageZip)" DestinationFiles="$(PluginZip)" />
     <Message Importance="high" Text="Plugin package: $(PluginZip)" />
   </Target>
 
