@@ -21,9 +21,24 @@
       materialises + installs + activates them on a fresh workspace (#313). node_modules stays gitignored and
       is materialised by 'npm ci' at the plugin's build time, then carried into this ZIP — so the seed artifact
       is reproducible from source. LogicalName is stable regardless of the on-disk build path.
+
+      _StandardPluginZip is the single source of truth: its identity is OUR OWN staged copy under obj\, and
+      %(Source) is the plugin project's published artifact it is staged from (see StageStandardPluginZips
+      below). The identity uses $(IntermediateOutputPath), which is only complete because ITEMS are evaluated
+      after every import — a PropertyGroup here would still see it empty.
+
+      csc must embed the staged copy, never the plugin project's live bin file (#350): compiling directly
+      against another project's build output means csc holds a read handle on a file a concurrent MSBuild/csc/
+      dotnet-watch invocation may be rewriting — that is the CS1566 race. Embedding our own copy leaves csc
+      with a file no other project writes; the remaining window moves to the Copy below, which retries instead
+      of failing the compile. LogicalName is unchanged, so the runtime contract in StandardPluginSeeder does
+      not depend on any of this.
     -->
-    <EmbeddedResource Include="..\Shonkor.Plugin.TypeScript\bin\$(Configuration)\net10.0\Shonkor.Plugin.TypeScript.zip">
+    <_StandardPluginZip Include="$(IntermediateOutputPath)StandardPlugins\Shonkor.Plugin.TypeScript.zip">
+      <Source>..\Shonkor.Plugin.TypeScript\bin\$(Configuration)\net10.0\Shonkor.Plugin.TypeScript.zip</Source>
       <LogicalName>Shonkor.Infrastructure.StandardPlugins.Shonkor.Plugin.TypeScript.zip</LogicalName>
+    </_StandardPluginZip>
+    <EmbeddedResource Include="@(_StandardPluginZip)">
       <Visible>false</Visible>
     </EmbeddedResource>
   </ItemGroup>
@@ -48,5 +63,24 @@
          directly rather than only through the public search surface. -->
     <InternalsVisibleTo Include="Shonkor.Tests" />
   </ItemGroup>
+
+  <!--
+    Stage the standard-plugin ZIPs into this project's own intermediate folder before compiling (#350). The
+    ProjectReference above guarantees the producer has already run, so the source exists.
+
+    What actually makes a transient lock survivable is the Copy task's own default of 10 retries a second
+    apart — measured: 10x MSB3026, then MSB3027/MSB3021. $(CopyRetryCount)/$(CopyRetryDelayMilliseconds) are
+    NOT defined by the SDK (both evaluate to empty in 10.0.302, and an empty attribute leaves the task default
+    in place), so passing them changes nothing today. They are wired up anyway because that is how the SDK's
+    own copy steps spell it, and it leaves a repo- or CI-wide override hook for the day the default is wrong
+    here. A copy that still fails after the retries fails as MSB3021 in this target, naming the file, rather
+    than as a confusing CS1566 in the compiler.
+  -->
+  <Target Name="StageStandardPluginZips" BeforeTargets="BeforeCompile"
+          Inputs="@(_StandardPluginZip->'%(Source)')" Outputs="@(_StandardPluginZip)">
+    <Copy SourceFiles="@(_StandardPluginZip->'%(Source)')" DestinationFiles="@(_StandardPluginZip)"
+          SkipUnchangedFiles="true"
+          Retries="$(CopyRetryCount)" RetryDelayMilliseconds="$(CopyRetryDelayMilliseconds)" />
+  </Target>
 
 </Project>
