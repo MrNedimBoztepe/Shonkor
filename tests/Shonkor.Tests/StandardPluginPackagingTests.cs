@@ -90,8 +90,9 @@ public sealed class StandardPluginPackagingTests : IDisposable
         // The end state: Esprima is nowhere in the dependency closure the host resolves against.
         Assert.DoesNotContain("Esprima", BuildArtifacts.PackageClosureOf("Shonkor.Core"));
 
-        // Kept alongside it: this is the narrower "the parser code came back" case, and it says so far more
-        // precisely than a missing manifest entry would.
+        // Kept alongside it as a diagnostic, strictly weaker than the closure check above (code use implies a
+        // reference, which implies a manifest entry): it distinguishes "the parser code is back" from "only a
+        // dead reference", which is the sharper message when it fires.
         Assert.DoesNotContain(
             typeof(IFileParser).Assembly.GetReferencedAssemblies(),
             a => a.Name == "Esprima");

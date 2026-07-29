@@ -21,13 +21,14 @@ namespace Shonkor.Tests;
 internal static class BuildArtifacts
 {
     /// <summary>
-    /// The package ids (version stripped) in the <c>libraries</c> closure of
-    /// <c>src/&lt;projectName&gt;/bin/&lt;Config&gt;/&lt;Tfm&gt;/&lt;projectName&gt;.deps.json</c>.
+    /// The package ids (version stripped) in the <c>libraries</c> closure of the <c>.deps.json</c> under
+    /// <c>src/&lt;projectName&gt;/bin/&lt;Config&gt;/&lt;Tfm&gt;/</c>.
     /// <para>
     /// Configuration and target framework are derived from this test assembly's own output directory rather
     /// than guessed, so Debug and Release both resolve correctly. Any project the tests reference is built in
-    /// the same configuration, so the artifact is always there — and if it is not, this fails loudly instead
-    /// of returning an empty set, which would turn every caller into a guard that passes in a vacuum.
+    /// the same configuration, so the artifact is always there — and every way of not getting a real closure
+    /// (no output, no manifest, no <c>libraries</c> section) fails loudly instead of returning an empty set,
+    /// which would turn every caller into a guard that passes in a vacuum.
     /// </para>
     /// </summary>
     public static IReadOnlySet<string> PackageClosureOf(string projectName)
@@ -36,19 +37,25 @@ internal static class BuildArtifacts
         var tfm = output.Name;
         var configuration = output.Parent!.Name;
 
-        var depsPath = RepoPaths.File(
-            "src", projectName, "bin", configuration, tfm, projectName + ".deps.json");
+        // The manifest is named after the ASSEMBLY, which is not always the project folder — Shonkor.CLI emits
+        // shonkor.deps.json, Shonkor.Bench emits shonkor-bench.deps.json. Globbing keeps the call form
+        // project-based without baking that equivalence in, so later callers need no signature change.
+        var outputDir = RepoPaths.File("src", projectName, "bin", configuration, tfm);
+        var manifests = Directory.Exists(outputDir) ? Directory.GetFiles(outputDir, "*.deps.json") : [];
 
         Assert.True(
-            File.Exists(depsPath),
-            $"Expected the build artifact '{depsPath}' to exist — without it this guard would silently pass " +
-            $"in a vacuum. Build {projectName} in the '{configuration}' configuration first.");
+            manifests.Length == 1,
+            $"Expected exactly one '*.deps.json' under '{outputDir}' but found {manifests.Length}. Without exactly " +
+            $"one there is no closure to read and the caller would pass in a vacuum. Build {projectName} in the " +
+            $"'{configuration}' configuration first.");
 
+        var depsPath = manifests[0];
         using var doc = JsonDocument.Parse(File.ReadAllText(depsPath));
-        if (!doc.RootElement.TryGetProperty("libraries", out var libraries))
-        {
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        }
+
+        Assert.True(
+            doc.RootElement.TryGetProperty("libraries", out var libraries),
+            $"'{depsPath}' has no 'libraries' section — an empty closure would make every caller's assertion " +
+            $"pass in a vacuum, which is the exact failure mode this helper exists to rule out.");
 
         // Keys are "<packageId>/<version>" — the id alone is what a policy wants to reason about.
         return libraries
