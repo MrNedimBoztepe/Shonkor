@@ -80,7 +80,8 @@ public sealed class StandardPluginPackagingTests : IDisposable
     //      in via ProjectReference, so Esprima.dll is legitimately next to the tests), and compile-time
     //      metadata alone is too loose: GetReferencedAssemblies() only sees packages the code actually USES,
     //      so an unused PackageReference slips through it — measured in #349, with YamlDotNet as the living
-    //      proof (no .cs file in Core touches it, yet it sits in Core's libraries closure, see #348).
+    //      proof at the time (no .cs file in Core touched it, yet it sat in Core's libraries closure; that
+    //      reference is gone since #348, which is guarded by SitecorePluginPackagingTests).
     //      So the primary check reads the .deps.json Shonkor.Core emits: the manifest the host parses to fill
     //      its probing paths. No entry there = no host load path. ----
 

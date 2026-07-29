@@ -5,6 +5,28 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed — The Sitecore plugin now carries YamlDotNet itself; the host no longer provides it (#348)
+- **Action required for existing workspaces: reinstall the `shonkor-sitecore` plugin.** The host used to ship
+  `YamlDotNet.dll` and the plugin resolved it by ALC fall-through to the default context. That dead reference is
+  gone from `Shonkor.Core`, so a plugin installed from an older ZIP has no YAML library to load.
+- **The failure is quiet, which is why this note exists.** A stale install does not crash: each `.yml` fails
+  individually and is logged as a warning, and the run still ends with `=== Indexing Completed Successfully ===`
+  — with **zero** `SitecoreItem` nodes created. Neither the `minHostApi` check nor the entry-assembly hash
+  detects it, because only the entry DLL is verified. Measured on a fixture repo: 56 nodes, no Sitecore items,
+  green banner. The plugin manifest went `1.0.0` → `1.1.0` so the two artifacts can be told apart.
+- **Why it changed.** `Shonkor.Core` referenced `YamlDotNet` while no file under it used the library — the same
+  dead-reference residue #312 removed for Esprima. Removing it the same way would have broken the plugin, because
+  the plugin had no reference of its own and `Shonkor.Web` even force-loaded the assembly on purpose "so dynamic
+  plugins can reference it". That is plugin isolation *simulated*, not provided, and it contradicts the direction
+  ratified with #292/#312. Every plugin copying the Sitecore csproj would have inherited it.
+- **Proven, not assumed.** The plugin ZIP now carries `YamlDotNet.dll`, and an ALC guard asserts the assembly is
+  resolved from the plugin's own install folder rather than the host. The guard was hardened by inversion
+  *before* the host reference was removed: with the private copy deleted, parsing still succeeded — served by the
+  host — while the plugin's ALC held only its own assembly. That is the hidden coupling caught in the act, and it
+  is what the guard now prevents from returning.
+- Host side effect: the CLI output and its dependency manifest shrink by ~300 KB. `YamlDotNet` is now declared in
+  exactly one place in the repository.
+
 ### Security — The first-party security post-processors ran on no regular ingest path at all (#332)
 - The ticket reported an *asymmetry* (webhook/drift append `FirstPartyPostProcessors`, the web index endpoint and
   the CLI do not). Measuring it showed something worse: post-processors execute **only** in

@@ -4,8 +4,14 @@
     First-party Shonkor plugin: Sitecore content-model parsers and post-processors (Unicorn .yml,
     XM Cloud/JSS, config patches, Helix architecture, plus the CLR-type / field-type / datasource /
     serialization-coverage resolvers). It is NOT part of the host app — it builds a single assembly
-    installed via a ZIP that only runs once activated. The host provides the contract (Shonkor.Core)
-    and shared libraries (Roslyn, YamlDotNet) at runtime, so the package ships only this project's DLL.
+    installed via a ZIP that only runs once activated. The host provides the contract (Shonkor.Core) at
+    runtime; everything else the plugin needs travels inside its own package.
+
+    YamlDotNet is the plugin's PRIVATE Unicorn/.yml deserializer. It is copied next to the plugin dll and
+    into the ZIP (see CopyYamlDotNetToOutput) because the plugin loads in an isolated AssemblyLoadContext and
+    must carry its own private deps. Until #348 it was NOT carried: the plugin borrowed the host's copy by ALC
+    fall-through, via a PackageReference in Shonkor.Core that no Core code used — isolation simulated rather
+    than provided, and a trap for every plugin that copied this csproj.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -16,18 +22,51 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Contract + shared libs are provided by the host; reference for compile only (Private=false). -->
+    <!-- Contract is provided by the host; reference for compile only (Private=false). -->
     <ProjectReference Include="..\Shonkor.Core\Shonkor.Core.csproj">
       <Private>false</Private>
     </ProjectReference>
   </ItemGroup>
 
   <ItemGroup>
+    <!-- YamlDotNet: the plugin's PRIVATE Unicorn/.yml deserializer (#348). GeneratePathProperty so we can copy
+         its dll below. Deliberately NO PrivateAssets/ExcludeAssets/Private=false here: the runtime asset must
+         reach both the plugin's own output (for the ZIP) and any project that references this one — the test
+         project drives SitecoreUnicornPlugin in-process and would otherwise fail to load YamlDotNet. -->
+    <PackageReference Include="YamlDotNet" Version="18.0.0" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- Package the installable plugin ZIP (manifest + the single assembly) into the build output. -->
-  <Target Name="PackPluginZip" AfterTargets="Build">
+  <!--
+    CopyLocalLockFileAssemblies=false suppresses ALL package runtime assets, so bring YamlDotNet.dll back
+    explicitly: it is the one private dependency the plugin must carry into its own folder. Mirrors
+    CopyEsprimaToOutput in Shonkor.Plugin.TypeScript. An unconditional CopyLocalLockFileAssemblies=true is
+    NOT the alternative — Roslyn sits transitively in every plugin's package closure through Shonkor.Core, so
+    it would drop several MB of Microsoft.CodeAnalysis next to the plugin dll.
+  -->
+  <Target Name="CopyYamlDotNetToOutput" AfterTargets="Build">
+    <ItemGroup>
+      <_YamlDotNetDll Include="$(PkgYamlDotNet)\lib\net10.0\YamlDotNet.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YamlDotNetDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
+    Package the installable plugin ZIP (manifest + the assembly + its private YamlDotNet) into the build output.
+
+    AfterTargets="CoreBuild", NOT "Build" (#350): 'Build' is BeforeBuild;CoreBuild;AfterBuild, so hooking
+    CoreBuild puts this target INSIDE the Build target's dependency chain — the Build target cannot report
+    completion before the package exists. Hooked to "Build" it instead ran as a separate entry-point target
+    scheduled after Build's own result was already cached, so a ProjectReference consumer (the test project
+    reads this ZIP) could be handed that result while this target was still zipping.
+
+    DependsOnTargets names the prerequisite rather than relying on target ordering: YamlDotNet.dll must be in
+    $(OutDir) before it is staged.
+  -->
+  <Target Name="PackPluginZip" AfterTargets="CoreBuild" DependsOnTargets="CopyYamlDotNetToOutput">
     <PropertyGroup>
       <PluginStage>$(IntermediateOutputPath)pluginpack\</PluginStage>
       <PluginZip>$(OutDir)$(AssemblyName).zip</PluginZip>
@@ -36,6 +75,7 @@
     <MakeDir Directories="$(PluginStage)" />
     <Copy SourceFiles="plugin.json" DestinationFolder="$(PluginStage)" />
     <Copy SourceFiles="$(OutDir)$(AssemblyName).dll" DestinationFolder="$(PluginStage)" />
+    <Copy SourceFiles="$(OutDir)YamlDotNet.dll" DestinationFolder="$(PluginStage)" />
     <Delete Files="$(PluginZip)" />
     <ZipDirectory SourceDirectory="$(PluginStage)" DestinationFile="$(PluginZip)" />
     <Message Importance="high" Text="Plugin package: $(PluginZip)" />
