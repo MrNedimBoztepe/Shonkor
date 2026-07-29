@@ -113,4 +113,19 @@ public sealed class SitecorePluginPackagingTests : IDisposable
         var yaml = Assert.Single(alc.Assemblies, a => a.GetName().Name == "YamlDotNet");
         Assert.StartsWith(entry.InstallPath, yaml.Location, StringComparison.OrdinalIgnoreCase);
     }
+
+    // ---- AC#3: only once the two guards above hold — the host takes no YamlDotNet dependency at all ----
+    //
+    // The .deps.json is the manifest the host runtime parses to fill the default ALC's probing paths, so no
+    // entry there means no host load path. Shonkor.Web is checked alongside Shonkor.Core because it was the
+    // actual consumer: it force-loaded YamlDotNet.Serialization.Deserializer into the AppDomain precisely so
+    // dynamic plugins could inherit it. The CLI is deliberately NOT checked — the test project does not
+    // reference it, so a local run would not build it and the assertion would fail for the wrong reason.
+
+    [Fact]
+    public void Host_HasNoYamlDotNetDependency_SoNothingCanResolveItInTheDefaultAlc()
+    {
+        Assert.DoesNotContain("YamlDotNet", BuildArtifacts.PackageClosureOf("Shonkor.Core"));
+        Assert.DoesNotContain("YamlDotNet", BuildArtifacts.PackageClosureOf("Shonkor.Web"));
+    }
 }

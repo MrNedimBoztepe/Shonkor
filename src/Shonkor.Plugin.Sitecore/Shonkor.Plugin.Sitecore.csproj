@@ -4,8 +4,14 @@
     First-party Shonkor plugin: Sitecore content-model parsers and post-processors (Unicorn .yml,
     XM Cloud/JSS, config patches, Helix architecture, plus the CLR-type / field-type / datasource /
     serialization-coverage resolvers). It is NOT part of the host app — it builds a single assembly
-    installed via a ZIP that only runs once activated. The host provides the contract (Shonkor.Core)
-    and shared libraries (Roslyn, YamlDotNet) at runtime, so the package ships only this project's DLL.
+    installed via a ZIP that only runs once activated. The host provides the contract (Shonkor.Core) at
+    runtime; everything else the plugin needs travels inside its own package.
+
+    YamlDotNet is the plugin's PRIVATE Unicorn/.yml deserializer. It is copied next to the plugin dll and
+    into the ZIP (see CopyYamlDotNetToOutput) because the plugin loads in an isolated AssemblyLoadContext and
+    must carry its own private deps. Until #348 it was NOT carried: the plugin borrowed the host's copy by ALC
+    fall-through, via a PackageReference in Shonkor.Core that no Core code used — isolation simulated rather
+    than provided, and a trap for every plugin that copied this csproj.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>

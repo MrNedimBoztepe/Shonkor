@@ -62,8 +62,9 @@ builder.Services.AddHealthChecks()
 builder.Services.AddSingleton(sp => new ProjectManager(
     FindWorkspacePath(), sp.GetRequiredService<ILoggerFactory>().CreateLogger<ProjectManager>()));
 
-// Force-load YamlDotNet into the AppDomain so dynamic plugins can reference it.
-_ = typeof(YamlDotNet.Serialization.Deserializer);
+// No YamlDotNet force-load here anymore (#348): pre-loading a library into the host so plugins could inherit
+// it is the opposite of the plugin-private-dependency direction taken in #292/#312. The shonkor-sitecore
+// plugin now ships YamlDotNet in its own package and resolves it inside its own AssemblyLoadContext.
 
 // Core file parsers used by the indexing endpoint.
 // JS/TS parsing moved out of the host into the first-party `shonkor-typescript` base plugin (#292): a Node

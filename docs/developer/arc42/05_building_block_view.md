@@ -28,7 +28,7 @@ graph TD
 ```
 
 ### 1. Shonkor.Core (Domain Layer)
-* **Responsibility**: Defines the knowledge graph's data structures and the abstractions for parsing, retrieval and persistence. It holds no *infrastructure* dependencies (no SQLite, no HTTP) — but it is **not dependency-free**: it carries the AST compiler libraries (Roslyn, YamlDotNet), because parsing *is* domain work here.
+* **Responsibility**: Defines the knowledge graph's data structures and the abstractions for parsing, retrieval and persistence. It holds no *infrastructure* dependencies (no SQLite, no HTTP) — but it is **not dependency-free**: it carries the AST compiler library (Roslyn), because C# parsing *is* domain work here. The CMS/JS content-model libraries are **not** in Core — Esprima (#312) and YamlDotNet (#348) live inside the plugins that use them, as their private dependencies.
 * **Important Building Blocks**:
   * `GraphNode`, `GraphEdge`, `SearchResult`, `GraphStatistics`, `NodeTypeDescriptor` (Models)
   * `IFileParser`, `IGraphStorageProvider`, `IGraphSearch`, `IEmbeddingService` (Interfaces)
