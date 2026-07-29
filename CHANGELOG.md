@@ -7,8 +7,10 @@ All notable changes to Shonkor are documented here. The format follows
 
 ### Documentation — The Node runtime prerequisite for JS/TS analysis is now written down (#351)
 - Since #312 the `shonkor-typescript` plugin is the **only** JS/TS path, and real TS semantics need Node
-  (>= v18, `NodeDiscovery.RequiredMajorVersion`). No `.md` in the repository said so: a grep across `docs/` for
-  `node`/`npm` returned zero hits. The setup guide now has a **Step 3** covering the version bar, the
+  (>= v18, `NodeDiscovery.RequiredMajorVersion`). No document said so. The architecture chapters did mention a
+  "Node sidecar", but nothing anywhere named **the version bar, how to install or point at a Node, or what a
+  user gets when it is missing** — the operational half was absent, and `npm` had zero hits across `docs/`
+  entirely. The setup guide now has a **Step 3** covering the version bar, the
   discovery order (configured `NodePath` → `PATH` → common install locations), and how to pin the path in
   `plugins/shonkor-typescript/sidecar.settings.json`. arc42 chapter 2 lists the runtime as a technical
   constraint, and the `index` command reference names it.

@@ -33,7 +33,7 @@ JS/TS analysis is not part of the host: it lives in the first-party `shonkor-typ
 1. Install Node from [nodejs.org](https://nodejs.org/). v18/20/22/24 are all admitted; older lines (14/16) are rejected by the version gate.
 2. Verify with `node --version`.
 
-**How Shonkor finds it.** Candidates are tried in this order, each validated by a single, bounded `node --version` probe; the first one that answers with a high-enough major version wins. Discovery runs at most once per scan.
+**How Shonkor finds it.** Candidates are tried in this order, each validated by a single, bounded `node --version` probe; the first one that answers with a high-enough major version wins. Discovery is never per file, but it is also not once per scan: the parser resolves Node once for the whole scan, and `TypeScriptSemanticLinker` resolves it again independently for its own pass — so a full scan of a JS/TS repo probes the candidate list twice.
 
 1. The configured `NodePath` (see below). When set it is **authoritative**: if it does not resolve to a usable Node, Shonkor degrades rather than silently using a different Node from `PATH` — falling through would mask the misconfiguration.
 2. `node` / `node.exe` resolved via `PATH`.
@@ -59,7 +59,7 @@ What the fallback costs you, concretely:
 **How you notice — the two channels are not equally visible, so read this precisely:**
 
 * **As data (one diagnostic per index).** `TypeScriptSemanticLinker` records a diagnostic with code `typescript.semantic-linker` and severity `Info`, stating that Node was unavailable and the cross-file semantic edges were skipped. Read it with the `get_diagnostics` MCP tool (which applies no severity filter unless you pass one) or via `GET /api/diagnostics?minSeverity=info`. Two caveats: it is only emitted when the scan actually found typed TS (`.ts`/`.tsx`) files — a pure `.js`/`.jsx` codebase produces none — and the dashboard's Diagnostics panel defaults to `warning+`, so you must switch its severity filter to `info` to see it there.
-* **In the log only (the per-file degradation).** That *each* JS/TS file was parsed with the fallback instead of real TS semantics is a log warning and nothing more — `TypeScriptParser` implements `IFileParser`, whose `ParseAsync` returns nodes and edges and has no diagnostics channel, so there is nowhere for it to become data. On the CLI it appears on stderr (`TypeScript Node sidecar unavailable: … JS/TS files will be parsed with the Esprima fallback.`); it does not appear in the dashboard at all.
+* **In the log only (the per-file degradation).** That *each* JS/TS file was parsed with the fallback instead of real TS semantics is a log warning and nothing more — `TypeScriptParser` implements `IFileParser`, whose `ParseAsync` returns nodes and edges and has no diagnostics channel, so there is nowhere for it to become data. On the CLI it appears on stderr, once per affected file (`TypeScript parser: Node sidecar unavailable; using Esprima fallback. (<path>)`), alongside the single scan-level line that names the cause (`TypeScript Node sidecar unavailable: <reason> JS/TS files will be parsed with the Esprima fallback.`). Neither appears in the dashboard.
 
 The unavailable message itself is actionable rather than generic: it names the required version, links `https://nodejs.org`, and distinguishes "no Node found at all" from "found, but too old" and from "your configured `NodePath` is not usable".
 
@@ -90,7 +90,7 @@ This will:
 *Note: If you have an NVIDIA GPU, edit `docker-compose.yml` and uncomment the `deploy` section under the `ollama` service for massive performance gains.*
 
 > [!NOTE]
-> **Node in the container.** The repository's Dockerfile installs no Node runtime — its runtime stage adds only `curl` on top of the .NET base image. If you index JS/TS from inside the container, check with `docker compose exec shonkor node --version` and add Node ≥ v18 to the image if it is missing; otherwise JS/TS analysis runs on the Esprima fallback described in Step 3.
+> **Node in the container.** The repository's Dockerfile installs no Node runtime — its runtime stage adds only `curl` on top of the .NET base image. If you index JS/TS from inside the container, check with `docker compose exec shonkor-web node --version` (`shonkor-web` is the service name in `docker-compose.yml`) and add Node ≥ v18 to the image if it is missing; otherwise JS/TS analysis runs on the Esprima fallback described in Step 3.
 
 ### Prebuilt image (CI/CD)
 Every push to `main` builds and publishes the Linux image to the GitHub Container Registry via the `.github/workflows/cd.yml` pipeline, so you can also pull `ghcr.io/<owner>/shonkor:latest` instead of building locally.
