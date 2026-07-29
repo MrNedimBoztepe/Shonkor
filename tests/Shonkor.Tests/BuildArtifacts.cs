@@ -63,4 +63,38 @@ internal static class BuildArtifacts
             .Select(p => p.Name.Split('/')[0])
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// The path of the installable plugin ZIP a plugin project packs into its own build output
+    /// (<c>src/&lt;projectName&gt;/bin/&lt;Config&gt;/&lt;Tfm&gt;/&lt;projectName&gt;.zip</c>).
+    /// <para>
+    /// A closure cannot answer "does the plugin CARRY this dependency?" — a <c>.deps.json</c> is transitive, so
+    /// a package inherited from the host shows up exactly like a privately-bundled one (#348). The artefact
+    /// itself is the honest oracle for that question, and it is only reachable for plugins that are not
+    /// embedded/seeded (those go through <c>StandardPluginSeeder.OpenEmbeddedZip</c> instead).
+    /// </para>
+    /// <para>
+    /// Kept as policy-free as <see cref="PackageClosureOf"/>: it names no package and no plugin, so the caller
+    /// owns the assertion and the plugin families after Sitecore can reuse it unchanged.
+    /// </para>
+    /// </summary>
+    public static string PluginZipOf(string projectName)
+    {
+        var output = new DirectoryInfo(AppContext.BaseDirectory);       // …/tests/Shonkor.Tests/bin/<Config>/<Tfm>/
+        var tfm = output.Name;
+        var configuration = output.Parent!.Name;
+
+        // Globbed rather than derived from the project name, for the same reason PackageClosureOf globs its
+        // manifest: the ZIP is named after the ASSEMBLY, which need not match the project folder.
+        var outputDir = RepoPaths.File("src", projectName, "bin", configuration, tfm);
+        var zips = Directory.Exists(outputDir) ? Directory.GetFiles(outputDir, "*.zip") : [];
+
+        Assert.True(
+            zips.Length == 1,
+            $"Expected exactly one '*.zip' under '{outputDir}' but found {zips.Length}. Without exactly one " +
+            $"there is no packed artefact to inspect and the caller would pass in a vacuum. Build " +
+            $"{projectName} in the '{configuration}' configuration first.");
+
+        return zips[0];
+    }
 }
