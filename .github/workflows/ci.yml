@@ -77,3 +77,55 @@ jobs:
           bash scripts/gate-expected-errors.sh test-output.log || exit 1
           # A real test failure must still fail the job even when the gate is happy.
           exit "$test_rc"
+
+  docker-image:
+    name: Docker image
+    # The Dockerfile was exercised by NOTHING until #388: CD only runs on push to `main`, and `main` had not
+    # moved for two weeks — so a restore layer that could not publish the TypeScript plugin, and an image
+    # silently shipping the SQLite build affected by CVE-2025-6965, both stayed invisible. CI builds the
+    # solution directly and never touched the Dockerfile. This job closes that hole: the image is built on
+    # every PR, without pushing.
+    # No path filter on purpose: the CVE regression came from Directory.Build.props, and the last CD run
+    # built AND pushed the image in 91 s with the GHA cache — a build without push is not worth filtering.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true # keep the image in the local daemon so the smoke check below can run it
+          tags: shonkor:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke — the image really carries the TypeScript plugin, sidecar deps included
+        shell: bash
+        run: |
+          # A green build proves the plugin compiled; it does not prove the artifact inside the image is
+          # complete. Seeding is the seam that materialises it: AssemblyPluginLoader.LoadActive(workspace)
+          # calls StandardPluginSeeder.EnsureSeeded, which installs the embedded plugin ZIP into the
+          # workspace. If the ZIP were missing or its sidecar tree truncated, the pinned typescript would
+          # not appear on disk. `shonkor index` is the CLI path through that seam.
+          ws="$RUNNER_TEMP/shonkor-smoke"
+          mkdir -p "$ws/scan-target"
+          # The image runs as UID 1654 (`USER app`), which is not the runner's uid — the bind mount has to
+          # be writable by it, or seeding fails and this check would report the wrong cause.
+          chmod -R 777 "$ws"
+          docker run --rm \
+            -v "$ws:/workspace" -w /workspace \
+            -e SHONKOR_WORKSPACE=/workspace \
+            --entrypoint shonkor shonkor:ci index /workspace/scan-target
+          seeded="$ws/plugins/shonkor-typescript/sidecar/node_modules/typescript/package.json"
+          test -f "$seeded" || {
+            echo "::error::The seeded TypeScript plugin has no sidecar deps ($seeded is missing) — the image would parse JS/TS without the real TS Compiler API."
+            exit 1
+          }
+          echo "OK: $(basename "$seeded") present — sidecar deps shipped in the image."
