@@ -49,7 +49,11 @@ COPY --from=build /app/cli-publish /app/cli
 
 # Global 'shonkor' command so the CLI can be invoked from anywhere in the container.
 # printf (not echo -e) so the newline is written literally and the shebang is valid.
-RUN printf '#!/bin/sh\nexec dotnet /app/cli/Shonkor.CLI.dll "$@"\n' > /usr/local/bin/shonkor \
+# The DLL is `shonkor.dll`, not `Shonkor.CLI.dll`: the CLI sets <AssemblyName>shonkor</AssemblyName>
+# (added 2026-06-18, after this wrapper was written). The wrapper kept the old name and every invocation
+# died with "The application '/app/cli/Shonkor.CLI.dll' does not exist" — invisible because nothing ever
+# ran the image. The CI smoke check now goes through this command, so it cannot rot silently again (#388).
+RUN printf '#!/bin/sh\nexec dotnet /app/cli/shonkor.dll "$@"\n' > /usr/local/bin/shonkor \
  && chmod +x /usr/local/bin/shonkor
 
 # Run as the image's built-in non-root user (UID 1654) for defense-in-depth.

@@ -27,6 +27,11 @@ All notable changes to Shonkor are documented here. The format follows
   package can never ship. Node comes from the official image rather than `apt`, because Ubuntu 24.04 ships
   Node 18 while the sidecar declares `"engines": { "node": ">=20" }`. The **runtime** image is unchanged and
   still has no Node.
+- **The container's global `shonkor` command was broken too** — found by the new CI smoke check on its first
+  run, not by reading. The wrapper execs `/app/cli/Shonkor.CLI.dll`, but the CLI has set
+  `<AssemblyName>shonkor</AssemblyName>` since 2026-06-18 (`bef00e8`), two weeks after the wrapper was written
+  (`8d9f6d8`). Every invocation died with *"The application '/app/cli/Shonkor.CLI.dll' does not exist"*. Same
+  root cause as the rest of this entry: nothing ever ran the image.
 - **Nothing was watching, which is why it went unnoticed for two weeks.** CD only runs on push to `main`, and
   `main` had not moved since 2026-07-16 — before the whole TypeScript plugin. CI built the solution directly
   and never touched the Dockerfile. CI now builds the image on every PR (without pushing) and smoke-checks
