@@ -11,7 +11,8 @@ namespace Shonkor.Plugin.TypeScript;
 /// The private, in-plugin degradation parser. This is the same Esprima tolerant parse the host used to run
 /// in-process (the former <c>Shonkor.Core.Services.JavaScriptParser</c>): when the Node sidecar is
 /// unavailable or times out, the adapter delegates here so JS/TS indexing continues with the prior
-/// behaviour (AC#3) instead of stopping. Emitting the "degraded" diagnostic is the adapter's job; this
+/// behaviour (AC#3) instead of stopping. Reporting the degradation is the adapter's job — and it can only
+/// LOG it, not emit a <c>GraphDiagnostic</c> (#351: <c>IFileParser</c> has no diagnostics channel); this
 /// type only reproduces the old node/edge shape.
 /// </summary>
 internal static class EsprimaFallbackParser
@@ -72,8 +73,9 @@ internal static class EsprimaFallbackParser
         }
         catch (ParserException)
         {
-            // Prior behaviour: advanced/unsupported syntax is skipped here. The adapter has already surfaced
-            // a diagnostic explaining the fallback, so this is not a silent drop of the whole file.
+            // Prior behaviour: advanced/unsupported syntax is skipped here. The component node above is still
+            // returned, so the file is not dropped wholesale — only its imports are — and the adapter has
+            // already LOGGED why the fallback ran (a log line, not a queryable diagnostic; see #351).
             return;
         }
 

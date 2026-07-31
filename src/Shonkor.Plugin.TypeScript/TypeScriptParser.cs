@@ -13,8 +13,15 @@ namespace Shonkor.Plugin.TypeScript;
 /// <summary>
 /// The JS/TS base parser (#292, epic #296): a thin <see cref="IFileParser"/> adapter over a Node sidecar
 /// that runs the real TypeScript Compiler API. It replaces the former in-host Esprima parser, and carries
-/// that Esprima parse as a PRIVATE fallback so JS/TS indexing degrades — visibly, with a diagnostic —
-/// rather than stopping when Node is unavailable or a parse hangs.
+/// that Esprima parse as a PRIVATE fallback so JS/TS indexing degrades rather than stopping when Node is
+/// unavailable or a parse hangs.
+///
+/// <para><b>How visible that degradation is (#351), stated exactly:</b> a <see cref="IFileParser"/> has no
+/// diagnostics channel — <see cref="ParseAsync"/> returns only nodes and edges — so this adapter can report
+/// the fallback ONLY through <see cref="_logger"/> (stderr on the CLI; not in the dashboard). The degradation
+/// that becomes DATA a user can query is emitted by <c>TypeScriptSemanticLinker</c>, an
+/// <c>IGraphPostProcessor</c>, which returns a real <c>GraphDiagnostic</c>. Do not upgrade this claim without
+/// giving <see cref="IFileParser"/> such a channel.</para>
 ///
 /// <para>One sidecar per scan: the process is started lazily on the first parse and reused across every
 /// file; the plugin loader disposes this parser at scan end (#306), which tears the process down.</para>

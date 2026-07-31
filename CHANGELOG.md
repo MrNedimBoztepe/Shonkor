@@ -5,6 +5,25 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Documentation — The Node runtime prerequisite for JS/TS analysis is now written down (#351)
+- Since #312 the `shonkor-typescript` plugin is the **only** JS/TS path, and real TS semantics need Node
+  (>= v18, `NodeDiscovery.RequiredMajorVersion`). No document said so. The architecture chapters did mention a
+  "Node sidecar", but nothing anywhere named **the version bar, how to install or point at a Node, or what a
+  user gets when it is missing** — the operational half was absent, and `npm` had zero hits across `docs/`
+  entirely. The setup guide now has a **Step 3** covering the version bar, the
+  discovery order (configured `NodePath` → `PATH` → common install locations), and how to pin the path in
+  `plugins/shonkor-typescript/sidecar.settings.json`. arc42 chapter 2 lists the runtime as a technical
+  constraint, and the `index` command reference names it.
+- **The degradation is documented as it actually is, not as it reads best.** Without Node the index still
+  completes on the plugin's Esprima fallback, but the two report channels are not equally visible, and the
+  docs now say which is which: `TypeScriptSemanticLinker` (an `IGraphPostProcessor`) emits one queryable
+  `Info` diagnostic that the cross-file semantic pass was skipped — and only when the scan found `.ts`/`.tsx`
+  files at all — while the per-file "this file used the fallback" is a **log warning only**, because
+  `IFileParser.ParseAsync` returns nodes and edges and has no diagnostics channel. Two source comments that
+  claimed the parser degrades "visibly, with a diagnostic" were corrected to match.
+- Also noted: the repository's Dockerfile installs no Node, so JS/TS analysis inside the container runs
+  degraded unless you add one.
+
 ### Changed — The Sitecore plugin now carries YamlDotNet itself; the host no longer provides it (#348)
 - **Action required for existing workspaces: reinstall the `shonkor-sitecore` plugin.** The host used to ship
   `YamlDotNet.dll` and the plugin resolved it by ALC fall-through to the default context. That dead reference is
