@@ -258,6 +258,78 @@ public sealed class StandardPluginPackagingTests : IDisposable
         Assert.Single(registry.List(), p => p.Manifest.Id == StandardPluginSeeder.TypeScriptPluginId);
     }
 
+    // ---- #401: an INSTALLED standard plugin that differs from the artifact this host was built with is
+    //      refreshed. Seeding used to fire only on absence, so the first binary a workspace ever received
+    //      stayed forever — which is how a plugin can keep running against a contract the host has changed. ----
+
+    [Fact]
+    public void StalePlugin_IsRefreshedToTheEmbeddedArtifact_AndKeepsItsState()
+    {
+        foreach (var (state, expected) in new[]
+                 {
+                     (PluginState.Active, PluginState.Active),
+                     (PluginState.Disabled, PluginState.Disabled),
+                 })
+        {
+            var ws = NewWorkspace();
+            var registry = new PluginRegistry(ws);
+            var id = StandardPluginSeeder.TypeScriptPluginId;
+
+            // Install a package that is the real one with a byte appended to its entry assembly — i.e. the
+            // same plugin id, a different binary, exactly the shape of a workspace seeded by an older host.
+            var stalePath = MakeStalePackage();
+            Assert.True(registry.InstallFromZip(stalePath).Success);
+            if (state == PluginState.Active) Assert.True(registry.Activate(id).Success);
+            else Assert.True(registry.Deactivate(id).Success);
+
+            var embeddedHash = StandardPluginSeeder.TryHashEntryAssemblyInZip(MaterializeEmbeddedZip());
+            Assert.NotNull(embeddedHash);
+            Assert.NotEqual(embeddedHash, registry.List().Single(p => p.Manifest.Id == id).EntryAssemblySha256);
+
+            StandardPluginSeeder.EnsureSeeded(registry);
+
+            var after = registry.List().Single(p => p.Manifest.Id == id);
+            Assert.Equal(embeddedHash, after.EntryAssemblySha256);  // refreshed to what this host ships
+            Assert.Equal(expected, after.State);                    // and the operator's intent survived it
+            Assert.Single(registry.List(), p => p.Manifest.Id == id);
+        }
+    }
+
+    /// <summary>
+    /// A copy of the embedded package whose entry assembly has one byte appended: same manifest, same id,
+    /// different <c>EntryAssemblySha256</c>. Enough to stand in for "installed by an older host", and the
+    /// registry never loads the assembly during install/activate so the extra byte is inert.
+    /// </summary>
+    private string MakeStalePackage()
+    {
+        var path = MaterializeEmbeddedZip();
+        string entryName;
+        using (var probe = ZipFile.OpenRead(path))
+        {
+            using var manifestStream = probe.GetEntry("plugin.json")!.Open();
+            entryName = System.Text.Json.JsonDocument.Parse(manifestStream)
+                .RootElement.GetProperty("entryAssembly").GetString()!;
+        }
+
+        byte[] original;
+        using (var read = ZipFile.OpenRead(path))
+        using (var s = read.GetEntry(entryName)!.Open())
+        using (var ms = new MemoryStream())
+        {
+            s.CopyTo(ms);
+            original = ms.ToArray();
+        }
+
+        using (var archive = ZipFile.Open(path, ZipArchiveMode.Update))
+        {
+            archive.GetEntry(entryName)!.Delete();
+            using var w = archive.CreateEntry(entryName).Open();
+            w.Write(original);
+            w.WriteByte(0x00);
+        }
+        return path;
+    }
+
     // ---- AC#7 (runtime): an artifact WITHOUT node_modules still installs/activates/loads and the host stays
     //      functional — the file is not silently OK (an error diagnostic is surfaced), and nothing crashes.
     //      (Deps-less is prevented at RELEASE build time by the loud guard, pinned in the next test.) ----
