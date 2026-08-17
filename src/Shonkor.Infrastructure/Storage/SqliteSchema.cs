@@ -226,9 +226,12 @@ internal static class SqliteSchema
     ///
     /// <para>
     /// Hence a direct <c>UPDATE</c>. A migration runs BELOW the runtime merge rule — that is what migrations
-    /// are for — and it is deliberately not a delete-and-rescan: rescanning would re-run
-    /// <c>RoslynAstParser</c> with its <c>IMPLEMENTS</c>/<c>EXTENDS</c> name heuristic still in place (#402)
-    /// and would destroy the edge identity the before/after audit depends on.
+    /// are for — and it is deliberately not a delete-and-rescan, which would destroy the edge identity the
+    /// before/after audit depends on. (When this was written, rescanning would additionally have re-emitted
+    /// <c>RoslynAstParser</c>'s name-guessed <c>IMPLEMENTS</c>/<c>EXTENDS</c> at <c>Extracted</c>; #402 has
+    /// since fixed that, so a rescan is no longer harmful in that particular way — but it still cannot
+    /// repair those two families on a graph indexed before #402, because there both producers sit at
+    /// <c>Extracted</c> indistinguishably.)
     /// </para>
     ///
     /// <para>
