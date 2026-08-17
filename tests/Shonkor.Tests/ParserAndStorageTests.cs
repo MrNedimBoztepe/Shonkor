@@ -204,8 +204,12 @@ public class ParserAndStorageTests
     public async Task Scanner_ShouldStampParserDefaultProvenance()
     {
         // Enforcement (0.1c): the scanner stamps each parser's edges with the parser's DefaultProvenance,
-        // so deterministic Roslyn edges stay Extracted while heuristic JS edges become Inferred — even
-        // though neither parser tags provenance per edge.
+        // so deterministic Roslyn edges stay Extracted while heuristic JS edges become Inferred.
+        //
+        // The stamp only ever RAISES uncertainty, so a parser that rates an individual edge weaker than its
+        // own baseline keeps that rating. Since #402 RoslynAstParser does exactly that for its syntactic
+        // IMPLEMENTS/EXTENDS, which is why the old wording here — "neither parser tags provenance per edge"
+        // — is no longer true, and why this test asserts the baseline for the untagged edges only.
         var dir = Path.Combine(Path.GetTempPath(), $"shonkor_prov_{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         try
@@ -1107,7 +1111,7 @@ public class ParserAndStorageTests
                 Name = "BlogBox",
                 Properties = new Dictionary<string, string> {
                     ["sitecorePath"] = "/sitecore/layout/Renderings/Feature/Blog/BlogBox",
-                    ["controller"] = "MuM.Feature.Blog.Controllers.BlogController, MuM.Feature.Blog",
+                    ["controller"] = "Acme.Feature.Blog.Controllers.BlogController, Acme.Feature.Blog",
                     ["componentName"] = "BlogBox"
                 }
             },
