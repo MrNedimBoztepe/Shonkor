@@ -12,7 +12,7 @@ shonkor persists its code graph in a bespoke SQLite schema (`Nodes`, `Edges`, `T
 (`Extracted` / `Inferred` / `Ambiguous`, see `Shonkor.Core/Models/Provenance.cs`) — the property the
 product is built around.
 
-Before extending that schema with a typed `ProvenanceReason`, the question was raised whether an
+Before extending that schema with a typed provenance reason, the question was raised whether an
 established code-intelligence index format could carry the model instead, which would remove a large
 part of the schema- and migration-maintenance burden. The candidate was **SCIP** (Sourcegraph),
 together with its .NET indexer `scip-dotnet`; LSIF, CodeQL, NDepend/CQLinq, Stack Graphs and Glean
