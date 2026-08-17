@@ -39,13 +39,19 @@ public static class ProvenanceInvariant
         Provenance? RepairTo,
         string Producer);
 
-    /// <summary>A relationship at a tier it may not hold, with how many edges and one example.</summary>
+    /// <summary>
+    /// A relationship at a tier it may not hold, with how many edges and one example.
+    /// <paramref name="FamilyTotal"/> is how many edges that relationship has in total, so a count can be
+    /// read as a share rather than as a bare number — the difference between "440 violations" and "440 of
+    /// 1 180 edges, which is two orders of magnitude above every other graph".
+    /// </summary>
     public sealed record Violation(
         string Relationship,
         Provenance Actual,
         Provenance? RepairTo,
         string Producer,
         int Count,
+        int FamilyTotal,
         string SampleSourceId,
         string SampleTargetId);
 
@@ -134,16 +140,21 @@ public static class ProvenanceInvariant
     /// defect, an unknown relationship is only a gap in this table — most likely a third-party plugin — and
     /// treating them the same would either hide the first or make every new plugin a build failure.
     /// </summary>
-    public static (IReadOnlyList<Violation> Violations, IReadOnlyList<Unclassified> Unclassified) Check(
+    public static (IReadOnlyList<Violation> Violations, IReadOnlyList<Unclassified> Unclassified, int TotalEdges) Check(
         IEnumerable<GraphEdge> edges)
     {
         ArgumentNullException.ThrowIfNull(edges);
 
         var violations = new Dictionary<(string, Provenance), (Rule Rule, int Count, GraphEdge Sample)>();
         var unknown = new Dictionary<(string, Provenance), (int Count, GraphEdge Sample)>();
+        var familyTotals = new Dictionary<string, int>(StringComparer.Ordinal);
+        var total = 0;
 
         foreach (var edge in edges)
         {
+            total++;
+            familyTotals[edge.Relationship] = familyTotals.GetValueOrDefault(edge.Relationship) + 1;
+
             var rule = RuleFor(edge.Relationship);
             if (rule == null)
             {
@@ -163,13 +174,14 @@ public static class ProvenanceInvariant
         return (
             violations
                 .Select(kv => new Violation(kv.Key.Item1, kv.Key.Item2, kv.Value.Rule.RepairTo, kv.Value.Rule.Producer,
-                    kv.Value.Count, kv.Value.Sample.SourceId, kv.Value.Sample.TargetId))
+                    kv.Value.Count, familyTotals.GetValueOrDefault(kv.Key.Item1), kv.Value.Sample.SourceId, kv.Value.Sample.TargetId))
                 .OrderByDescending(v => v.Count).ThenBy(v => v.Relationship, StringComparer.Ordinal)
                 .ToList(),
             unknown
                 .Select(kv => new Unclassified(kv.Key.Item1, kv.Key.Item2, kv.Value.Count, kv.Value.Sample.SourceId))
                 .OrderByDescending(u => u.Count).ThenBy(u => u.Relationship, StringComparer.Ordinal)
-                .ToList());
+                .ToList(),
+            total);
     }
 
     /// <summary>
@@ -179,18 +191,24 @@ public static class ProvenanceInvariant
     /// </summary>
     public static string Report(
         IReadOnlyList<Violation> violations,
-        IReadOnlyList<Unclassified> unclassified)
+        IReadOnlyList<Unclassified> unclassified,
+        int totalEdges = 0)
     {
         if (violations.Count == 0 && unclassified.Count == 0) return string.Empty;
+
+        static string Share(int part, int whole) => whole <= 0 ? "" : $" ({100.0 * part / whole:F1}% of {whole:N0})";
 
         var sb = new System.Text.StringBuilder();
         if (violations.Count > 0)
         {
-            sb.AppendLine($"{violations.Sum(v => v.Count)} edge(s) hold a trust tier their relationship may not hold:");
+            var affected = violations.Sum(v => v.Count);
+            // The share, not just the count: a family sitting at 37% of a graph is a different phenomenon
+            // from one sitting at 0.5%, and a bare number hides that until someone thinks to ask.
+            sb.AppendLine($"{affected} edge(s) hold a trust tier their relationship may not hold{Share(affected, totalEdges)}:");
             foreach (var v in violations)
             {
                 var target = v.RepairTo is { } r ? r.ToString().ToLowerInvariant() : "not repairable from (relation, tier) alone";
-                sb.AppendLine($"  {v.Relationship} at {v.Actual.ToString().ToLowerInvariant()} x{v.Count} -> {target}");
+                sb.AppendLine($"  {v.Relationship} at {v.Actual.ToString().ToLowerInvariant()} x{v.Count}{Share(v.Count, v.FamilyTotal)} -> {target}");
                 sb.AppendLine($"      producer: {v.Producer}");
                 sb.AppendLine($"      example:  {v.SampleSourceId} -> {v.SampleTargetId}");
             }

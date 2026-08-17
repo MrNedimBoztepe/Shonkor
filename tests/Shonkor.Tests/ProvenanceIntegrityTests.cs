@@ -266,10 +266,10 @@ public class ProvenanceIntegrityTests
             var all = await storage.GetAllEdgesAsync();
             Assert.NotEmpty(all); // a table that passes because nothing was scanned proves nothing
 
-            var (violations, unclassified) = ProvenanceInvariant.Check(all);
+            var (violations, unclassified, totalEdges) = ProvenanceInvariant.Check(all);
 
             Assert.True(violations.Count == 0,
-                "an edge holds a tier its relationship may not hold:\n" + ProvenanceInvariant.Report(violations, []));
+                "an edge holds a tier its relationship may not hold:\n" + ProvenanceInvariant.Report(violations, [], totalEdges));
 
             // A relationship the first-party producers emit but the table omits is a hole in the table, and
             // this fixture only runs first-party producers — so here it IS a failure.
