@@ -310,8 +310,14 @@ public sealed class GraphIndexScanner
                     var enrichment = await postProcessor.ProcessAsync(view, _postProcessorContext).ConfigureAwait(false);
                     if (enrichment.Nodes.Count > 0)
                         await _storage.UpsertNodesAsync(enrichment.Nodes, cancellationToken).ConfigureAwait(false);
+                    // Stamped exactly like parser output (#400): post-processor edges used to be upserted
+                    // raw, so an edge whose producer forgot to tag it defaulted to Extracted and a heuristic
+                    // link claimed compiler-grade trust. StampProvenance only ever RAISES uncertainty, so a
+                    // post-processor that already sets Inferred/Ambiguous per edge is unaffected.
                     if (enrichment.Edges.Count > 0)
-                        await _storage.UpsertEdgesAsync(enrichment.Edges, cancellationToken).ConfigureAwait(false);
+                        await _storage.UpsertEdgesAsync(
+                            enrichment.Edges.Select(e => StampProvenance(e, postProcessor.DefaultProvenance)),
+                            cancellationToken).ConfigureAwait(false);
                     // Replace exactly this post-processor's diagnostics (tagged by its Name) so a re-scan
                     // refreshes them without touching others.
                     await _storage.ReplaceDiagnosticsAsync(postProcessor.Name, enrichment.Diagnostics, cancellationToken).ConfigureAwait(false);
