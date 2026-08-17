@@ -23,6 +23,12 @@ AddJsonConsole           # Microsoft.Extensions.Logging extension method (struct
 SemanticModel            # Microsoft.CodeAnalysis (Roslyn) - exact C# symbol resolution
 CSharpCompilation        # Microsoft.CodeAnalysis.CSharp (Roslyn)
 ReplaceSyntaxTree        # Microsoft.CodeAnalysis method used by the incremental check_edit path
+Occurrence               # sourcegraph/scip scip.proto - a symbol reference at a source position.
+                         # ADR 0001 quotes the SCIP messages verbatim to show the format has no field
+                         # able to carry a provenance tier; the names must match the proto exactly.
+SymbolInformation        # scip.proto - per-symbol metadata (documentation, relationships, kind)
+Signature                # scip.proto - symbol signature display; holds the format's only reserved range
+ToolInfo                 # scip.proto - name/version/arguments of the indexer that wrote the index
 InternalsVisibleTo       # MSBuild item / System.Runtime.CompilerServices attribute - how Shonkor.Tests
                          # reaches the bench's internal logic (#191). Not a type we declare.
 
