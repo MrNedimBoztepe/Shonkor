@@ -90,7 +90,7 @@ This will:
 *Note: If you have an NVIDIA GPU, edit `docker-compose.yml` and uncomment the `deploy` section under the `ollama` service for massive performance gains.*
 
 > [!NOTE]
-> **Node in the container.** The repository's Dockerfile installs no Node runtime — its runtime stage adds only `curl` on top of the .NET base image. If you index JS/TS from inside the container, check with `docker compose exec shonkor-web node --version` (`shonkor-web` is the service name in `docker-compose.yml`) and add Node ≥ v18 to the image if it is missing; otherwise JS/TS analysis runs on the Esprima fallback described in Step 3.
+> **Node in the container.** The repository's Dockerfile ships no Node runtime in the **final image** — its runtime stage adds only `curl` on top of the .NET base image. (The *build* stage does carry Node, but only so `npm ci` can materialise the plugin's sidecar deps at build time; that Node never reaches the runtime image.) If you index JS/TS from inside the container, check with `docker compose exec shonkor-web node --version` (`shonkor-web` is the service name in `docker-compose.yml`) and add Node ≥ v18 to the image if it is missing; otherwise JS/TS analysis runs on the Esprima fallback described in Step 3.
 
 ### Prebuilt image (CI/CD)
 Every push to `main` builds and publishes the Linux image to the GitHub Container Registry via the `.github/workflows/cd.yml` pipeline, so you can also pull `ghcr.io/<owner>/shonkor:latest` instead of building locally.

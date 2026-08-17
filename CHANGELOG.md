@@ -5,6 +5,40 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — The container image could not be built at all, and the last one that was built shipped a known CVE (#388)
+- **The image build was broken since #313.** The Dockerfile's restore layer copied an enumerated list of four
+  `.csproj` files, and `Shonkor.Infrastructure` has referenced `Shonkor.Plugin.TypeScript` since #313. The
+  restore does **not** fail on that — NuGet silently skips a `ProjectReference` whose target is absent
+  (`Skipping project "..." because it was not found.`, exit 0). The subsequent `--no-restore` publish is what
+  breaks: `error NETSDK1004: Assets file '.../Shonkor.Plugin.TypeScript/obj/project.assets.json' not found`.
+  `ReferenceOutputAssembly=false` suppresses the assembly reference at compile time, not the build of the
+  referenced project. The layer now copies **every** `src/*/*.csproj` via a glob, so the next added reference
+  cannot rot it the same way.
+- **`Directory.Build.props` was not in the restore layer either, and that is a security bug.** That file
+  carries the `SQLitePCLRaw.lib.e_sqlite3` 3.50.3 override against CVE-2025-6965. Without it the image's
+  restore resolved the transitive, vulnerable **2.1.11** — reproduced: `warning NU1903: Package
+  'SQLitePCLRaw.lib.e_sqlite3' 2.1.11 has a known high severity vulnerability`, `project.assets.json`
+  recording `SQLitePCLRaw.lib.e_sqlite3/2.1.11`, build green. Green, because `TreatWarningsAsErrors` lives in
+  the very file that was missing. Local and CI builds were never affected; only the image was. What to do
+  about the already-published GHCR tags is tracked separately in #389.
+- **The build stage now carries Node.** `mcr.microsoft.com/dotnet/sdk:10.0` ships none, and `.dockerignore`
+  excludes `**/node_modules/`, so the TypeScript plugin's `npm ci` (`NpmInstallSidecar`) has to run inside the
+  image or `VerifySidecarReleaseDeps` fails the Release build — deliberately, so a silently degraded plugin
+  package can never ship. Node comes from the official image rather than `apt`, because Ubuntu 24.04 ships
+  Node 18 while the sidecar declares `"engines": { "node": ">=20" }`. The **runtime** image is unchanged and
+  still has no Node.
+- **The container's global `shonkor` command was broken too** — found by the new CI smoke check on its first
+  run, not by reading. The wrapper execs `/app/cli/Shonkor.CLI.dll`, but the CLI has set
+  `<AssemblyName>shonkor</AssemblyName>` since 2026-06-18 (`bef00e8`), ten days after the wrapper was written
+  (`8d9f6d8`). Every invocation died with *"The application '/app/cli/Shonkor.CLI.dll' does not exist"*. Same
+  root cause as the rest of this entry: nothing ever ran the image.
+- **Nothing was watching, which is why it went unnoticed for two weeks.** CD only runs on push to `main`, and
+  `main` had not moved since 2026-07-16 — before the whole TypeScript plugin. CI built the solution directly
+  and never touched the Dockerfile. CI now builds the image on every PR (without pushing) and smoke-checks
+  that the running container actually seeds the plugin with its sidecar deps
+  (`plugins/shonkor-typescript/sidecar/node_modules/typescript/package.json`), so a green build that produces
+  an incomplete artifact is caught too.
+
 ### Documentation — The Node runtime prerequisite for JS/TS analysis is now written down (#351)
 - Since #312 the `shonkor-typescript` plugin is the **only** JS/TS path, and real TS semantics need Node
   (>= v18, `NodeDiscovery.RequiredMajorVersion`). No document said so. The architecture chapters did mention a
