@@ -187,7 +187,7 @@ public sealed class ProvenanceRepairMigrationTests : IDisposable
         using (var provider = new SqliteGraphStorageProvider(path)) await provider.InitializeAsync();
 
         Assert.Equal(afterFirst.Count, (await RepairDiagnosticsAsync(path)).Count);
-        var (violations, _) = ProvenanceInvariant.Check(await EdgesOfAsync(path));
+        var (violations, _, _) = ProvenanceInvariant.Check(await EdgesOfAsync(path));
         Assert.Empty(violations);
     }
 
