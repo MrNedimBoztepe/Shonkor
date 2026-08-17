@@ -217,4 +217,89 @@ public class ProvenanceIntegrityTests
         }
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
     }
+
+    /// <summary>
+    /// #406, the durable form of the guard above. The whitelist check only asks "is anything Extracted that
+    /// should not be" — it is blind in the other direction, and it is stated in prose inside a test rather
+    /// than as data anything else can use.
+    ///
+    /// <para>
+    /// <see cref="ProvenanceInvariant"/> encodes the full <c>(RelationType, Provenance) -&gt; producer</c>
+    /// mapping, so this asserts every edge of a scanned graph sits at a tier its relationship may hold —
+    /// not merely that nothing over-claims. The same table drives the repair migration's before/after
+    /// counting, which is why it is data and not an assertion.
+    /// </para>
+    ///
+    /// <para>
+    /// Deliberately the same multi-producer fixture as the guard above rather than a wider one: what this
+    /// pins is the TABLE, and a table that disagrees with the producers fails here regardless of corpus
+    /// size. Running it against a real graph is report mode, not a test — a third-party plugin's
+    /// relationship is a gap in the table, not a defect, and must not turn someone else's build red.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Guard_EveryEdgeSitsAtATierItsRelationshipMayHold()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_prov_table_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "Svc.cs"),
+                "namespace N { public interface IThing { void Go(); } "
+                + "public class Svc : IThing { public Helper H; public void Go() { var h = new Helper(); h.Use(); } } "
+                + "public class Helper { public void Use() { } } "
+                + "public class Derived : Svc { } }");
+            await File.WriteAllTextAsync(Path.Combine(dir, "q.graphql"),
+                "query Q { item { ...on Card { id } } }");
+            await File.WriteAllTextAsync(Path.Combine(dir, "metadata.php"),
+                "<?php $m = ['extend' => ['oxArticle' => 'My\\Article']];");
+            await File.WriteAllTextAsync(Path.Combine(dir, "doc.md"),
+                "# Title\nSee [the guide](./other.md) for details.");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage,
+                new IFileParser[] { new RoslynAstParser(), new GraphQLParser(), new PhpModuleParser(), new MarkdownHierarchyParser() },
+                semanticCsharp: true);
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            var all = await storage.GetAllEdgesAsync();
+            Assert.NotEmpty(all); // a table that passes because nothing was scanned proves nothing
+
+            var (violations, unclassified) = ProvenanceInvariant.Check(all);
+
+            Assert.True(violations.Count == 0,
+                "an edge holds a tier its relationship may not hold:\n" + ProvenanceInvariant.Report(violations, []));
+
+            // A relationship the first-party producers emit but the table omits is a hole in the table, and
+            // this fixture only runs first-party producers — so here it IS a failure.
+            Assert.True(unclassified.Count == 0,
+                "a first-party relationship is missing from ProvenanceInvariant.Rules:\n"
+                + ProvenanceInvariant.Report([], unclassified));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+
+    /// <summary>
+    /// The table has to stay internally consistent: a repair target that is not itself a legitimate tier
+    /// would move edges from one violation straight into another, and the migration would never converge.
+    /// </summary>
+    [Fact]
+    public void InvariantTable_RepairTargets_AreThemselvesLegitimate()
+    {
+        foreach (var rule in ProvenanceInvariant.Rules)
+        {
+            Assert.False(rule.Legitimate.Count == 0, $"{rule.Relationship} permits no tier at all");
+            if (rule.RepairTo is { } target)
+            {
+                Assert.True(rule.Legitimate.Contains(target),
+                    $"{rule.Relationship} repairs to {target}, which it does not itself permit");
+            }
+        }
+
+        // No duplicate relationships — a second entry would silently shadow the first.
+        Assert.Equal(
+            ProvenanceInvariant.Rules.Count,
+            ProvenanceInvariant.Rules.Select(r => r.Relationship).Distinct(StringComparer.Ordinal).Count());
+    }
 }
