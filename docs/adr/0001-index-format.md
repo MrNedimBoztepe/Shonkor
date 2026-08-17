@@ -67,7 +67,7 @@ consumer-side extension.
 
 ### E3 — roughly a third of the edge inventory has no SCIP representation
 
-Measured against a cold full scan of a real Sitecore solution (`sitecoreMuM`, 7 983 files,
+Measured against a cold full scan of a real Sitecore solution (`corpus-A`, 7 983 files,
 52 900 edges) produced by the current code:
 
 | shonkor edge type | count | SCIP representation |
@@ -95,14 +95,14 @@ of a method definition. Measured on actual indexes produced by `scip-dotnet` v0.
 | index | documents | occurrences | occurrences carrying an enclosing-range field |
 |---|---:|---:|---:|
 | `Shonkor.Core` + `Shonkor.Infrastructure` | 87 | 22 405 | **0** |
-| `sitecoreMuM` | 650 | 66 766 | **0** |
+| `corpus-A` | 650 | 66 766 | **0** |
 
 `enclosing_range` is never populated, so the derivation is not available in practice. Recovering
 `CALLS` would mean re-running Roslyn over the sources — which is what shonkor already does.
 
 ### E5 — scip-dotnet does not cover the target codebase
 
-On `sitecoreMuM`, `scip-dotnet` indexed **650 of 1 620 C# files (40 %)**. 65 of the solution's 156
+On `corpus-A`, `scip-dotnet` indexed **650 of 1 620 C# files (40 %)**. 65 of the solution's 156
 projects failed to load, every one of them with the same MSBuild error: the classic .NET Framework
 web projects import `$(VSToolsPath)\WebApplications\Microsoft.WebApplication.targets`, which the .NET
 SDK alone does not provide.

@@ -25,7 +25,7 @@ public sealed class SearchGraphTool : IMcpTool
                 limit = new { type = "integer", description = "Max number of results to return (default 10, max 100)" },
                 type = new { type = "string", description = "Filter results to a specific node type (e.g. 'Class', 'Method', 'Interface', 'File', 'Record', 'Property', 'MarkdownSection', 'Concept'). Omit for all types." },
                 verbose = new { type = "boolean", description = "Include each hit's graph connections and full metadata as JSON (default false). Leave false for token-efficient lookups." },
-                projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
+                projectName = new { type = "string", description = "Optional project context name (e.g. 'my-app' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "query" }
         }
@@ -110,7 +110,7 @@ public sealed class LocateTool : IMcpTool
             {
                 query = new { type = "string", description = "The symbol name or search text" },
                 limit = new { type = "integer", description = "Max number of results to return (default 15, max 100)" },
-                projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
+                projectName = new { type = "string", description = "Optional project context name (e.g. 'my-app' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "query" }
         }
