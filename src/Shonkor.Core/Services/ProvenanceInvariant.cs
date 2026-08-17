@@ -88,13 +88,17 @@ public static class ProvenanceInvariant
         //    Inferred = unique name match, Ambiguous = several candidates.
         new("REFERENCES_TYPE",    Tiers(E, I, A), null, "SemanticCsharpLinker (E) / CrossTechLinker (I) / AmbiguousCSharpTypePostProcessor (A)"),
 
-        // -- Producer-ambiguous, deliberately NOT repairable here. RoslynAstParser emits these
-        //    syntactically (the IMPLEMENTS-vs-EXTENDS split is a name heuristic: leading 'I' plus an
-        //    uppercase second character) while SemanticCsharpLinker emits them resolved, and both currently
-        //    land at Extracted — so the pair does not identify the producer. #402 creates the distinction;
-        //    until then a repair cannot tell a proven edge from a guessed one.
-        new("IMPLEMENTS",         Tiers(E, I),    null, "RoslynAstParser (syntactic) / SemanticCsharpLinker (resolved) -- see #402"),
-        new("EXTENDS",            Tiers(E, I),    null, "RoslynAstParser (syntactic) / SemanticCsharpLinker (resolved) -- see #402"),
+        // -- Two producers, and since #402 the tier tells them apart: RoslynAstParser emits these
+        //    syntactically at Inferred (the IMPLEMENTS-vs-EXTENDS split is a name heuristic, and the target
+        //    is a bare type name), SemanticCsharpLinker emits them from resolved symbols at Extracted.
+        //
+        //    Still NO repair target, and that is not an oversight. The distinction only holds for edges
+        //    written AFTER #402: a graph indexed before it has both producers' output sitting at Extracted,
+        //    indistinguishable, and a repair would have to guess which is which. These two become repairable
+        //    when the graph has been fully rescanned — which is why the freeze-release procedure counts
+        //    reparsed files rather than trusting a zero-violation result (#423).
+        new("IMPLEMENTS",         Tiers(E, I),    null, "SemanticCsharpLinker (E, resolved) / RoslynAstParser (I, syntactic) / TypeScript same-file heritage (I)"),
+        new("EXTENDS",            Tiers(E, I),    null, "SemanticCsharpLinker (E, resolved) / RoslynAstParser (I, syntactic) / TypeScript same-file heritage (I)"),
 
         // -- Model- and agent-authored. One population on purpose: all three are the AP7 target set, so a
         //    single tier gives that work a selection predicate instead of a case distinction.
