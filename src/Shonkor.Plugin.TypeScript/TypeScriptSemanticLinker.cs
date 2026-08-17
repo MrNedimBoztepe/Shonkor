@@ -16,9 +16,10 @@ namespace Shonkor.Plugin.TypeScript;
 /// <c>getTypeChecker()</c> and resolve the cross-file semantic edges — CALLS, REFERENCES_TYPE, OVERRIDES,
 /// IMPLEMENTS_MEMBER, plus cross-file-sharpened EXTENDS/IMPLEMENTS — on NODE IDS (never names/paths).
 ///
-/// <para>The edges are returned <b>additively</b> (the contract of <see cref="IGraphPostProcessor"/>): the
-/// host upserts them directly (bypassing the parser's <c>DefaultProvenance</c> stamp) at
-/// <see cref="Provenance.Extracted"/>. Because the store keeps the MIN provenance on conflict, an EXTRACTED
+/// <para>The edges are returned <b>additively</b> (the contract of <see cref="IGraphPostProcessor"/>) and
+/// each one carries its own tier, so the host's stamp (which only ever raises uncertainty) leaves them as
+/// produced: a type-checker-resolved edge stays <see cref="Provenance.Extracted"/> and an ambiguous one stays
+/// <see cref="Provenance.Ambiguous"/>. Because the store keeps the MIN provenance on conflict, an EXTRACTED
 /// edge that coincides with #293's INFERRED same-file heritage SHARPENS it automatically — no mutation of
 /// phase-1 data. External symbols (node_modules / <c>*.d.ts</c>) have no node and are skipped both in the
 /// sidecar and here (a known-id filter), so no edge dangles (AC#4).</para>
@@ -70,6 +71,17 @@ public sealed class TypeScriptSemanticLinker : IGraphPostProcessor, IPluginIniti
 
     /// <inheritdoc />
     public string Name => "typescript.semantic-linker";
+
+    /// <summary>
+    /// Overridden to <see cref="Provenance.Extracted"/>, against the post-processor default of
+    /// <see cref="Provenance.Inferred"/>: this linker resolves through <c>ts.createProgram</c> +
+    /// <c>getTypeChecker()</c> on node ids, which is a language-exact resolution rather than an inference over
+    /// the assembled graph. Declaring it is deliberately an explicit act — the claim has to be made, not
+    /// inherited (#400). Safe as a ceiling because every edge below tags itself: a single-candidate resolution
+    /// is <c>Extracted</c>, a multi-candidate one <c>Ambiguous</c>, and the host's stamp only raises
+    /// uncertainty, so the ambiguous ones keep their weaker tier.
+    /// </summary>
+    public Provenance DefaultProvenance => Provenance.Extracted;
 
     /// <inheritdoc />
     public void Initialize(IPluginHost host)
