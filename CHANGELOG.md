@@ -29,7 +29,7 @@ All notable changes to Shonkor are documented here. The format follows
   still has no Node.
 - **The container's global `shonkor` command was broken too** — found by the new CI smoke check on its first
   run, not by reading. The wrapper execs `/app/cli/Shonkor.CLI.dll`, but the CLI has set
-  `<AssemblyName>shonkor</AssemblyName>` since 2026-06-18 (`bef00e8`), two weeks after the wrapper was written
+  `<AssemblyName>shonkor</AssemblyName>` since 2026-06-18 (`bef00e8`), ten days after the wrapper was written
   (`8d9f6d8`). Every invocation died with *"The application '/app/cli/Shonkor.CLI.dll' does not exist"*. Same
   root cause as the rest of this entry: nothing ever ran the image.
 - **Nothing was watching, which is why it went unnoticed for two weeks.** CD only runs on push to `main`, and
