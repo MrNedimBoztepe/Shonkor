@@ -210,8 +210,14 @@ public static class ProvenanceInvariant
                 var target = v.RepairTo is { } r ? r.ToString().ToLowerInvariant() : "not repairable from (relation, tier) alone";
                 sb.AppendLine($"  {v.Relationship} at {v.Actual.ToString().ToLowerInvariant()} x{v.Count}{Share(v.Count, v.FamilyTotal)} -> {target}");
                 sb.AppendLine($"      producer: {v.Producer}");
+                var signature = SignatureOf(v);
+                if (signature.Length > 0) sb.AppendLine($"      signature: {signature}");
                 sb.AppendLine($"      example:  {v.SampleSourceId} -> {v.SampleTargetId}");
             }
+        }
+        if (violations.Count > 0)
+        {
+            sb.AppendLine("(signatures are shape hints from the share, not conclusions -- they say where to look.)");
         }
         if (unclassified.Count > 0)
         {
@@ -222,5 +228,32 @@ public static class ProvenanceInvariant
             }
         }
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// What the share of a family typically means, named so nobody has to rediscover it. Working these out
+    /// by hand cost a round of analysis once; the three shapes below were all observed on real graphs.
+    ///
+    /// <para>
+    /// These are <b>hints, not verdicts</b>. The share says where to look — it cannot say what happened —
+    /// so the wording stays conditional and tiny families get no hint at all, where one or two edges make
+    /// any percentage meaningless.
+    /// </para>
+    /// </summary>
+    private static string SignatureOf(Violation v)
+    {
+        const int TooSmallToRead = 20;
+        if (v.FamilyTotal < TooSmallToRead) return string.Empty;
+
+        var share = 100.0 * v.Count / v.FamilyTotal;
+        return share switch
+        {
+            >= 99.5 => "the WHOLE family — points at a producer-wide stamping error "
+                       + "(e.g. a plugin binary built against an older contract), not at individual edges",
+            >= 40 and <= 60 => "about HALF the family — the graph may hold two generations of itself under "
+                       + "differing node ids, the older one backfilled by the additive Provenance column (see #421)",
+            <= 5 => "a small remnant — consistent with legacy edges left over from before a producer was corrected",
+            _ => string.Empty,
+        };
     }
 }
