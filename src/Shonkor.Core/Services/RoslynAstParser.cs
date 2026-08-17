@@ -357,7 +357,21 @@ public sealed class RoslynAstParser : IFileParser
                 Relationship = ContainsRelationship
             });
 
-            // Edges for base types and implemented interfaces
+            // Edges for base types and implemented interfaces.
+            //
+            // These are INFERRED, not Extracted, and both halves of the edge are why (#402). A base list is
+            // syntax: it says "Foo derives from Bar" and nothing else. Deciding whether Bar is an interface
+            // needs the symbol, which this parser does not have, so IsLikelyInterface guesses from the name —
+            // a class called IOManager is read as an interface, an interface called Comparable as a base
+            // class. And TargetId is the source-level name, not a resolved node id, so the edge points at
+            // whatever else happens to carry that name.
+            //
+            // SemanticCsharpLinker emits the same two relationships from resolved symbols and keeps
+            // Extracted. That difference is the point: after this, the pair (RelationType, Provenance)
+            // identifies which of the two produced an edge, which it could not while both claimed Extracted.
+            // The two never collide in storage anyway — the linker's TargetId is a node id, this one's is a
+            // bare name — so this is not a downgrade of the linker's work, and the MIN-on-conflict merge
+            // never sees the two together.
             if (baseList is not null)
             {
                 foreach (var baseType in baseList.Types)
@@ -369,7 +383,8 @@ public sealed class RoslynAstParser : IFileParser
                     {
                         SourceId = typeNodeId,
                         TargetId = baseTypeName,
-                        Relationship = relationship
+                        Relationship = relationship,
+                        Provenance = Provenance.Inferred
                     });
                 }
             }
@@ -526,6 +541,12 @@ public sealed class RoslynAstParser : IFileParser
         /// <summary>
         /// Uses a naming convention heuristic to determine if a base type name refers to an interface.
         /// Interface names conventionally start with 'I' followed by an uppercase letter.
+        /// </summary>
+        /// <summary>
+        /// A naming convention, not a resolution — the method name says so, and #402 is the record of what
+        /// that cost. Syntax cannot tell an interface from a class; only the symbol can. Every edge whose
+        /// KIND this decides is therefore emitted as <see cref="Provenance.Inferred"/>, and
+        /// <c>SemanticCsharpLinker</c> supplies the resolved, Extracted version where a compilation exists.
         /// </summary>
         private static bool IsLikelyInterface(string typeName) =>
             typeName.Length >= 2 && typeName[0] == 'I' && char.IsUpper(typeName[1]);

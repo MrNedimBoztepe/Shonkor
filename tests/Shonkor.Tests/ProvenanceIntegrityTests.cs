@@ -281,6 +281,71 @@ public class ProvenanceIntegrityTests
     }
 
     /// <summary>
+    /// #402: the heuristic that decides IMPLEMENTS vs EXTENDS is a naming convention — leading <c>I</c> plus
+    /// an uppercase second character — so every edge whose KIND it picks must be Inferred. This pins the
+    /// mislabel itself rather than only the tier: <c>Payload : IOManager</c> is a class deriving from a
+    /// class, and the parser calls it IMPLEMENTS. Which is fine, as long as it says it is guessing.
+    /// </summary>
+    [Fact]
+    public async Task SyntacticHeritage_IsInferred_EvenWhenTheNameHeuristicGetsTheKindWrong()
+    {
+        var code = """
+            namespace N {
+                public class IOManager { }                 // a CLASS whose name trips the 'I' heuristic
+                public interface Comparable { }            // an INTERFACE the heuristic will miss
+                public class Payload : IOManager, Comparable { }
+            }
+            """;
+
+        var (_, edges) = await new RoslynAstParser().ParseAsync("/r/Payload.cs", code);
+
+        // The heuristic is wrong about BOTH, in opposite directions...
+        var wrongWayImplements = Assert.Single(edges, e => e.Relationship == "IMPLEMENTS" && e.TargetId == "IOManager");
+        var wrongWayExtends = Assert.Single(edges, e => e.Relationship == "EXTENDS" && e.TargetId == "Comparable");
+
+        // ...and precisely because it can be, neither claims to be a compiler fact.
+        Assert.Equal(Provenance.Inferred, wrongWayImplements.Provenance);
+        Assert.Equal(Provenance.Inferred, wrongWayExtends.Provenance);
+
+        // Nothing this parser produces from a base list may be Extracted, whatever the names happen to be.
+        Assert.All(edges.Where(e => e.Relationship is "IMPLEMENTS" or "EXTENDS"),
+            e => Assert.NotEqual(Provenance.Extracted, e.Provenance));
+    }
+
+    /// <summary>
+    /// #402's real acceptance criterion, and what #399 left open: after this, <c>(RelationType, Provenance)</c>
+    /// tells the two producers of IMPLEMENTS/EXTENDS apart. The syntactic edge points at a bare type NAME and
+    /// is Inferred; the resolved edge points at a node ID and is Extracted. They never collide in storage,
+    /// so the resolved one is not downgraded — both exist, and the tier says which is which.
+    /// </summary>
+    [Fact]
+    public async Task HeritageEdges_TierNowIdentifiesTheProducer()
+    {
+        using var storage = await LinkAsync(
+            ("/r/IThing.cs", "namespace A { public interface IThing { } }"),
+            ("/r/Thing.cs", "using A; namespace A { public class Thing : IThing { } }"));
+
+        var heritage = (await storage.GetAllEdgesAsync())
+            .Where(e => e.Relationship is "IMPLEMENTS" or "EXTENDS")
+            .ToList();
+        Assert.NotEmpty(heritage);
+
+        foreach (var edge in heritage)
+        {
+            // A node id carries the file path and the '::' separator this repo mints ids with; a bare
+            // syntactic name never does. That is the observable difference between the two producers.
+            var targetIsResolvedNodeId = edge.TargetId.Contains("::", StringComparison.Ordinal);
+            Assert.Equal(
+                targetIsResolvedNodeId ? Provenance.Extracted : Provenance.Inferred,
+                edge.Provenance);
+        }
+
+        // Both producers really did run — otherwise the loop above proves nothing.
+        Assert.Contains(heritage, e => e.Provenance == Provenance.Extracted);
+        Assert.Contains(heritage, e => e.Provenance == Provenance.Inferred);
+    }
+
+    /// <summary>
     /// The table has to stay internally consistent: a repair target that is not itself a legitimate tier
     /// would move edges from one violation straight into another, and the migration would never converge.
     /// </summary>
