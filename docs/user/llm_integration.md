@@ -55,7 +55,7 @@ After registration, **restart** the client so the server loads.
 
 **Which project does it see?** A per-workspace client (Cursor/Claude Code/VS Code) resolves the project
 from its working directory. A global client (Claude Desktop) has no per-chat directory, so the session
-follows the registry's active project — switch it from a chat with the **`set_project`** tool ("work with FPM").
+follows the registry's active project — switch it from a chat with the **`set_project`** tool ("work with my-app").
 
 ### SaaS Integration via MCP Proxy
 If you host Shonkor as a centralized SaaS application (e.g. in Kubernetes), your local AI assistant can connect to the remote graph using the `mcp-proxy` command. This bridges standard input/output from the AI to HTTP POST requests against the Shonkor Web API.

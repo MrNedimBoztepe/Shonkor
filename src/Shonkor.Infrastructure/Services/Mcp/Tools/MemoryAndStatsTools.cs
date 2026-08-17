@@ -22,7 +22,7 @@ public sealed class GetStatsTool : IMcpTool
             type = "object",
             properties = new
             {
-                projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
+                projectName = new { type = "string", description = "Optional project context name (e.g. 'my-app' or 'Shonkor'). If omitted, uses the active project." }
             }
         }
     };
@@ -417,7 +417,7 @@ public sealed class RecordTool : IMcpTool
                 content = new { type = "string", description = "Detail: rationale & alternatives (decision), description/steps (task), or context (question). Required for 'decision'." },
                 status = new { type = "string", description = "For 'milestone' (required, e.g. 'Completed'/'In Progress'/'Blocked') or 'task' (e.g. 'Todo'/'In Progress'/'Done')." },
                 connectedNodeIds = new { type = "array", items = new { type = "string" }, description = "List of node IDs this memory connects to." },
-                projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
+                projectName = new { type = "string", description = "Optional project context name (e.g. 'my-app' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "type", "name" }
         }

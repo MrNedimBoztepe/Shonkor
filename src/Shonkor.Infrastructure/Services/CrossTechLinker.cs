@@ -85,7 +85,7 @@ public static class CrossTechLinker
             // B. Controller mapping
             if (scItem.Properties.TryGetValue("controller", out var controllerStr) && !string.IsNullOrWhiteSpace(controllerStr))
             {
-                // Extract controller class name (e.g., "MuM.Feature.Blog.Controllers.BlogController, MuM.Feature.Blog" -> "BlogController")
+                // Extract controller class name (e.g., "Acme.Feature.Blog.Controllers.BlogController, Acme.Feature.Blog" -> "BlogController")
                 var controllerClass = controllerStr.Split(',')[0].Split('.').Last();
                 var match = csharpClasses.FirstOrDefault(c => string.Equals(c.Name, controllerClass, StringComparison.OrdinalIgnoreCase));
                 if (match != null)
@@ -304,7 +304,7 @@ public static class CrossTechLinker
             }
         }
 
-        // 2. Check physical file paths (e.g. C:\Projects\sitecoreMuM\src\Feature\Blog\code\Controllers\BlogController.cs)
+        // 2. Check physical file paths (e.g. C:\Projects\my-solution\src\Feature\Blog\code\Controllers\BlogController.cs)
         if (!string.IsNullOrWhiteSpace(filePath))
         {
             var normalizedPath = filePath.Replace('\\', '/');
