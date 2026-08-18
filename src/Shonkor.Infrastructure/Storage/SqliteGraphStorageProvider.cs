@@ -1058,6 +1058,33 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         return result is null ? 0 : Convert.ToInt32(result);
     }
 
+    /// <summary>Meta key holding the toolchain fingerprint (#408). The value is opaque to storage.</summary>
+    private const string ToolchainFingerprintKey = "toolchainFingerprint";
+
+    /// <inheritdoc />
+    public async Task<string?> GetToolchainFingerprintAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Value FROM Meta WHERE Key = @key;";
+        command.Parameters.AddWithValue("@key", ToolchainFingerprintKey);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+    }
+
+    /// <inheritdoc />
+    public async Task SetToolchainFingerprintAsync(string fingerprint, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
+
+        using var _writeScope = await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "INSERT OR REPLACE INTO Meta (Key, Value) VALUES (@key, @value);";
+        command.Parameters.AddWithValue("@key", ToolchainFingerprintKey);
+        command.Parameters.AddWithValue("@value", fingerprint);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     /// <inheritdoc />
     public async Task<IReadOnlyList<GraphNode>> GetAllNodesAsync(CancellationToken cancellationToken = default)
     {

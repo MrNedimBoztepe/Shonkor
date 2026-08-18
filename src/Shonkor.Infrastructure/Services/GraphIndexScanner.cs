@@ -176,10 +176,25 @@ public sealed class GraphIndexScanner
             Warn($"Node-id scheme is outdated; forcing a full reparse to migrate to scheme v{Shonkor.Core.Services.CsharpNodeId.SchemeVersion}.");
         }
 
-        // 2b. The same escape hatch, requested rather than detected (#430). It joins schemeStale in ONE
-        //     condition instead of adding a second skip path — two ways to express "reparse anyway" is how
-        //     the two of them drift apart later.
-        var reparseEverything = schemeStale || forceReparse;
+        // 2b. The content hash answers "did this FILE change" and nothing else, so a corrected parser or a
+        //     rebuilt plugin leaves an existing graph untouched — measured: a full rescan of a real solution
+        //     with the #402-corrected parser moved 0 of 1 679 wrongly-tiered edges, because no source file
+        //     had changed. The toolchain fingerprint closes that: when the set of assemblies that interpret
+        //     the files differs from the one that built the graph, every file is stale by definition (#408).
+        //
+        //     A null stored value means "built before this existed", i.e. by an unknown toolchain — treated
+        //     as changed, which costs one forced scan per legacy graph and is a no-op on an empty one.
+        var toolchainFingerprint = ComputeToolchainFingerprint();
+        var storedFingerprint = await _storage.GetToolchainFingerprintAsync(cancellationToken).ConfigureAwait(false);
+        var toolchainChanged = !string.Equals(storedFingerprint, toolchainFingerprint, StringComparison.Ordinal);
+        if (toolchainChanged && storedFingerprint is not null)
+        {
+            Warn("The parser/plugin set differs from the one this graph was built with; reparsing every file.");
+        }
+
+        // 2c. All three reasons meet in ONE condition rather than three skip paths — two ways of expressing
+        //     "reparse anyway" is how they drift apart later. (#430 is the manual one.)
+        var reparseEverything = schemeStale || forceReparse || toolchainChanged;
         if (forceReparse)
         {
             Warn("Forced reparse requested; the content-hash check is bypassed for every candidate file.");
@@ -380,6 +395,7 @@ public sealed class GraphIndexScanner
         // 6. Stamp the graph with the current node-id scheme — the whole tree was just (re)built under it,
         //    so any prior staleness is now resolved and get_stats stops recommending a re-index.
         await _storage.SetNodeIdSchemeVersionAsync(Shonkor.Core.Services.CsharpNodeId.SchemeVersion, cancellationToken).ConfigureAwait(false);
+        await _storage.SetToolchainFingerprintAsync(toolchainFingerprint, cancellationToken).ConfigureAwait(false);
 
         stopwatch.Stop();
         return new IndexResult(filesScanned, nodesCreated, edgesCreated, stopwatch.Elapsed);
@@ -849,6 +865,43 @@ public sealed class GraphIndexScanner
         !StructuralEdges.Contains(edge.Relationship) && (int)parserDefault > (int)edge.Provenance
             ? edge with { Provenance = parserDefault }
             : edge;
+
+    /// <summary>
+    /// An opaque fingerprint of the toolchain that will interpret this scan's files: every parser and every
+    /// post-processor, identified by its declaring assembly's <b>MVID</b> plus its own type name (#408).
+    ///
+    /// <para>
+    /// MVID rather than a version string, and the reason is not that deterministic builds make it stable —
+    /// it is that <b>nobody has to remember to bump it</b>. A version is a claim about an artifact; the MVID
+    /// is a property of it. The difference is measured: when four stale first-party plugins were rebuilt,
+    /// all four binaries changed and only one had moved its manifest version, so a version comparison would
+    /// have caught one of four (#414).
+    /// </para>
+    ///
+    /// <para>
+    /// The type name is folded in as well, so adding or removing a parser changes the fingerprint even when
+    /// no assembly did — that is a change to the toolchain just as much as a rebuild is.
+    /// </para>
+    ///
+    /// <para>
+    /// Known limit, stated rather than discovered later: this sees ASSEMBLIES. Behaviour that changes through
+    /// configuration rather than code — the <c>SHONKOR_SEMANTIC_CSHARP</c> switch, a plugin's own settings
+    /// file — is invisible to it. That dimension can be folded into this computation later without touching
+    /// the storage contract, which is why the stored value is an opaque string and not an assembly id. Until
+    /// then, <c>--force</c> (#430) is the escape hatch, and comparing a normal scan against a forced one is
+    /// how such a gap is detected rather than assumed.
+    /// </para>
+    /// </summary>
+    private string ComputeToolchainFingerprint()
+    {
+        var parts = _parsers.Select(p => p.GetType())
+            .Concat(_postProcessors.Select(p => p.GetType()))
+            .Select(t => $"{t.FullName}@{t.Assembly.ManifestModule.ModuleVersionId:N}")
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(s => s, StringComparer.Ordinal);
+
+        return ComputeSha256Hash(string.Join('\n', parts));
+    }
 
     private static string ComputeSha256Hash(string input)
     {
