@@ -127,8 +127,16 @@ public static class StandardPluginSeeder
     /// case-insensitive fallback) so the two agree on which package this is. Returns <c>null</c> when the
     /// archive has no readable manifest or the manifest's entry assembly is missing from it — in which case
     /// the caller must not touch a working install on the strength of a package it cannot read.
+    ///
+    /// <para>
+    /// Public because the same comparison serves a second purpose (#416): pointed at a freshly BUILT package
+    /// instead of the embedded one, it answers "is the plugin this workspace has installed the plugin these
+    /// sources produce?". That is a precondition of any scan whose output someone will rely on — the
+    /// verification scan for the provenance freeze most of all, since this workspace held four stale plugin
+    /// binaries as recently as 2026-08-17 and nothing reported it.
+    /// </para>
     /// </summary>
-    internal static string? TryHashEntryAssemblyInZip(string zipPath)
+    public static string? TryHashEntryAssemblyInZip(string zipPath)
     {
         try
         {
@@ -182,7 +190,11 @@ public static class StandardPluginSeeder
         return tempPath;
     }
 
-    /// <summary>Test hook: opens the embedded standard-plugin ZIP stream, or null if absent.</summary>
-    internal static Stream? OpenEmbeddedZip(string resourceName = TypeScriptPluginResourceName)
+    /// <summary>
+    /// Opens the embedded standard-plugin ZIP stream, or null if absent. Used by the packaging tests and by
+    /// `plugin verify` (#416), which needs the artifact this host ships in order to compare it against what
+    /// the workspace actually installed.
+    /// </summary>
+    public static Stream? OpenEmbeddedZip(string resourceName = TypeScriptPluginResourceName)
         => typeof(StandardPluginSeeder).Assembly.GetManifestResourceStream(resourceName);
 }
