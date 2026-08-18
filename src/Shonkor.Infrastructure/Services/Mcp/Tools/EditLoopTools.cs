@@ -130,7 +130,7 @@ public sealed class CheckEditTool : IMcpTool
             return SendToolResponse(id, $"File not found on disk: {ToHandle(resolved, basePath)}.");
         }
 
-        var content = await System.IO.File.ReadAllTextAsync(resolved).ConfigureAwait(false);
+        var content = await Shonkor.Core.Services.SourceText.ReadAsync(resolved).ConfigureAwait(false);
 
         // Semantic checks only for a semantic project (and when the cache is wired); otherwise syntax-only.
         Microsoft.CodeAnalysis.CSharp.CSharpCompilation? compilation = null;
@@ -557,7 +557,7 @@ public sealed class ReviewTool : IMcpTool
             var rel = Shorten(full, basePath);
             if (ctx.FileParsers != null && full.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(full))
             {
-                var content = await System.IO.File.ReadAllTextAsync(full).ConfigureAwait(false);
+                var content = await Shonkor.Core.Services.SourceText.ReadAsync(full).ConfigureAwait(false);
                 Microsoft.CodeAnalysis.CSharp.CSharpCompilation? comp = semanticProject
                     ? await ctx.CompilationCache!.ApplyEditsAsync(basePath, new[] { full }).ConfigureAwait(false)
                     : null;

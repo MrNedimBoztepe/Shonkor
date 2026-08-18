@@ -71,7 +71,14 @@ public static class SemanticCsharpLinker
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                files.Add((Path.GetFullPath(path), await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false)));
+                // SourceText, not File.ReadAllTextAsync (#436). The scanner feeds the parser LF-normalized
+                // text; this compilation used to get the file raw. On CRLF checkouts every Roslyn span here
+                // sat one character per preceding line ahead of the parser's, so the `@spanStart` half of an
+                // overloaded method's id disagreed and the edge landed on a node that does not exist.
+                // Measured on a Sitecore solution: 349 of 353 dangling CALLS targets had an id whose prefix
+                // before `@` DID exist, differing only in the offset — and the difference was exactly the
+                // number of carriage returns before the declaration.
+                files.Add((Path.GetFullPath(path), await SourceText.ReadAsync(path, cancellationToken).ConfigureAwait(false)));
             }
             catch
             {
