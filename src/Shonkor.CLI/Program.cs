@@ -810,6 +810,9 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
                 }
                 return 0;
             }
+            case "verify":
+                return VerifyInstalledPlugins(registry, args.Length > 2 ? args[2] : null);
+
             case "install":
                 if (args.Length < 3) { Console.Error.WriteLine("Usage: shonkor plugin install <path-to.zip>"); return 1; }
                 return Report(registry.InstallFromZip(args[2]));
@@ -824,8 +827,150 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
                 if (args.Length < 3) { Console.Error.WriteLine("Usage: shonkor plugin uninstall <id>"); return 1; }
                 return Report(registry.Uninstall(args[2]));
             default:
-                Console.Error.WriteLine($"Unknown plugin subcommand: '{sub}'. Use: list | install <zip> | activate <id> | deactivate <id> | uninstall <id>.");
+                Console.Error.WriteLine($"Unknown plugin subcommand: '{sub}'. Use: list | verify [dir] | install <zip> | activate <id> | deactivate <id> | uninstall <id>.");
                 return 1;
+        }
+    }
+
+    /// <summary>
+    /// #416: is the plugin this workspace has INSTALLED the plugin these sources produce? A scan's output
+    /// depends on which build of each plugin is loaded, and until now nothing checked that. This workspace
+    /// held four stale first-party binaries as recently as 2026-08-17 — one from 2 July running against a
+    /// contract from 9 July — and a cold scan of a real solution produced 3 767 wrongly-tiered edges as a
+    /// result. Nothing in that scan's output distinguished it from a correct one.
+    ///
+    /// <para>
+    /// Compares each installed plugin's recorded <c>EntryAssemblySha256</c> against the entry assembly of a
+    /// freshly built package. Not against the manifest version: when those four plugins were rebuilt, all
+    /// four binaries changed and only one had moved its version, so a version comparison catches one in four
+    /// (#414). The version is a claim about an artifact; the hash is a property of it.
+    /// </para>
+    ///
+    /// <para>
+    /// Exits non-zero on any mismatch, so it can gate a scan whose result someone will rely on — the
+    /// provenance freeze-release verification most of all.
+    /// </para>
+    /// </summary>
+    private static int VerifyInstalledPlugins(PluginRegistry registry, string? artifactDir)
+    {
+        var installed = registry.List();
+        if (installed.Count == 0)
+        {
+            Console.WriteLine("No plugins installed — nothing to verify.");
+            return 0;
+        }
+
+        // Candidate packages: every *.zip under the given directory, else the repo's conventional build
+        // output. The embedded standard-plugin ZIP is always a candidate — it needs no build path at all.
+        var candidates = new List<string>();
+        var searchRoot = artifactDir ?? Directory.GetCurrentDirectory();
+        if (Directory.Exists(searchRoot))
+        {
+            candidates.AddRange(Directory.EnumerateFiles(searchRoot, "*.zip", SearchOption.AllDirectories)
+                .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)));
+        }
+
+        // Hash every candidate once, keyed by the plugin id its own manifest declares.
+        var built = new Dictionary<string, (string Hash, string Path)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var zip in candidates)
+        {
+            var id = TryReadPluginId(zip);
+            if (id == null) continue;
+            var hash = StandardPluginSeeder.TryHashEntryAssemblyInZip(zip);
+            if (hash != null) built[id] = (hash, zip);
+        }
+
+        var embeddedHash = MaterializeAndHashEmbeddedStandardPlugin();
+        if (embeddedHash != null && !built.ContainsKey(StandardPluginSeeder.TypeScriptPluginId))
+        {
+            built[StandardPluginSeeder.TypeScriptPluginId] = (embeddedHash, "(embedded in the host)");
+        }
+
+        var mismatched = 0;
+        var unverifiable = 0;
+        Console.WriteLine("Installed plugin vs freshly built artifact:");
+        foreach (var plugin in installed)
+        {
+            if (!built.TryGetValue(plugin.Manifest.Id, out var artifact))
+            {
+                unverifiable++;
+                Console.WriteLine($"  ?  {plugin.Manifest.Id}\tno built package found — NOT verified");
+                continue;
+            }
+
+            if (string.Equals(artifact.Hash, plugin.EntryAssemblySha256, StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  ok {plugin.Manifest.Id}\tmatches {Path.GetFileName(artifact.Path)}");
+            }
+            else
+            {
+                mismatched++;
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"  !! {plugin.Manifest.Id}\tSTALE — installed {Short(plugin.EntryAssemblySha256)}, built {Short(artifact.Hash)} ({Path.GetFileName(artifact.Path)})");
+                Console.ResetColor();
+            }
+        }
+
+        if (mismatched > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.Error.WriteLine($"\n{mismatched} plugin(s) differ from the built artifact. Reinstall them before trusting a scan.");
+            Console.ResetColor();
+            return 1;
+        }
+
+        // "Not verified" is not "verified ok" — say so, and fail, rather than letting silence read as success.
+        if (unverifiable > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.Error.WriteLine($"\n{unverifiable} plugin(s) could not be verified — no built package was found for them.");
+            Console.ResetColor();
+            return 1;
+        }
+
+        Console.WriteLine($"\nAll {installed.Count} installed plugin(s) match their built artifact.");
+        return 0;
+
+        static string Short(string hash) => hash.Length >= 8 ? hash[..8] + "…" : hash;
+    }
+
+    /// <summary>The plugin id a package declares, or null when the ZIP has no readable root manifest.</summary>
+    private static string? TryReadPluginId(string zipPath)
+    {
+        try
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(zipPath);
+            var entry = zip.GetEntry("plugin.json")
+                ?? zip.Entries.FirstOrDefault(e => string.Equals(e.Name, "plugin.json", StringComparison.OrdinalIgnoreCase));
+            if (entry == null) return null;
+            using var stream = entry.Open();
+            return JsonDocument.Parse(stream).RootElement.TryGetProperty("id", out var id) ? id.GetString() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The embedded standard-plugin package, hashed via a temp copy. Null when not embedded.</summary>
+    private static string? MaterializeAndHashEmbeddedStandardPlugin()
+    {
+        using var stream = StandardPluginSeeder.OpenEmbeddedZip();
+        if (stream == null) return null;
+
+        var temp = Path.Combine(Path.GetTempPath(), $"shonkor-verify-{Guid.NewGuid():N}.zip");
+        try
+        {
+            using (var file = File.Create(temp)) stream.CopyTo(file);
+            return StandardPluginSeeder.TryHashEntryAssemblyInZip(temp);
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            try { File.Delete(temp); } catch { /* best-effort temp cleanup */ }
         }
     }
 
