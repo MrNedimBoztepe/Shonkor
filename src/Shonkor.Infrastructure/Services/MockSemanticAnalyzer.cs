@@ -41,7 +41,8 @@ public class MockSemanticAnalyzer : ISemanticAnalyzer
         return new SemanticAnalysisResult
         {
             Summary = fakeSummary,
-            ExtractedConcepts = fakeConcepts
+            ExtractedConcepts = fakeConcepts,
+            Model = "mock"
         };
     }
 
