@@ -270,8 +270,10 @@ public sealed class GetSubgraphTool : IMcpTool
                 var summary = !string.IsNullOrEmpty(n.Summary) ? $"\t— {n.Summary}" : "";
                 return $"{handle}\t{n.Type}\t{n.Name}{summary}";
             });
+            var byId = nodes.ToDictionary(n => n.Id, StringComparer.Ordinal);
             var edgeLines = edges.Select(e =>
-                $"{ToHandle(e.SourceId, basePath)} --{e.Relationship}--> {ToHandle(e.TargetId, basePath)} {ProvenanceTag(e.Provenance)}");
+                $"{ToHandle(e.SourceId, basePath)} --{e.Relationship}--> {ToHandle(e.TargetId, basePath)} " +
+                ProvenanceTag(e, byId.GetValueOrDefault(e.SourceId)));
 
             var sb = new System.Text.StringBuilder();
             sb.Append("NODES (").Append(nodes.Count).Append("):\n");

@@ -159,7 +159,9 @@ public sealed class ReferencesTool : IMcpTool
                     if (emitted >= maxNodes) { sb.Append(new string(' ', level * 2)).Append("… (truncated)\n"); break; }
                     var otherId = e.TargetId;
                     var other = neighbours.GetValueOrDefault(otherId);
-                    sb.Append(new string(' ', level * 2)).Append($"--{e.Relationship}--> {other?.Name ?? otherId} ({other?.Type ?? "?"}) {ProvenanceTag(e.Provenance)}");
+                    // Every step here is outbound, so the anchor is the node we just expanded.
+                    var anchor = neighbours.GetValueOrDefault(nodeId);
+                    sb.Append(new string(' ', level * 2)).Append($"--{e.Relationship}--> {other?.Name ?? otherId} ({other?.Type ?? "?"}) {ProvenanceTag(e, anchor)}");
                     emitted++;
                     if (!visited.Add(otherId)) { sb.Append("  ↺\n"); continue; }
                     sb.Append('\n');

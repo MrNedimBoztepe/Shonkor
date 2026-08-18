@@ -453,6 +453,33 @@ public static class McpToolHelpers
     };
 
     /// <summary>
+    /// The provenance tag plus, for an agent-authored edge whose anchor has changed since the assertion
+    /// was written, a <c>[stale-anchor]</c> marker (#434).
+    ///
+    /// <para>
+    /// It sits next to the provenance tag because it answers the neighbouring question: provenance says
+    /// how the claim was established, this says whether the thing it was established against still looks
+    /// the same. Deliberately a report and nothing else — no re-derivation is triggered, because
+    /// re-deriving is a second sample rather than a correction (68 % of concept targets came back
+    /// different on byte-identical input).
+    /// </para>
+    ///
+    /// <para>
+    /// An edge with no stamp gets no marker at all. "Cannot tell" must not render as "current", which is
+    /// the mistake this whole area keeps repeating.
+    /// </para>
+    /// </summary>
+    public static string ProvenanceTag(GraphEdge edge, GraphNode? anchor)
+    {
+        var tag = ProvenanceTag(edge.Provenance);
+        if (anchor is null) return tag;   // caller could not resolve the anchor — not the same as "changed"
+        if (!AgentAuthoredRelations.SurvivesReindex(edge.Relationship)) return tag;
+        return SourceStateStamp.IsDiverged(edge.Properties, anchor.ContentHash) == true
+            ? tag + "[stale-anchor]"
+            : tag;
+    }
+
+    /// <summary>
     /// Reads the optional <c>provenance</c> filter argument and returns the maximum uncertainty tier to
     /// admit (edges with a tier at or below it pass): <c>extracted</c> → only proven edges; <c>inferred</c>
     /// → proven + heuristic, excluding ambiguous; <c>all</c>/<c>ambiguous</c>/missing → no filter (null).

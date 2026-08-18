@@ -264,7 +264,11 @@ public sealed class McpToolContext
                 var other = neighbours.GetValueOrDefault(otherId);
                 var name = other?.Name ?? otherId;
                 var summary = other != null && !string.IsNullOrEmpty(other.Summary) ? $"  — {other.Summary}" : "";
-                sb.Append($"{g.Key}\t{name}\t{ToHandle(otherId, basePath)} {ProvenanceTag(e.Provenance)}{summary}\n");
+                // The anchor of an agent-authored edge is its SOURCE, which is `def` on the outbound side
+                // and the neighbour on the inbound one — the direction has to be resolved here, not
+                // assumed, or the divergence check compares the assertion against the wrong node.
+                var anchor = incoming ? other : def;
+                sb.Append($"{g.Key}\t{name}\t{ToHandle(otherId, basePath)} {ProvenanceTag(e, anchor)}{summary}\n");
             }
         }
         return sb.ToString().TrimEnd() + stale;

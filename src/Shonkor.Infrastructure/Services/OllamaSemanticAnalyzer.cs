@@ -144,6 +144,10 @@ public class OllamaSemanticAnalyzer : ISemanticAnalyzer
 
                 return parsedResult with
                 {
+                    // Overwritten, not defaulted: the model name arrives inside the model's own JSON only
+                    // if it chose to put one there, and a producer's identity is not the producer's to
+                    // claim (#411).
+                    Model = _ollamaModel,
                     PromptTokens = promptTokens,
                     CompletionTokens = completionTokens,
                     LatencyMs = durationNs / 1_000_000
