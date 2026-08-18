@@ -133,10 +133,19 @@ public sealed class GraphIndexScanner
     /// <param name="excludePatterns">Glob patterns for files or directories to exclude.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <returns>An <see cref="IndexResult"/> summarizing the scan.</returns>
+    /// <param name="forceReparse">
+    /// Ignore every staleness signal and reparse every candidate file (#430). The content hash answers "did
+    /// this file change", never "did the code that interprets it change", so a parser fix, a rebuilt plugin
+    /// or a corrected post-processor leaves an existing graph untouched — measured: a full rescan of a real
+    /// solution with a corrected parser moved 0 of 1 679 wrongly-tiered edges. This is the manual escape
+    /// hatch for that class, and the oracle for the automatic detection in #408: a normal scan and a forced
+    /// one must agree, and any difference names a change dimension the key does not cover.
+    /// </param>
     public async Task<IndexResult> ScanDirectoryAsync(
         string directoryPath,
         IReadOnlyList<string> excludePatterns,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool forceReparse = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directoryPath);
         ArgumentNullException.ThrowIfNull(excludePatterns);
@@ -165,6 +174,15 @@ public sealed class GraphIndexScanner
         if (schemeStale)
         {
             Warn($"Node-id scheme is outdated; forcing a full reparse to migrate to scheme v{Shonkor.Core.Services.CsharpNodeId.SchemeVersion}.");
+        }
+
+        // 2b. The same escape hatch, requested rather than detected (#430). It joins schemeStale in ONE
+        //     condition instead of adding a second skip path — two ways to express "reparse anyway" is how
+        //     the two of them drift apart later.
+        var reparseEverything = schemeStale || forceReparse;
+        if (forceReparse)
+        {
+            Warn("Forced reparse requested; the content-hash check is bypassed for every candidate file.");
         }
 
         // 3. Process candidate files incrementally
@@ -201,9 +219,11 @@ public sealed class GraphIndexScanner
                 var content = await SourceText.ReadAsync(filePath, ct).ConfigureAwait(false);
                 var contentHash = ComputeSha256Hash(content);
 
-                // Incremental Hash Check: skip if hash matches DB (unless the id scheme is stale, in which
-                // case every file must be reparsed to migrate its ids to the current scheme).
-                if (!schemeStale && existingHashes.TryGetValue(filePath, out var existingHash) && existingHash == contentHash)
+                // Incremental Hash Check: skip if the hash matches the DB — unless something has declared
+                // that the file must be reparsed regardless of its content (a stale node-id scheme, or an
+                // explicit --force). The hash answers "did this file change" and nothing else; when the code
+                // that INTERPRETS the file changed, only reparseEverything gets the correction into the data.
+                if (!reparseEverything && existingHashes.TryGetValue(filePath, out var existingHash) && existingHash == contentHash)
                 {
                     return; // Unchanged!
                 }

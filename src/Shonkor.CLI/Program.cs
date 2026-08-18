@@ -120,6 +120,9 @@ public static class Program
         Console.WriteLine("    [directory]              The directory to index (defaults to current directory '.')");
         Console.WriteLine("    -c, --config <file>      Path to config json file (defaults to 'shonkor.json')");
         Console.WriteLine("    --embed                  Generate code embeddings (needs a reachable Ollama) so semantic/hybrid search works");
+        Console.WriteLine("    --force, --reparse-all   Reparse every file, ignoring content hashes. Use after a parser or plugin");
+        Console.WriteLine("                             changed: the hash only knows whether the FILE changed, so an otherwise");
+        Console.WriteLine("                             untouched tree keeps the previous parser's output indefinitely");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -208,6 +211,7 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
         var directory = ".";
         var configPath = DefaultConfigFileName;
         var embed = false;
+        var force = false;
 
         // Skip command arg index [0]
         var i = 1;
@@ -227,6 +231,13 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
             else if (args[i] == "--embed")
             {
                 embed = true;
+            }
+            else if (args[i] == "--force" || args[i] == "--reparse-all")
+            {
+                // #430: the content hash only answers "did this FILE change". When the parser, plugin or
+                // post-processor that interprets it changed, every file looks unchanged and the correction
+                // never reaches the graph. This is the escape hatch for that whole class.
+                force = true;
             }
         }
 
@@ -268,11 +279,16 @@ This project is indexed by **Shonkor** — a precise, self-contained code graph 
             var semanticCsharp = !string.Equals(Environment.GetEnvironmentVariable("SHONKOR_SEMANTIC_CSHARP"), "false", StringComparison.OrdinalIgnoreCase);
             var scanner = new GraphIndexScanner(storage, parsers, semanticCsharp: semanticCsharp, postProcessors: pluginLoad.PostProcessors);
 
-            Console.WriteLine("Scanning and indexing files... (this may take a few moments)");
-            var result = await scanner.ScanDirectoryAsync(absoluteDir, config.ExcludePatterns);
+            Console.WriteLine(force
+                ? "Scanning and indexing files... (--force: every file is reparsed, content hashes ignored)"
+                : "Scanning and indexing files... (this may take a few moments)");
+            var result = await scanner.ScanDirectoryAsync(absoluteDir, config.ExcludePatterns, forceReparse: force);
 
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("\n=== Indexing Completed Successfully ===");
+            // Say which mode produced these numbers: a forced run and a hash-gated run report the same
+            // shape of success while doing very different amounts of work.
+            Console.WriteLine($"- Mode:          {(force ? "FORCED reparse (content hashes ignored)" : "incremental (unchanged files skipped)")}");
             Console.WriteLine($"- Files Scanned: {result.FilesScanned}");
             Console.WriteLine($"- Nodes Created: {result.NodesCreated}");
             Console.WriteLine($"- Edges Created: {result.EdgesCreated}");
