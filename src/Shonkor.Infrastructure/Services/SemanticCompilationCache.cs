@@ -89,7 +89,10 @@ public sealed class SemanticCompilationCache
                 }
 
                 string code;
-                try { code = await File.ReadAllTextAsync(full, cancellationToken).ConfigureAwait(false); }
+                // Same normalization as the scan (#436): this cache rebuilds trees that produce the SAME
+                // node ids, so reading raw here would hand check_edit / edit_plan ids the graph does not
+                // contain — on CRLF files only, which is why no Linux CI leg can see it.
+                try { code = await SourceText.ReadAsync(full, cancellationToken).ConfigureAwait(false); }
                 catch { continue; } // unreadable right now — leave the old tree in place
 
                 var newTree = CSharpSyntaxTree.ParseText(code, path: full);
