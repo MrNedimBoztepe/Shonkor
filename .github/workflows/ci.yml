@@ -106,6 +106,42 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Smoke — the image carries the pinned native SQLite, not the vulnerable transitive one
+        shell: bash
+        run: |
+          # #389: every image published between 2026-06-22 and 2026-07-16 shipped
+          # SQLitePCLRaw.lib.e_sqlite3 2.1.11 (CVE-2025-6965) while local and CI builds got the pinned
+          # 3.50.3 — because Dockerfile's restore layer did not copy Directory.Build.props, which carries
+          # BOTH the pin and the TreatWarningsAsErrors that escalates NU1903. #388 put the file back.
+          #
+          # This check deliberately does NOT look at the build log. A restore layer can be a cache hit, and
+          # then the log shows neither the warning nor the resolved version — an absent step reads exactly
+          # like an absent problem. It asks the finished artifact what it contains instead.
+          #
+          # The expected version is read from Directory.Build.props rather than written here, so a bump has
+          # one place to happen and this check cannot drift into asserting yesterday's pin.
+          pin=$(grep -oE 'SQLitePCLRaw\.lib\.e_sqlite3" Version="[0-9.]+"' Directory.Build.props \
+                | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          test -n "$pin" || { echo "::error::Could not read the SQLitePCLRaw.lib.e_sqlite3 pin from Directory.Build.props."; exit 1; }
+          echo "Pinned in Directory.Build.props: $pin"
+
+          found=$(docker run --rm --entrypoint sh shonkor:ci -c \
+            'cat /app/Shonkor.Web.deps.json /app/cli/shonkor.deps.json 2>/dev/null' \
+            | grep -oE 'SQLitePCLRaw\.lib\.e_sqlite3/[0-9]+\.[0-9]+\.[0-9]+' \
+            | cut -d/ -f2 | sort -u)
+
+          test -n "$found" || {
+            echo "::error::No SQLitePCLRaw.lib.e_sqlite3 entry in the image's deps.json files. Either the native package stopped being a dependency, or the paths this check reads have moved — both need a human, and neither may pass silently."
+            exit 1
+          }
+
+          echo "Resolved in the image: $(echo "$found" | tr '\n' ' ')"
+          if [ "$found" != "$pin" ]; then
+            echo "::error::The image resolved SQLitePCLRaw.lib.e_sqlite3 $(echo "$found" | tr '\n' ' ') but Directory.Build.props pins $pin. The restore inside the image is not seeing the pin (#389)."
+            exit 1
+          fi
+          echo "OK: the image carries the pinned native SQLite ($pin)."
+
       - name: Smoke — the image really carries the TypeScript plugin, sidecar deps included
         shell: bash
         run: |
