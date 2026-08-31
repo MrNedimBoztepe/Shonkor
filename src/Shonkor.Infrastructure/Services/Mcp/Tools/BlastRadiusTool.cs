@@ -3,6 +3,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Shonkor.Core.Models;
+using Shonkor.Core.Services;
 using static Shonkor.Infrastructure.Services.Mcp.McpToolHelpers;
 
 namespace Shonkor.Infrastructure.Services.Mcp.Tools;
@@ -65,7 +66,10 @@ public sealed class BlastRadiusTool : IMcpTool
                 message = $"No node, symbol or indexed file matched '{target}'.",
                 affected = Array.Empty<object>(),
                 edgesTraversed = Array.Empty<object>(),
-                truncatedAtDepth = false
+                truncatedAtDepth = false,
+                // Present on the not-found result too (#445): every blast_radius answer carries the field,
+                // so a consumer never has to decide whether its absence means "no model" or "old server".
+                modelAuthoredEdges = new { count = 0, ofTotal = 0, relationships = AgentAuthoredRelations.All.Order(StringComparer.Ordinal).ToArray() }
             }));
         }
 
@@ -166,7 +170,13 @@ public sealed class BlastRadiusTool : IMcpTool
                 .OrderBy(x => x.source, StringComparer.Ordinal)
                 .ToArray(),
             truncatedAtDepth = truncated,
-            structuralNote
+            structuralNote,
+            // AP7 stage 1 (#445): a caller must be able to tell an impact analysis from a topic cloud.
+            // Model-authored edges are still traversed here — this states how much of the result rests on
+            // them. Emitted at zero as well: "none involved" and "never asked" may not look alike.
+            modelAuthoredEdges = ModelInvolvement(traversed.Keys.Select(k => k.Rel)) is var mi
+                ? new { count = mi.ModelAuthored, ofTotal = mi.Total, relationships = AgentAuthoredRelations.All.Order(StringComparer.Ordinal).ToArray() }
+                : null
         };
 
         return SendToolResponse(id, JsonSerializer.Serialize(result));

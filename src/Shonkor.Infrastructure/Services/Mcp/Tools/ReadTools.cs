@@ -280,8 +280,12 @@ public sealed class GetSubgraphTool : IMcpTool
             sb.Append(string.Join("\n", nodeLines));
             sb.Append("\n\nEDGES (").Append(edges.Count).Append("):\n");
             sb.Append(string.Join("\n", edgeLines));
-
-            return SendToolResponse(id, CapOutput(sb.ToString(), maxChars, "raise maxChars or reduce hops"));
+            // AP7 stage 1 (#445). Appended AFTER the cap, not before: the note sits at the end of the
+            // string, so capping first would be free to cut it off — and a disclosure a length limit can
+            // remove is not a disclosure. It describes the edges the subgraph HAS, which is what the
+            // caller is holding whether or not the rendering was truncated.
+            var body = CapOutput(sb.ToString(), maxChars, "raise maxChars or reduce hops");
+            return SendToolResponse(id, body + ModelInvolvementNote(edges.Select(e => e.Relationship)));
         }
 
         // The verbose branch emits JSON, so the cap must be STRUCTURAL (#117). TICKET-210 capped it by

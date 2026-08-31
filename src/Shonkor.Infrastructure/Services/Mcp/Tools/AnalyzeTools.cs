@@ -133,12 +133,16 @@ public sealed class ReferencesTool : IMcpTool
                     sb.Append($"  {a.Rel}\t{name}\t{handle} {ProvenanceTag(a.Prov)}{testTag}\n");
                 }
             }
-            return SendToolResponse(id, sb.ToString().TrimEnd() + await ctx.StaleSuffixAsync(storage, refDef).ConfigureAwait(false));
+            // AP7 stage 1 (#445): an impact tree is only as factual as the edges it walked.
+            return SendToolResponse(id, sb.ToString().TrimEnd()
+                + await ctx.StaleSuffixAsync(storage, refDef).ConfigureAwait(false)
+                + ModelInvolvementNote(affected.Values.Select(a => a.Rel)));
         }
 
         // depth > 1, uses → transitive dependency tree (outgoing reference edges).
         {
             var depRelations = new HashSet<string> { "REFERENCES_TYPE", "IMPLEMENTS", "EXTENDS" };
+            var walked = new List<string>();   // relations actually traversed, for the AP7 disclosure (#445)
             var sb = new System.Text.StringBuilder();
             sb.Append($"Dependency tree (uses, depth {depth}) for '{refDef.Name}':\n");
             sb.Append($"{refDef.Name} ({refDef.Type})\n");
@@ -163,6 +167,7 @@ public sealed class ReferencesTool : IMcpTool
                     var anchor = neighbours.GetValueOrDefault(nodeId);
                     sb.Append(new string(' ', level * 2)).Append($"--{e.Relationship}--> {other?.Name ?? otherId} ({other?.Type ?? "?"}) {ProvenanceTag(e, anchor)}");
                     emitted++;
+                    walked.Add(e.Relationship);
                     if (!visited.Add(otherId)) { sb.Append("  ↺\n"); continue; }
                     sb.Append('\n');
                     await Walk(otherId, level + 1).ConfigureAwait(false);
@@ -170,7 +175,10 @@ public sealed class ReferencesTool : IMcpTool
             }
             await Walk(refDef.Id, 1).ConfigureAwait(false);
 
-            return SendToolResponse(id, sb.ToString().TrimEnd());
+            // AP7 stage 1 (#445). This walk is confined to depRelations, so the count is structurally zero
+            // today — and it is still emitted, because a result with no disclosure and a result disclosing
+            // zero are the same output otherwise, which is exactly the ambiguity this removes.
+            return SendToolResponse(id, sb.ToString().TrimEnd() + ModelInvolvementNote(walked));
         }
     }
 }
@@ -241,7 +249,9 @@ public sealed class FindUsagesTool : IMcpTool
             var snippetText = snippet != null ? $"  ⟶ {snippet}" : "";
             sb.Append($"{e.Relationship}\t{name}\t{loc} {ProvenanceTag(e.Provenance)}{snippetText}\n");
         }
-        return SendToolResponse(id, sb.ToString().TrimEnd() + await ctx.StaleSuffixAsync(storage, def).ConfigureAwait(false));
+        return SendToolResponse(id, sb.ToString().TrimEnd()
+            + await ctx.StaleSuffixAsync(storage, def).ConfigureAwait(false)
+            + ModelInvolvementNote(incoming.Select(e => e.Relationship)));   // AP7 stage 1 (#445)
     }
 }
 
