@@ -54,6 +54,9 @@ public sealed partial class MarkdownHierarchyParser : IFileParser
     /// Extracted via the scanner's structural-edge exemption; link REFERENCES are Inferred.</remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
+    /// <summary>A link written in prose or serialized content, resolved by name (AP1, #428).</summary>
+    public ProvenanceReason DefaultReason => ProvenanceReason.DocumentLink;
+
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".md", ".mdx" }.ToFrozenSet();
 

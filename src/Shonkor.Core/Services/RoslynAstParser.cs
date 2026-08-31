@@ -384,7 +384,11 @@ public sealed class RoslynAstParser : IFileParser
                         SourceId = typeNodeId,
                         TargetId = baseTypeName,
                         Relationship = relationship,
-                        Provenance = Provenance.Inferred
+                        Provenance = Provenance.Inferred,
+                        // The base list gives a bare type name and the IMPLEMENTS-vs-EXTENDS split is a
+                        // naming heuristic — that is what distinguishes these from the semantic linker's
+                        // resolved heritage, and what finally makes the two repairable apart (#428).
+                        Reason = ProvenanceReason.SyntacticHeritage
                     });
                 }
             }

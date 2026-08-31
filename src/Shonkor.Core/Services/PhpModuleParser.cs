@@ -53,6 +53,9 @@ public sealed partial class PhpModuleParser : IFileParser
     /// <remarks>Regex-based OXID/Smarty extraction — its module/template edges are heuristic, not proven.</remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
+    /// <summary>Override relationships read syntactically from PHP source (AP1, #428).</summary>
+    public ProvenanceReason DefaultReason => ProvenanceReason.LanguageOverride;
+
     /// <inheritdoc />
     public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
     {

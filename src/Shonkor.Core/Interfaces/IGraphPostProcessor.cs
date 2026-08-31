@@ -49,6 +49,12 @@ public interface IGraphPostProcessor
     /// </summary>
     Provenance DefaultProvenance => Provenance.Inferred;
 
+    /// <summary>
+    /// WHY this post-processor's edges hold their tier (AP1, #428). Unspecified by default, for the same
+    /// reason as on <see cref="IFileParser"/>: an unattributed edge is honest, a fabricated attribution is not.
+    /// </summary>
+    ProvenanceReason DefaultReason => ProvenanceReason.Unspecified;
+
     /// <summary>Runs once over the assembled graph and returns additive enrichment + diagnostics.</summary>
     Task<GraphEnrichment> ProcessAsync(IGraphView graph);
 
