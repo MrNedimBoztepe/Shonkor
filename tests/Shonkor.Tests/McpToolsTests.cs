@@ -586,7 +586,14 @@ public class McpToolsTests
             ToolCall("get_subgraph", new { seeds = new[] { "@/Widget.cs::Widget" }, hops = 1, maxChars = 40 })));
 
         Assert.Contains("truncated", text);
-        Assert.True(text.Length < 120);
+
+        // maxChars bounds the CONTENT, not the mandatory disclosures appended to it. The AP7 model-
+        // involvement note (#445) is deliberately outside the cap for the same reason the truncation
+        // notice is: a disclosure a length limit can remove is not a disclosure. Splitting on it here
+        // pins that separation instead of hiding it behind a looser total-length bound.
+        var body = text[..text.IndexOf("\n\nmodel-authored edges:", StringComparison.Ordinal)];
+        Assert.True(body.Length < 120, $"capped body was {body.Length} chars: {body}");
+        Assert.Contains("model-authored edges:", text);
     }
 
     [Fact]

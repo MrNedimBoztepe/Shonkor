@@ -247,10 +247,13 @@ public sealed class McpToolContext
         {
             // #288 (Option 3): never emit an all-clear for a node type that structurally cannot carry the
             // queried edge — point the caller at the node that can, instead of "safe to change in isolation".
+            // The empty result carries the disclosure too. Without it a consumer cannot tell "empty, and no
+            // model was involved" from "a tool that does not report model involvement at all" (#445).
+            var empty = ModelInvolvementNote(Array.Empty<string>());
             var hint = EdgeCarrierRedirectHint(def);
             if (!string.IsNullOrEmpty(hint))
-                return $"No {(incoming ? "inbound references to" : "outbound dependencies of")} '{def.Name}' ({def.Type})." + hint + stale;
-            return string.Format(emptyMessage, def.Name, def.Type) + stale;
+                return $"No {(incoming ? "inbound references to" : "outbound dependencies of")} '{def.Name}' ({def.Type})." + hint + stale + empty;
+            return string.Format(emptyMessage, def.Name, def.Type) + stale + empty;
         }
 
         var filterNote = maxProvenance is { } mp ? $" (provenance ≤ {mp.ToString().ToLowerInvariant()})" : "";
@@ -271,7 +274,8 @@ public sealed class McpToolContext
                 sb.Append($"{g.Key}\t{name}\t{ToHandle(otherId, basePath)} {ProvenanceTag(e, anchor)}{summary}\n");
             }
         }
-        return sb.ToString().TrimEnd() + stale;
+        // AP7 stage 1 (#445): say how much of this rests on model assertions rather than extracted code.
+        return sb.ToString().TrimEnd() + stale + ModelInvolvementNote(incident.Select(e => e.Relationship));
     }
 
     /// <summary>

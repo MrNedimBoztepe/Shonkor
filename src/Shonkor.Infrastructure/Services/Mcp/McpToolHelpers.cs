@@ -453,6 +453,50 @@ public static class McpToolHelpers
     };
 
     /// <summary>
+    /// How many of the edges behind a result were asserted by a model rather than extracted from code —
+    /// AP7's disclosure, and the reason it is not an optional field.
+    ///
+    /// <para>
+    /// Measured on live <c>sitecoreMuM</c>: 28 145 of 45 873 <c>Inferred</c> edges (61 %) are model
+    /// assertions, and <c>RELATES_TO</c> runs code node → <c>Concept</c>, where concepts act as hubs — one
+    /// of them carries 4 871 incoming edges. A depth-2 <c>blast_radius</c> from a real class reaches 7 046
+    /// nodes with those edges and 92 without. A caller who cannot see that distinction cannot tell an
+    /// impact analysis from a topic cloud.
+    /// </para>
+    ///
+    /// <para>
+    /// Stage 1 of AP7 discloses; it does not yet change what is traversed. The number is therefore an
+    /// honest description of the result the caller is holding, not a promise about a filter.
+    /// </para>
+    /// </summary>
+    /// <param name="relationships">The relationship of every edge behind the result, one entry per edge.</param>
+    public static (int ModelAuthored, int Total) ModelInvolvement(IEnumerable<string> relationships)
+    {
+        var total = 0;
+        var model = 0;
+        foreach (var r in relationships)
+        {
+            total++;
+            if (AgentAuthoredRelations.SurvivesReindex(r)) model++;
+        }
+        return (model, total);
+    }
+
+    /// <summary>
+    /// The disclosure line for a text result. Always emitted when the result rests on edges, including
+    /// when the count is zero: "no model-authored edges" and "nobody asked" must not read alike — that
+    /// confusion is the defect AP7 exists to remove, and it has already cost this project a freeze-release
+    /// verification that proved nothing.
+    /// </summary>
+    public static string ModelInvolvementNote(IEnumerable<string> relationships)
+    {
+        var (model, total) = ModelInvolvement(relationships);
+        return model == 0
+            ? $"\n\nmodel-authored edges: 0 of {total} — this result rests only on edges extracted from code."
+            : $"\n\nmodel-authored edges: {model} of {total} ({100.0 * model / total:F0} %) — {string.Join("/", AgentAuthoredRelations.All.Order(StringComparer.Ordinal))} are asserted by a model, not extracted from code.";
+    }
+
+    /// <summary>
     /// The provenance tag plus, for an agent-authored edge whose anchor has changed since the assertion
     /// was written, a <c>[stale-anchor]</c> marker (#434).
     ///
