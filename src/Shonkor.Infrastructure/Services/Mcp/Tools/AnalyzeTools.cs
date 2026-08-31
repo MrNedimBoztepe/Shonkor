@@ -26,6 +26,7 @@ public sealed class ReferencesTool : IMcpTool
                 direction = new { type = "string", description = "'used_by' (incoming — what references it, default) or 'uses' (outgoing — what it depends on)." },
                 depth = new { type = "integer", description = "1 (default) = direct only (flat list); >1 = transitive (max 6). used_by+depth>1 = ranked blast radius with [test] flags; uses+depth>1 = dependency tree." },
                 provenance = new { type = "string", description = "Optional trust filter over edges: 'extracted' = only compiler-proven relationships; 'inferred' = proven + heuristic (excludes ambiguous); 'all' (default) = every edge. Each edge is tagged with its tier ([extracted]/[inferred]/[ambiguous]) regardless." },
+                includeModelEdges = new { type = "boolean", description = IncludeModelEdgesDescription },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "symbol" }
@@ -45,6 +46,8 @@ public sealed class ReferencesTool : IMcpTool
         var usedBy = direction is "used_by" or "used-by" or "callers" or "incoming";
         var depth = Math.Clamp(ReadInt(args?["depth"], 1), 1, 6);
         var maxProv = ReadProvenanceFilter(args);
+        var includeModelEdges = ReadIncludeModelEdges(args);   // AP7 stage 2 (#445), default false
+        var excludedModel = 0;
 
         // depth 1 → flat, grouped-by-relation report (direct dependents / dependencies).
         if (depth <= 1)
@@ -53,11 +56,11 @@ public sealed class ReferencesTool : IMcpTool
                 ? await ctx.EdgeReportAsync(storage, projectName, symbol, incoming: true,
                     verb: "is referenced by",
                     emptyMessage: "Nothing references '{0}' ({1}) — safe to change in isolation, or it is an entry point.",
-                    maxProvenance: maxProv).ConfigureAwait(false)
+                    maxProvenance: maxProv, includeModelEdges: includeModelEdges).ConfigureAwait(false)
                 : await ctx.EdgeReportAsync(storage, projectName, symbol, incoming: false,
                     verb: "depends on",
                     emptyMessage: "'{0}' ({1}) depends on nothing in the graph — it is self-contained or a leaf.",
-                    maxProvenance: maxProv).ConfigureAwait(false);
+                    maxProvenance: maxProv, includeModelEdges: includeModelEdges).ConfigureAwait(false);
             return SendToolResponse(id, report);
         }
 
@@ -87,6 +90,7 @@ public sealed class ReferencesTool : IMcpTool
                         if (e.TargetId != nodeId || e.SourceId == nodeId) continue;          // incoming only
                         if (StructuralRelationships.Contains(e.Relationship)) continue;       // skip containment
                         if (!PassesProvenance(e.Provenance, maxProv)) continue;               // trust filter
+                        if (!PassesModelEdgeFilter(e.Relationship, includeModelEdges)) { excludedModel++; continue; }  // AP7 stage 2 (#445)
                         if (!visited.Add(e.SourceId)) continue;
                         affected[e.SourceId] = (d, e.Relationship, neighbours.GetValueOrDefault(e.SourceId), e.Provenance);
                         next.Add(e.SourceId);
@@ -100,10 +104,14 @@ public sealed class ReferencesTool : IMcpTool
             if (affected.Count == 0)
             {
                 // #288 (Option 3): a structurally edge-less node type must not be reported as "safe to change".
+                // An empty blast radius reads as "safe to change". Since stage 2 it can also mean "every
+                // dependent was reached only through a model assertion" — so the disclosure belongs here
+                // most of all, not least (#445).
+                var note = ModelInvolvementNote(Array.Empty<string>(), excludedModel);
                 var hint = EdgeCarrierRedirectHint(refDef);
                 if (!string.IsNullOrEmpty(hint))
-                    return SendToolResponse(id, $"Blast radius of '{refDef.Name}' ({refDef.Type}): no dependents on this node." + hint);
-                return SendToolResponse(id, $"Blast radius of '{refDef.Name}' ({refDef.Type}): nothing depends on it — safe to change in isolation, or it is an entry point. (CALLS-level impact needs semantic indexing.)");
+                    return SendToolResponse(id, $"Blast radius of '{refDef.Name}' ({refDef.Type}): no dependents on this node." + hint + note);
+                return SendToolResponse(id, $"Blast radius of '{refDef.Name}' ({refDef.Type}): nothing depends on it — safe to change in isolation, or it is an entry point. (CALLS-level impact needs semantic indexing.)" + note);
             }
 
             var files = new HashSet<string>(FilePaths.Comparer);
@@ -136,7 +144,7 @@ public sealed class ReferencesTool : IMcpTool
             // AP7 stage 1 (#445): an impact tree is only as factual as the edges it walked.
             return SendToolResponse(id, sb.ToString().TrimEnd()
                 + await ctx.StaleSuffixAsync(storage, refDef).ConfigureAwait(false)
-                + ModelInvolvementNote(affected.Values.Select(a => a.Rel)));
+                + ModelInvolvementNote(affected.Values.Select(a => a.Rel), excludedModel));
         }
 
         // depth > 1, uses → transitive dependency tree (outgoing reference edges).
@@ -199,6 +207,7 @@ public sealed class FindUsagesTool : IMcpTool
             {
                 symbol = new { type = "string", description = "The type/method/symbol name whose usages to find (e.g. 'GraphNode'). 'query' is accepted as an alias." },
                 provenance = new { type = "string", description = "Optional trust filter: 'extracted' = only compiler-proven usages; 'inferred' = proven + heuristic (excludes ambiguous); 'all' (default) = every usage. Each line is tagged with its tier regardless." },
+                includeModelEdges = new { type = "boolean", description = IncludeModelEdgesDescription },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "symbol" }
@@ -225,9 +234,13 @@ public sealed class FindUsagesTool : IMcpTool
 
         var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
         // Real usages only — exclude structural containment (e.g. the enclosing type/file).
-        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id
+        var candidates = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id
             && !StructuralRelationships.Contains(e.Relationship)
             && PassesProvenance(e.Provenance, maxProv)).ToList();
+        // AP7 stage 2 (#445): a usage is something in the code that uses this. A model's topical
+        // association is not, and by default does not appear here.
+        var incoming = candidates.Where(e => PassesModelEdgeFilter(e.Relationship, ReadIncludeModelEdges(args))).ToList();
+        var excludedModel = candidates.Count - incoming.Count;
         if (incoming.Count == 0)
         {
             // #288 (Option 3): if the resolved node cannot carry the queried edge, say so and point at the
@@ -251,7 +264,7 @@ public sealed class FindUsagesTool : IMcpTool
         }
         return SendToolResponse(id, sb.ToString().TrimEnd()
             + await ctx.StaleSuffixAsync(storage, def).ConfigureAwait(false)
-            + ModelInvolvementNote(incoming.Select(e => e.Relationship)));   // AP7 stage 1 (#445)
+            + ModelInvolvementNote(incoming.Select(e => e.Relationship), excludedModel));   // AP7 (#445)
     }
 }
 
