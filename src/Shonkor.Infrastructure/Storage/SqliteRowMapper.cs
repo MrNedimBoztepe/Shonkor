@@ -71,8 +71,44 @@ internal static class SqliteRowMapper
             TargetId = reader.GetString(reader.GetOrdinal("TargetId")),
             Relationship = reader.GetString(reader.GetOrdinal("RelationType")),
             Provenance = ReadProvenance(reader),
+            Reason = ReadReason(reader),
             Properties = ReadEdgeProperties(reader)
         };
+
+    /// <summary>
+    /// Reads the edge's <see cref="ProvenanceReason"/> tolerantly (AP1, #428): a query that does not
+    /// select the column, a NULL, or a value this build does not know yields
+    /// <see cref="ProvenanceReason.Unspecified"/>.
+    ///
+    /// <para>
+    /// An unknown ordinal is deliberately NOT clamped to something plausible. A graph written by a newer
+    /// build can carry a reason this one has never heard of, and reporting it as a reason we do recognise
+    /// would be a fabricated claim about evidence — the same mistake as a missing column defaulting to
+    /// <c>Extracted</c>, which is what put 699 over-claiming edges into a real graph.
+    /// </para>
+    /// </summary>
+    private static ProvenanceReason ReadReason(SqliteDataReader reader)
+    {
+        try
+        {
+            var ordinal = reader.GetOrdinal("Reason");
+            if (reader.IsDBNull(ordinal)) return ProvenanceReason.Unspecified;
+            var value = reader.GetInt32(ordinal);
+            return Enum.IsDefined(typeof(ProvenanceReason), value)
+                ? (ProvenanceReason)value
+                : ProvenanceReason.Unspecified;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // Microsoft.Data.Sqlite throws this — not IndexOutOfRangeException — when the column is not
+            // in the result set. Many queries select only the columns they need, and that is not an error.
+            return ProvenanceReason.Unspecified;
+        }
+        catch (IndexOutOfRangeException)
+        {
+            return ProvenanceReason.Unspecified;   // other ADO.NET providers signal it this way
+        }
+    }
 
     /// <summary>
     /// Materializes the edge's JSON properties (TICKET-207) tolerantly: a query that doesn't select the
