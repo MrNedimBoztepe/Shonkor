@@ -93,3 +93,60 @@ public sealed class ModelInvolvementDisclosureTests
         Assert.Equal((0, 2), McpToolHelpers.ModelInvolvement(new[] { "SOME_PLUGIN_RELATION", "ANOTHER" }));
     }
 }
+
+/// <summary>
+/// AP7 stage 2 (#445): model-authored edges are excluded from traversals unless asked for. The default
+/// flip is the visible behaviour change — 7 046 reachable nodes became 92 on a real solution — so these
+/// pin the switch itself and, more importantly, that an answer which shrank says so.
+/// </summary>
+public sealed class ModelEdgeExclusionTests
+{
+    private static System.Text.Json.Nodes.JsonObject Args(string json) =>
+        (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(json)!;
+
+    [Fact]
+    public void DefaultsToExcluding_WhenTheArgumentIsAbsent()
+    {
+        Assert.False(McpToolHelpers.ReadIncludeModelEdges(Args("{}")));
+        Assert.False(McpToolHelpers.ReadIncludeModelEdges(null));
+    }
+
+    [Theory]
+    [InlineData("{\"includeModelEdges\":true}", true)]
+    [InlineData("{\"includeModelEdges\":false}", false)]
+    [InlineData("{\"includeModelEdges\":\"true\"}", true)]   // clients that stringify booleans
+    [InlineData("{\"includeModelEdges\":\"TRUE\"}", true)]
+    [InlineData("{\"includeModelEdges\":\"yes\"}", false)]   // not a boolean — the safe reading is "no"
+    [InlineData("{\"includeModelEdges\":1}", false)]
+    public void ReadsTheSwitch(string json, bool expected)
+        => Assert.Equal(expected, McpToolHelpers.ReadIncludeModelEdges(Args(json)));
+
+    [Fact]
+    public void ExcludesModelRelationsAndKeepsExtractedOnes()
+    {
+        Assert.False(McpToolHelpers.PassesModelEdgeFilter("RELATES_TO", includeModelEdges: false));
+        Assert.False(McpToolHelpers.PassesModelEdgeFilter("INFLUENCES", includeModelEdges: false));
+        Assert.True(McpToolHelpers.PassesModelEdgeFilter("CALLS", includeModelEdges: false));
+        Assert.True(McpToolHelpers.PassesModelEdgeFilter("RELATES_TO", includeModelEdges: true));
+    }
+
+    /// <summary>
+    /// The load-bearing one. A result that shrank because a filter removed everything must not read as
+    /// "there is nothing there" — that is the most dangerous shape an answer can take, and the exact
+    /// mistake this project has repeatedly been caught by.
+    /// </summary>
+    [Fact]
+    public void AnEmptyResultSaysWhatWasHeldBack()
+    {
+        var note = McpToolHelpers.ModelInvolvementNote(Array.Empty<string>(), excluded: 12);
+
+        Assert.Contains("0 of 0", note);
+        Assert.Contains("12 were excluded by default", note);
+        Assert.Contains("includeModelEdges=true", note);
+    }
+
+    /// <summary>And when nothing was held back, it does not imply something was.</summary>
+    [Fact]
+    public void SaysNothingAboutExclusionWhenNoneHappened()
+        => Assert.DoesNotContain("excluded", McpToolHelpers.ModelInvolvementNote(new[] { "CALLS" }));
+}

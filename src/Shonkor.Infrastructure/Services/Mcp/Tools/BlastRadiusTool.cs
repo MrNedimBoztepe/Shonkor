@@ -36,6 +36,7 @@ public sealed class BlastRadiusTool : IMcpTool
                 nodeOrFile = new { type = "string", description = "The target: a symbol name (e.g. 'GraphNode'), a node id / '@/' handle, or a file path. A file expands to the symbols it defines." },
                 maxDepth = new { type = "integer", description = "Max reverse-traversal depth (default 5). No hard cap — a persistent index can afford deeper traversal; when the limit truncates results, 'truncatedAtDepth' is true." },
                 minTier = new { type = "string", description = "Minimum trust tier to traverse: 'extracted' = only compiler-proven edges (conservative); 'inferred' = proven + heuristic (excludes ambiguous); 'ambiguous'/'all' (default) = every edge. Edges below the tier are pruned DURING traversal, so the result is a true subset." },
+                includeModelEdges = new { type = "boolean", description = IncludeModelEdgesDescription },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "nodeOrFile" }
@@ -54,6 +55,8 @@ public sealed class BlastRadiusTool : IMcpTool
         var basePath = ctx.GetProjectBasePath(projectName);
         var maxDepth = Math.Max(1, ReadInt(args?["maxDepth"], 5));
         var minTier = ReadMinTier(args);
+        var includeModelEdges = ReadIncludeModelEdges(args);
+        var excludedModelEdges = 0;
 
         // Resolve the target to one or more SEED nodes (a file expands to its defined symbols).
         var seeds = await ResolveSeedsAsync(storage, target, basePath).ConfigureAwait(false);
@@ -100,6 +103,10 @@ public sealed class BlastRadiusTool : IMcpTool
                 if (e.TargetId != cur || e.SourceId == cur) continue;
                 if (StructuralRelationships.Contains(e.Relationship)) continue;
                 if (!PassesProvenance(e.Provenance, minTier)) continue; // prune below the tier during traversal
+                // AP7 stage 2 (#445): model assertions are not dependencies. Pruned DURING traversal, like
+                // the tier filter, so the result stays a true subset rather than a filtered rendering of a
+                // walk that already exploded through Concept hubs.
+                if (!PassesModelEdgeFilter(e.Relationship, includeModelEdges)) { excludedModelEdges++; continue; }
 
                 var newDepth = depth + 1;
                 if (newDepth > maxDepth) { truncated = true; continue; }
@@ -175,7 +182,17 @@ public sealed class BlastRadiusTool : IMcpTool
             // Model-authored edges are still traversed here — this states how much of the result rests on
             // them. Emitted at zero as well: "none involved" and "never asked" may not look alike.
             modelAuthoredEdges = ModelInvolvement(traversed.Keys.Select(k => k.Rel)) is var mi
-                ? new { count = mi.ModelAuthored, ofTotal = mi.Total, relationships = AgentAuthoredRelations.All.Order(StringComparer.Ordinal).ToArray() }
+                ? new
+                {
+                    count = mi.ModelAuthored,
+                    ofTotal = mi.Total,
+                    // Stage 2: how many were kept out, so an excluded edge is a reported fact rather than a
+                    // silently smaller answer. Zero here with includeModelEdges=false means the graph had
+                    // none to offer, not that nobody looked.
+                    excluded = excludedModelEdges,
+                    included = includeModelEdges,
+                    relationships = AgentAuthoredRelations.All.Order(StringComparer.Ordinal).ToArray()
+                }
                 : null
         };
 

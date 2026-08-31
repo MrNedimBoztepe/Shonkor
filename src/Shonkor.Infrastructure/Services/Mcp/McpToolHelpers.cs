@@ -488,12 +488,22 @@ public static class McpToolHelpers
     /// confusion is the defect AP7 exists to remove, and it has already cost this project a freeze-release
     /// verification that proved nothing.
     /// </summary>
-    public static string ModelInvolvementNote(IEnumerable<string> relationships)
+    /// <param name="excluded">
+    /// How many model-authored edges were held back by the stage-2 default (#445). Reported even when the
+    /// visible result is empty — an answer that shrank to nothing because a filter removed everything must
+    /// not read as "there is nothing there", which is the single most misleading shape a result can take.
+    /// </param>
+    public static string ModelInvolvementNote(IEnumerable<string> relationships, int excluded = 0)
     {
         var (model, total) = ModelInvolvement(relationships);
+        var kinds = string.Join("/", AgentAuthoredRelations.All.Order(StringComparer.Ordinal));
+        var held = excluded == 0
+            ? string.Empty
+            : $" {excluded} were excluded by default — pass includeModelEdges=true to see them.";
+
         return model == 0
-            ? $"\n\nmodel-authored edges: 0 of {total} — this result rests only on edges extracted from code."
-            : $"\n\nmodel-authored edges: {model} of {total} ({100.0 * model / total:F0} %) — {string.Join("/", AgentAuthoredRelations.All.Order(StringComparer.Ordinal))} are asserted by a model, not extracted from code.";
+            ? $"\n\nmodel-authored edges: 0 of {total} — this result rests only on edges extracted from code.{held}"
+            : $"\n\nmodel-authored edges: {model} of {total} ({100.0 * model / total:F0} %) — {kinds} are asserted by a model, not extracted from code.{held}";
     }
 
     /// <summary>
@@ -543,6 +553,45 @@ public static class McpToolHelpers
     /// <summary>Whether <paramref name="provenance"/> is admitted by an optional max-uncertainty filter (null = admit all).</summary>
     public static bool PassesProvenance(Provenance provenance, Provenance? maxUncertainty) =>
         maxUncertainty is null || (int)provenance <= (int)maxUncertainty;
+
+    /// <summary>
+    /// Reads the optional <c>includeModelEdges</c> argument. <b>Default false</b> — AP7 stage 2 (#445):
+    /// relationships a model asserted are excluded from traversals unless a caller asks for them.
+    ///
+    /// <para>
+    /// This is a separate axis from <see cref="ReadProvenanceFilter"/> and cannot be folded into it. Both
+    /// live at <c>Inferred</c>: <c>BELONGS_TO_MODULE</c> is a path convention, <c>RELATES_TO</c> is a model's
+    /// opinion, and a tier filter admits or rejects them together. On live <c>sitecoreMuM</c> that single
+    /// tier holds 17 728 heuristic edges and 28 145 model assertions — asking for "heuristics are fine"
+    /// should not silently mean "and a language model's associations too".
+    /// </para>
+    /// </summary>
+    public static bool ReadIncludeModelEdges(JsonNode? args)
+    {
+        var raw = args?["includeModelEdges"];
+        if (raw is null) return false;
+        return raw.GetValueKind() switch
+        {
+            System.Text.Json.JsonValueKind.True => true,
+            System.Text.Json.JsonValueKind.String => string.Equals(raw.ToString().Trim(), "true", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Whether an edge may be traversed given the model-edge switch. Reads as a sentence at the call site
+    /// on purpose: the exclusion is a policy, and policies that are inlined as boolean arithmetic are the
+    /// ones that end up applied in three places and forgotten in a fourth.
+    /// </summary>
+    public static bool PassesModelEdgeFilter(string relationship, bool includeModelEdges) =>
+        includeModelEdges || !AgentAuthoredRelations.SurvivesReindex(relationship);
+
+    /// <summary>The schema blurb for the argument, so all edge-bearing tools describe it identically.</summary>
+    public const string IncludeModelEdgesDescription =
+        "Include relationships a model asserted about the code (RELATES_TO/INFLUENCES/AFFECTS) rather than "
+        + "ones extracted from it. Default false: these connect through Concept hubs — one carries 4 871 edges "
+        + "on a real solution — so a depth-2 traversal reached 7 046 nodes with them and 92 without. Set true "
+        + "to explore topical association rather than code dependency.";
 
     // ---- JSON-RPC response builders (stateless) ----------------------------------------------------
 

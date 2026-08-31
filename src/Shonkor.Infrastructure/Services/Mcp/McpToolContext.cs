@@ -227,19 +227,24 @@ public sealed class McpToolContext
     /// </summary>
     public async Task<string> EdgeReportAsync(
         IGraphStorageProvider storage, string? projectName, string symbol, bool incoming, string verb, string emptyMessage,
-        Provenance? maxProvenance = null)
+        Provenance? maxProvenance = null,
+        bool includeModelEdges = false)
     {
         var basePath = GetProjectBasePath(projectName);
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
         if (def == null) return $"No definition found for '{symbol}'.";
 
         var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
-        var incident = edges
+        var directional = edges
             .Where(e => !StructuralRelationships.Contains(e.Relationship)
                         && PassesProvenance(e.Provenance, maxProvenance)
                         && (incoming ? e.TargetId == def.Id && e.SourceId != def.Id
                                      : e.SourceId == def.Id && e.TargetId != def.Id))
             .ToList();
+        // AP7 stage 2 (#445): a model's association is not a reference. Excluded by default; the count of
+        // what was held back is reported below, so a shorter answer is never a quieter one.
+        var incident = directional.Where(e => PassesModelEdgeFilter(e.Relationship, includeModelEdges)).ToList();
+        var excludedModel = directional.Count - incident.Count;
 
         var stale = await StaleSuffixAsync(storage, def).ConfigureAwait(false);
 
@@ -249,7 +254,7 @@ public sealed class McpToolContext
             // queried edge — point the caller at the node that can, instead of "safe to change in isolation".
             // The empty result carries the disclosure too. Without it a consumer cannot tell "empty, and no
             // model was involved" from "a tool that does not report model involvement at all" (#445).
-            var empty = ModelInvolvementNote(Array.Empty<string>());
+            var empty = ModelInvolvementNote(Array.Empty<string>(), excludedModel);
             var hint = EdgeCarrierRedirectHint(def);
             if (!string.IsNullOrEmpty(hint))
                 return $"No {(incoming ? "inbound references to" : "outbound dependencies of")} '{def.Name}' ({def.Type})." + hint + stale + empty;
@@ -275,7 +280,7 @@ public sealed class McpToolContext
             }
         }
         // AP7 stage 1 (#445): say how much of this rests on model assertions rather than extracted code.
-        return sb.ToString().TrimEnd() + stale + ModelInvolvementNote(incident.Select(e => e.Relationship));
+        return sb.ToString().TrimEnd() + stale + ModelInvolvementNote(incident.Select(e => e.Relationship), excludedModel);
     }
 
     /// <summary>
