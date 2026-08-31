@@ -103,4 +103,23 @@ public static class ProvenanceReasons
 
         _ => ProvenanceReason.Unspecified,
     };
+
+    /// <summary>
+    /// The reason for an edge emitted by the semantic C# linker, from the tier it assigned.
+    ///
+    /// <para>
+    /// Separate from <see cref="Recover"/> on purpose. <c>Recover</c> answers "which producer wrote this,
+    /// judging only by the pair" — and for <c>IMPLEMENTS</c>/<c>EXTENDS</c> at <c>Extracted</c> it
+    /// correctly answers "cannot tell", because in a stored graph both producers wrote that. Inside the
+    /// linker there is nothing to tell: it knows it is the linker. Using the migration's heuristic where
+    /// direct knowledge exists left 102 edges unattributed on a real graph after a full scan.
+    /// </para>
+    /// </summary>
+    public static ProvenanceReason ForSemanticLink(Provenance tier) => tier switch
+    {
+        Provenance.Extracted => ProvenanceReason.SemanticSymbol,      // a resolved symbol
+        Provenance.Inferred => ProvenanceReason.UniqueNameMatch,      // the name-based fallback, one hit
+        Provenance.Ambiguous => ProvenanceReason.AmbiguousNameMatch,  // the fallback, several hits
+        _ => ProvenanceReason.Unspecified,
+    };
 }
