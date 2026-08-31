@@ -201,6 +201,44 @@ public sealed class McpToolContext
         }
     }
 
+    /// <summary>
+    /// Whether the graph still matches the tree it was built from — always stated, never implied by
+    /// silence (AP8 stage 1, #449).
+    ///
+    /// <para>
+    /// <see cref="StaleSuffixAsync"/> answers "did this one file change" and says nothing when the answer
+    /// is no. That makes "the graph matches your working tree" and "this tool does not check" the same
+    /// output, which is the failure mode that has already cost this project a freeze-release verification
+    /// that proved nothing (#389), four stale plugin binaries (#401) and a cached restore layer read as a
+    /// clean one. So this one always emits, including — especially — when it cannot tell.
+    /// </para>
+    ///
+    /// <para>
+    /// Cached for the life of the context: the revision is read from two files, but an MCP server answers
+    /// many calls per session and re-reading per answer buys nothing. A scan cannot happen underneath a
+    /// running answer in a way that matters here — the marker only moves when someone re-indexes.
+    /// </para>
+    /// </summary>
+    public async Task<string> RevisionSuffixAsync(IGraphStore storage, string? projectName, CancellationToken ct = default)
+    {
+        var indexed = await storage.GetIndexedRevisionAsync(ct).ConfigureAwait(false);
+        var current = _revisionCache ??= WorkingTreeRevision.TryRead(GetProjectBasePath(projectName)) ?? string.Empty;
+
+        if (string.IsNullOrEmpty(indexed))
+            return "\n\ngraph revision: not recorded — this graph predates revision stamping or the tree is not a repository. Whether it matches your working state is unknown.";
+
+        if (string.IsNullOrEmpty(current))
+            return $"\n\ngraph revision: indexed at {Short(indexed)}; the working tree's revision could not be read, so a match cannot be confirmed.";
+
+        return string.Equals(indexed, current, StringComparison.OrdinalIgnoreCase)
+            ? $"\n\ngraph revision: {Short(indexed)} — matches the working tree."
+            : $"\n\ngraph revision: indexed at {Short(indexed)}, working tree at {Short(current)} — the graph is BEHIND; anything committed since is missing from it. Re-index, or call freshness for the affected files.";
+    }
+
+    private string? _revisionCache;
+
+    private static string Short(string revision) => revision.Length >= 8 ? revision[..8] : revision;
+
     public async Task<string> StaleSuffixAsync(IGraphStore storage, GraphNode def, CancellationToken ct = default)
     {
         if (FileParsers == null || string.IsNullOrEmpty(def.FilePath)) return string.Empty;
@@ -247,6 +285,7 @@ public sealed class McpToolContext
         var excludedModel = directional.Count - incident.Count;
 
         var stale = await StaleSuffixAsync(storage, def).ConfigureAwait(false);
+        var revisionNote = await RevisionSuffixAsync(storage, projectName).ConfigureAwait(false);   // #449
 
         if (incident.Count == 0)
         {
@@ -254,7 +293,7 @@ public sealed class McpToolContext
             // queried edge — point the caller at the node that can, instead of "safe to change in isolation".
             // The empty result carries the disclosure too. Without it a consumer cannot tell "empty, and no
             // model was involved" from "a tool that does not report model involvement at all" (#445).
-            var empty = ModelInvolvementNote(Array.Empty<string>(), excludedModel);
+            var empty = ModelInvolvementNote(Array.Empty<string>(), excludedModel) + revisionNote;
             var hint = EdgeCarrierRedirectHint(def);
             if (!string.IsNullOrEmpty(hint))
                 return $"No {(incoming ? "inbound references to" : "outbound dependencies of")} '{def.Name}' ({def.Type})." + hint + stale + empty;
@@ -280,7 +319,7 @@ public sealed class McpToolContext
             }
         }
         // AP7 stage 1 (#445): say how much of this rests on model assertions rather than extracted code.
-        return sb.ToString().TrimEnd() + stale + ModelInvolvementNote(incident.Select(e => e.Relationship), excludedModel);
+        return sb.ToString().TrimEnd() + stale + ModelInvolvementNote(incident.Select(e => e.Relationship), excludedModel) + revisionNote;
     }
 
     /// <summary>

@@ -1096,6 +1096,32 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private const string IndexedRevisionKey = "indexedRevision";
+
+    /// <inheritdoc />
+    public async Task<string?> GetIndexedRevisionAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Value FROM Meta WHERE Key = @key;";
+        command.Parameters.AddWithValue("@key", IndexedRevisionKey);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+    }
+
+    /// <inheritdoc />
+    public async Task SetIndexedRevisionAsync(string revision, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(revision);
+
+        using var _writeScope = await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "INSERT OR REPLACE INTO Meta (Key, Value) VALUES (@key, @value);";
+        command.Parameters.AddWithValue("@key", IndexedRevisionKey);
+        command.Parameters.AddWithValue("@value", revision);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     /// <inheritdoc />
     public async Task<IReadOnlyList<GraphNode>> GetAllNodesAsync(CancellationToken cancellationToken = default)
     {
