@@ -56,7 +56,16 @@ public sealed class ReindexFileTool : IMcpTool
         // incrementally; otherwise the plain single-file path (fast name-mode structure).
         var semantic = ctx.IsSemanticProject(projectName);
 
-        var scanner = new GraphIndexScanner(storage, ctx.FileParsers, semanticCsharp: semantic, compilationCache: ctx.CompilationCache);
+        // Construct the scanner exactly like the Web/CLI index (#319): pass the active plugins' post-processors
+        // so a MCP-driven reindex is configured identically to those paths, closing the wiring inconsistency.
+        // Post-processors are a WHOLE-GRAPH phase (IGraphPostProcessor): the scanner runs them on a full
+        // ScanDirectoryAsync only, never on a single-file reindex — which is exactly what both branches below
+        // do. So the plugin enrichment (e.g. the #294 JS/TS semantic linker) is NOT re-run per edited file
+        // here; it refreshes on the next full scan. This mirrors the drift reconcile path
+        // (DriftReconciliationService → ReconcileDriftAsync → ScanFileAsync), which passes the post-processors
+        // the same way for construction consistency without executing them per file.
+        var scanner = new GraphIndexScanner(storage, ctx.FileParsers, semanticCsharp: semantic,
+            compilationCache: ctx.CompilationCache, postProcessors: ctx.PostProcessors);
         var result = semantic
             ? await scanner.ReconcilePathsAsync(basePath, new[] { resolved }).ConfigureAwait(false)
             : await scanner.ScanFileAsync(resolved).ConfigureAwait(false);
@@ -67,7 +76,7 @@ public sealed class ReindexFileTool : IMcpTool
             return SendToolResponse(id, $"Cleared '{handle}' from the graph (file missing, unparsable, or empty).");
         }
         return SendToolResponse(id,
-            $"Reindexed {handle}: {result.NodesCreated} node(s), {result.EdgesCreated} edge(s) in {result.Duration.TotalMilliseconds:F0} ms. (REFERENCES_TYPE relinked for this file; other cross-tech links refresh on a full scan.)");
+            $"Reindexed {handle}: {result.NodesCreated} node(s), {result.EdgesCreated} edge(s) in {result.Duration.TotalMilliseconds:F0} ms. (REFERENCES_TYPE relinked for this file; other cross-tech links and plugin graph enrichment refresh on a full scan.)");
     }
 }
 
@@ -121,7 +130,7 @@ public sealed class CheckEditTool : IMcpTool
             return SendToolResponse(id, $"File not found on disk: {ToHandle(resolved, basePath)}.");
         }
 
-        var content = await System.IO.File.ReadAllTextAsync(resolved).ConfigureAwait(false);
+        var content = await Shonkor.Core.Services.SourceText.ReadAsync(resolved).ConfigureAwait(false);
 
         // Semantic checks only for a semantic project (and when the cache is wired); otherwise syntax-only.
         Microsoft.CodeAnalysis.CSharp.CSharpCompilation? compilation = null;
@@ -179,6 +188,8 @@ public sealed class FreshnessTool : IMcpTool
             // #105: contained by the dispatcher before this tool was entered.
             var resolved = rawPath!;
 
+            // No post-processors here (#319): CheckFreshnessAsync is a read-only hash comparison that never
+            // writes to the graph, so the whole-graph post-processor phase does not apply.
             var fileScanner = new GraphIndexScanner(storage, ctx.FileParsers);
             var state = await fileScanner.CheckFreshnessAsync(resolved).ConfigureAwait(false);
             var handle = ToHandle(System.IO.Path.GetFullPath(resolved), fileBase);
@@ -198,6 +209,8 @@ public sealed class FreshnessTool : IMcpTool
         var resolvedName = ctx.ResolveProjectName(projectName) ?? ctx.ProjectManager.GetActiveProjectName();
         var excludePatterns = ctx.ProjectManager.GetProjectConfig(resolvedName).ExcludePatterns;
 
+        // No post-processors here (#319): DetectDriftAsync only compares on-disk hashes against the graph and
+        // never mutates it, so the whole-graph post-processor phase does not apply.
         var scanner = new GraphIndexScanner(storage, ctx.FileParsers);
         var drift = await scanner.DetectDriftAsync(basePath, excludePatterns).ConfigureAwait(false);
 
@@ -351,13 +364,21 @@ public sealed class EditPlanTool : IMcpTool
         if (def.StartLine is int dl) defLoc += $":{dl}";
 
         var (edges, neighbours) = await storage.GetIncidentEdgesAsync(def.Id).ConfigureAwait(false);
-        var incoming = edges.Where(e => e.TargetId == def.Id && e.SourceId != def.Id).ToList();
+        // Real reference sites only: exclude structural containment (#288). A CONTAINS edge (e.g. a File
+        // node containing its sole JSComponent) is not an actionable reference site, and listing it both
+        // masked the real importers and told the caller to "update" a containment relationship. AnalyzeTools
+        // already filters this on its incoming-edge queries; edit_plan did not.
+        var incoming = edges
+            .Where(e => e.TargetId == def.Id && e.SourceId != def.Id && !StructuralRelationships.Contains(e.Relationship))
+            .ToList();
 
         var sb = new System.Text.StringBuilder();
         sb.Append($"Edit plan — '{def.Name}' ({def.Type}) defined at {defLoc}\n");
         if (incoming.Count == 0)
         {
-            sb.Append("No reference sites — safe to change in isolation.\n");
+            // #288 (Option 3): don't hand back a false all-clear for a node type that cannot carry the edge.
+            var hint = EdgeCarrierRedirectHint(def);
+            sb.Append(string.IsNullOrEmpty(hint) ? "No reference sites — safe to change in isolation.\n" : "No reference sites." + hint + "\n");
         }
         else
         {
@@ -536,7 +557,7 @@ public sealed class ReviewTool : IMcpTool
             var rel = Shorten(full, basePath);
             if (ctx.FileParsers != null && full.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(full))
             {
-                var content = await System.IO.File.ReadAllTextAsync(full).ConfigureAwait(false);
+                var content = await Shonkor.Core.Services.SourceText.ReadAsync(full).ConfigureAwait(false);
                 Microsoft.CodeAnalysis.CSharp.CSharpCompilation? comp = semanticProject
                     ? await ctx.CompilationCache!.ApplyEditsAsync(basePath, new[] { full }).ConfigureAwait(false)
                     : null;

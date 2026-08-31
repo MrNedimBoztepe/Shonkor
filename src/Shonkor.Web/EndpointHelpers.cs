@@ -1,7 +1,9 @@
 // Licensed to Shonkor under the MIT License.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -92,6 +94,52 @@ public static class EndpointHelpers
     /// to hard-disable loading every plugin regardless of its activation state.
     /// </summary>
     public static bool PluginsEnabled(IConfiguration config) => config.GetValue("Security:EnablePlugins", true);
+
+    /// <summary>
+    /// Builds the file-parser list the MCP relay hands to <c>reindex_file</c>. Tenant-locked (SaaS) sessions
+    /// get <c>null</c> — the tenant's files are not on this server, so reindex_file stays disabled and cannot
+    /// wrongly clear a file's graph. A trusted-local session gets the base parsers PLUS the active plugin
+    /// parsers.
+    /// <para>
+    /// Merging the plugins is NOT optional: since #292 the JS/TS parser lives in the <c>shonkor-typescript</c>
+    /// plugin rather than the host's DI parser list. An un-merged list would parse <c>.ts/.tsx/.js/.jsx</c>
+    /// with no parser, so <c>reindex_file</c> would produce zero nodes and then DELETE the file's existing
+    /// JSComponent/IMPORTS nodes (<c>ScanFileAsync</c> clears a file with no matching parser) — silent data
+    /// loss over the HTTP relay. This helper is the single, tested place that construction lives.
+    /// </para>
+    /// </summary>
+    public static IEnumerable<IFileParser>? BuildRelayFileParsers(
+        bool isTenantLocked,
+        IEnumerable<IFileParser>? baseParsers,
+        IReadOnlyList<IFileParser> activePluginParsers)
+    {
+        if (isTenantLocked) return null;
+        var merged = new List<IFileParser>(baseParsers ?? Enumerable.Empty<IFileParser>());
+        merged.AddRange(activePluginParsers);
+        return merged;
+    }
+
+    /// <summary>
+    /// The MCP relay's parser-list wiring seam: resolves the host's base file parsers from
+    /// <paramref name="services"/> and merges the active plugin parsers via <see cref="BuildRelayFileParsers"/>.
+    /// <para>
+    /// Extracted verbatim from <c>McpEndpoints.MapMcpEndpoints</c> so this composition — resolving the DI
+    /// parsers AND merging the plugin parsers, rather than the pre-#292 <c>isTenantLocked ? null :
+    /// GetService&lt;IEnumerable&lt;IFileParser&gt;&gt;()</c> — is reachable by a unit test. The relay's
+    /// non-tenant-locked branch is unreachable over the HTTP pipeline (<see cref="Middleware.ApiKeyMiddleware"/>
+    /// always tenant-locks <c>/api/mcp</c>), so without this seam a regression that drops the plugin merge in
+    /// the endpoint would leave every existing test green. Exercising this method with a plugin parser proves
+    /// the endpoint keeps it.
+    /// </para>
+    /// </summary>
+    public static IEnumerable<IFileParser>? ResolveRelayFileParsers(
+        IServiceProvider services,
+        bool isTenantLocked,
+        IReadOnlyList<IFileParser> activePluginParsers) =>
+        BuildRelayFileParsers(
+            isTenantLocked,
+            services.GetService<IEnumerable<IFileParser>>(),
+            activePluginParsers);
 
     /// <summary>
     /// Whether to use exact semantic C# resolution when indexing <paramref name="project"/>: the

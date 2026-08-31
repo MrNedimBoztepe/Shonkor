@@ -20,7 +20,8 @@ internal static class RetrievalBenchmark
 {
     public static async Task<(MetricSet Fts, MetricSet? Semantic, MetricSet? Hybrid, IReadOnlyCollection<string> Contamination)> RunAsync(
         SqliteGraphStorageProvider provider, IReadOnlyList<GraphNode> allNodes, int k, TextWriter log,
-        List<GoldenCase>? goldenSet = null, string? setLabel = null)
+        List<GoldenCase>? goldenSet = null, string? setLabel = null,
+        IDictionary<string, List<CaseOutcome>>? outcomes = null)
     {
         // Every retriever is scored on the SAME cases, so a curated golden set (e.g. natural-language intent
         // queries) yields a clean FTS-vs-semantic-vs-hybrid comparison.
@@ -32,7 +33,7 @@ internal static class RetrievalBenchmark
         // the run fails loudly rather than the filter silently patching over it.
         var contamination = new SortedSet<string>(StringComparer.Ordinal);
 
-        var fts = await Score(cases, k, contamination, c => provider.SearchAsync(c.Query, k));
+        var fts = await Score(cases, k, contamination, c => provider.SearchAsync(c.Query, k), Bucket(outcomes, "graph"));
 
         MetricSet? semantic = null, hybrid = null;
         var emb = TryCreateEmbeddingService();
@@ -48,7 +49,8 @@ internal static class RetrievalBenchmark
             // Embed the QUERY with the query prefix (TICKET-202): the kind-less overload defaulted to the
             // Document prefix, so an earlier A/B "within noise" result measured document-prefixed queries.
             semantic = await Score(cases, k, contamination, async c =>
-                await provider.SearchSemanticAsync(await emb.GenerateEmbeddingAsync(c.Query, EmbeddingKind.Query), k));
+                await provider.SearchSemanticAsync(await emb.GenerateEmbeddingAsync(c.Query, EmbeddingKind.Query), k),
+                Bucket(outcomes, "semantic"));
 
             // Hybrid = RRF of FTS + vector, exactly like the /api/search/hybrid endpoint (over-fetch k*2).
             hybrid = await Score(cases, k, contamination, async c =>
@@ -57,7 +59,7 @@ internal static class RetrievalBenchmark
                 var qv = await emb.GenerateEmbeddingAsync(c.Query, EmbeddingKind.Query);
                 var semHits = await provider.SearchSemanticAsync(qv, k * 2);
                 return HybridFusion.ReciprocalRankFusion(ftsHits, semHits, k);
-            });
+            }, Bucket(outcomes, "hybrid"));
         }
         else
         {
@@ -69,9 +71,22 @@ internal static class RetrievalBenchmark
         return (fts, semantic, hybrid, contamination);
     }
 
+    /// <summary>The per-retriever outcome list to fill, or null when the caller only wants the metrics (#174).</summary>
+    private static List<CaseOutcome>? Bucket(IDictionary<string, List<CaseOutcome>>? outcomes, string retriever)
+    {
+        if (outcomes is null) return null;
+        if (!outcomes.TryGetValue(retriever, out var list)) outcomes[retriever] = list = [];
+        return list;
+    }
+
+    /// <param name="outcomes">
+    /// When supplied, each case's rank-1 hit is recorded here (#174). Optional so the aggregate path is
+    /// unchanged for callers that only want the metrics.
+    /// </param>
     private static async Task<MetricSet> Score(
         List<GoldenCase> cases, int k, ICollection<string> contamination,
-        Func<GoldenCase, Task<IReadOnlyList<SearchResult>>> retrieve)
+        Func<GoldenCase, Task<IReadOnlyList<SearchResult>>> retrieve,
+        ICollection<CaseOutcome>? outcomes = null)
     {
         double sumP1 = 0, sumPk = 0, sumRecall = 0, sumRr = 0;
         var n = 0;
@@ -97,6 +112,11 @@ internal static class RetrievalBenchmark
             bool Match(GraphNode node) => GoldenMatch.Matches(node, c);
 
             var firstHit = ranked.FindIndex(Match);
+            // Recorded from the SAME `ranked` list the metrics are computed from (#174) — a per-case record
+            // built from anything else could disagree with the aggregate it is meant to explain.
+            var top1 = ranked.Count > 0 ? ranked[0] : null;
+            outcomes?.Add(new CaseOutcome(c.Query, top1?.Id ?? "", top1?.Type ?? "", firstHit == 0));
+
             sumP1 += firstHit == 0 ? 1 : 0;
             var relevantInTopK = ranked.Take(k).Count(Match);
             sumPk += (double)relevantInTopK / k;

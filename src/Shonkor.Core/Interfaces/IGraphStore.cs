@@ -121,4 +121,31 @@ public interface IGraphStore
     /// the whole graph has been (re)built under that scheme.
     /// </summary>
     Task SetNodeIdSchemeVersionAsync(int version, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// An opaque identifier of the toolchain that produced this graph — the set of parsers and plugin
+    /// assemblies that interpreted its files (#408). <c>null</c> for a graph stamped before this existed.
+    ///
+    /// <para>
+    /// Deliberately opaque. The value is "a fingerprint of the toolchain", not "an assembly id": today it is
+    /// computed from assembly MVIDs, and a later revision may fold in plugin contract hashes or configuration
+    /// without touching this contract. Pinning the source in the type would make every such extension a
+    /// contract change.
+    /// </para>
+    ///
+    /// <para>
+    /// It exists because the incremental scan's key covers only file CONTENT. A corrected parser or a rebuilt
+    /// plugin changes no file, so every file looks unchanged and the correction never reaches the graph —
+    /// measured: a full rescan of a real solution with a corrected parser moved 0 of 1 679 wrongly-tiered
+    /// edges. Comparing this value is what turns that into a reparse.
+    /// </para>
+    /// </summary>
+    Task<string?> GetToolchainFingerprintAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stamps the graph with the toolchain <paramref name="fingerprint"/>. Called after a full scan, once the
+    /// whole graph has been (re)built by that toolchain — the same placement, and the same reasoning, as
+    /// <see cref="SetNodeIdSchemeVersionAsync"/>.
+    /// </summary>
+    Task SetToolchainFingerprintAsync(string fingerprint, CancellationToken cancellationToken = default);
 }

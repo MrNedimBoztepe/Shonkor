@@ -2,6 +2,9 @@
 
 using Microsoft.Data.Sqlite;
 
+using Shonkor.Core.Models;
+using Shonkor.Core.Services;
+
 namespace Shonkor.Infrastructure.Storage;
 
 /// <summary>
@@ -195,8 +198,94 @@ internal static class SqliteSchema
             "CREATE TABLE IF NOT EXISTS Meta (Key TEXT PRIMARY KEY, Value TEXT);", cancellationToken).ConfigureAwait(false);
 
         await NormalizeExistingEmbeddingsOnceAsync(connection, cancellationToken).ConfigureAwait(false);
+        await RepairEdgeProvenanceOnceAsync(connection, cancellationToken).ConfigureAwait(false);
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Meta key gating the one-time edge-provenance repair. Bump the suffix to run a new revision.</summary>
+    internal const string ProvenanceRepairMetaKey = "provenanceRepairV1";
+
+    /// <summary>Diagnostic source of the repair's audit rows, queryable via <c>get_diagnostics</c>.</summary>
+    internal const string ProvenanceRepairDiagnosticSource = "provenance.repair";
+
+    /// <summary>
+    /// #399, one-time repair: moves edges that hold a trust tier their relationship may not hold onto the
+    /// tier their producer would assign today. 1,354 such edges were measured across four real graphs —
+    /// LLM concept links, path-based Helix membership and patched Sitecore config registrations, all
+    /// claiming compiler-grade trust.
+    ///
+    /// <para>
+    /// Three causes put them there and none of them can be undone by re-indexing: a plugin binary that
+    /// predated the contract it was built against (#401), post-processor edges that bypassed the stamp
+    /// (#400), and the additive <c>Provenance</c> column itself, which backfilled <c>0</c> onto every edge
+    /// that existed before it — all five live graphs predate that column. On top of that the persistence
+    /// merge keeps the MIN provenance on conflict, so trust only ever ratchets UP: a wrong <c>Extracted</c>
+    /// stamp is unreachable through the normal write path.
+    /// </para>
+    ///
+    /// <para>
+    /// Hence a direct <c>UPDATE</c>. A migration runs BELOW the runtime merge rule — that is what migrations
+    /// are for — and it is deliberately not a delete-and-rescan, which would destroy the edge identity the
+    /// before/after audit depends on. (When this was written, rescanning would additionally have re-emitted
+    /// <c>RoslynAstParser</c>'s name-guessed <c>IMPLEMENTS</c>/<c>EXTENDS</c> at <c>Extracted</c>; #402 has
+    /// since fixed that, so a rescan is no longer harmful in that particular way — but it still cannot
+    /// repair those two families on a graph indexed before #402, because there both producers sit at
+    /// <c>Extracted</c> indistinguishably.)
+    /// </para>
+    ///
+    /// <para>
+    /// The predicate is <see cref="ProvenanceInvariant.Rules"/>, so what counts as wrong is defined in one
+    /// place, is unit-tested, and drives the report the guard prints. Families whose producer is not
+    /// identifiable from <c>(RelationType, Provenance)</c> carry no repair target and are left alone —
+    /// today <c>IMPLEMENTS</c>/<c>EXTENDS</c>, until #402 makes the two producers distinguishable.
+    /// </para>
+    ///
+    /// Gated by a <c>Meta</c> flag so it runs once; idempotent regardless, because after it has run the
+    /// predicate matches nothing. Each repaired family leaves an <c>Info</c> diagnostic with its count, so
+    /// the change is auditable after the fact instead of only having happened.
+    /// </summary>
+    private static async Task RepairEdgeProvenanceOnceAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        var alreadyDone = await ScalarStringAsync(connection,
+            $"SELECT Value FROM Meta WHERE Key = '{ProvenanceRepairMetaKey}';", cancellationToken).ConfigureAwait(false);
+        if (alreadyDone == "1") return;
+
+        foreach (var rule in ProvenanceInvariant.Rules)
+        {
+            if (rule.RepairTo is not { } repairTo) continue; // producer not identifiable — see #402
+
+            var legitimate = string.Join(", ", rule.Legitimate.Select(t => ((int)t).ToString()));
+
+            await using var update = connection.CreateCommand();
+            update.CommandText =
+                $"""
+                UPDATE Edges SET Provenance = @to
+                WHERE RelationType = @rel AND Provenance NOT IN ({legitimate});
+                """;
+            update.Parameters.AddWithValue("@to", (int)repairTo);
+            update.Parameters.AddWithValue("@rel", rule.Relationship);
+
+            var changed = await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            if (changed == 0) continue;
+
+            await using var audit = connection.CreateCommand();
+            audit.CommandText =
+                """
+                INSERT INTO Diagnostics (Source, Code, Severity, Message, NodeId, FilePath)
+                VALUES (@src, 'provenance.repair.applied', @sev, @msg, NULL, NULL);
+                """;
+            audit.Parameters.AddWithValue("@src", ProvenanceRepairDiagnosticSource);
+            audit.Parameters.AddWithValue("@sev", (int)DiagnosticSeverity.Info);
+            audit.Parameters.AddWithValue("@msg",
+                $"{changed} '{rule.Relationship}' edge(s) moved to {repairTo.ToString().ToLowerInvariant()} "
+                + $"(producer: {rule.Producer}). They claimed a tier this relationship may not hold.");
+            await audit.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await ExecuteAsync(connection,
+            $"INSERT OR REPLACE INTO Meta (Key, Value) VALUES ('{ProvenanceRepairMetaKey}', '1');",
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

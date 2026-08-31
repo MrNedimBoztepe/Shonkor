@@ -6,7 +6,7 @@ This chapter describes the static decomposition of the Shonkor system into logic
 
 ## 5.1 Overall System (Level 1)
 
-The system separates layers strictly (Clean Architecture). Four projects carry the runtime; the CMS parsers ship as **separate, pre-built plugin assemblies**, and the benchmark harness is its own project.
+The system separates layers strictly (Clean Architecture). Four projects carry the runtime; the CMS and JS/TS parsers ship as **separate, pre-built plugin assemblies**, and the benchmark harness is its own project.
 
 ```mermaid
 graph TD
@@ -21,17 +21,18 @@ graph TD
       P1[Shonkor.Plugin.Sitecore]
       P2[Shonkor.Plugin.Kentico]
       P3[Shonkor.Plugin.Optimizely]
+      P4[Shonkor.Plugin.TypeScript]
     end
     plugins -.->|IFileParser contract| Core
     Infra -.->|AssemblyPluginLoader, only if Active| plugins
 ```
 
 ### 1. Shonkor.Core (Domain Layer)
-* **Responsibility**: Defines the knowledge graph's data structures and the abstractions for parsing, retrieval and persistence. It holds no *infrastructure* dependencies (no SQLite, no HTTP) — but it is **not dependency-free**: it carries the AST compiler libraries (Roslyn, Esprima, YamlDotNet), because parsing *is* domain work here.
+* **Responsibility**: Defines the knowledge graph's data structures and the abstractions for parsing, retrieval and persistence. It holds no *infrastructure* dependencies (no SQLite, no HTTP) — but it is **not dependency-free**: it carries the AST compiler library (Roslyn), because C# parsing *is* domain work here. The CMS/JS content-model libraries are **not** in Core — Esprima (#312) and YamlDotNet (#348) live inside the plugins that use them, as their private dependencies.
 * **Important Building Blocks**:
   * `GraphNode`, `GraphEdge`, `SearchResult`, `GraphStatistics`, `NodeTypeDescriptor` (Models)
   * `IFileParser`, `IGraphStorageProvider`, `IGraphSearch`, `IEmbeddingService` (Interfaces)
-  * Parsers: `RoslynAstParser` (C#, incl. type references), `JavaScriptParser`, `PhpModuleParser`, `GraphQLParser`, `MarkdownHierarchyParser`
+  * Parsers: `RoslynAstParser` (C#, incl. type references), `PhpModuleParser`, `GraphQLParser`, `MarkdownHierarchyParser`. JS/TS is **not** in the host: `TypeScriptParser` ships in the installable `shonkor-typescript` plugin (5.1), which carries its Node sidecar and its private Esprima fallback itself.
   * `ContextCapsuleSynthesizer`: assembles prompt-ready Markdown contexts. Budget-aware (`CapsuleOptions`): seeds render first and in full, the remainder fills a bounded token budget by structural relevance, and a hub cap keeps a 2-hop expansion from exploding the prompt.
   * **`HybridRetrieval`** — see 5.2. The single retrieval entry point.
   * `HybridFusion`: Reciprocal Rank Fusion of two ranked result lists.
@@ -71,6 +72,9 @@ graph TD
 ### 5. Shonkor.Bench (Measurement)
 * **Responsibility**: The single benchmark harness — token reduction, retrieval precision (P@1 / P@k / Recall@k / MRR for FTS, vector and hybrid), the matched-budget RAG head-to-head, and answer groundedness. Golden sets live under `bench/golden/`; `--baseline` gates a run against stored metrics, and `--check-circularity` guards a golden set from becoming self-matching.
 * It **supersedes** the former `Shonkor.Eval` and `Shonkor.Benchmarks` projects, which no longer exist.
+* **Aggregates vs. cases (#174)**: the metrics are means, and a mean that moves does not say *which* cases moved — the two readings of a small shift ("noise" vs. "a systematic effect at this sample size") are indistinguishable from the aggregate alone. Every run therefore also writes `bench/cases.json` (each case's rank-1 hit: id, node type, matched), and `--diff <before> <after>` reports the cases whose top hit changed, classified **REGRESSED / FIXED / same-verdict**. It needs no database (so a recorded run can be diffed after its graph is gone) and **always exits 0** — it is a lens, not a gate; `--baseline` owns pass/fail.
+* **Decomposing the graph's contribution — PAIRED, in one process (#189/#284)**: the 2×2 credits the graph with a hybrid-diagonal `+9,1 pp`, but that bundles two things — the graph's *topology* and the fact that its indexed unit (a node's name + AI summary) reads like intent while a raw source chunk does not. `--compare-rag --enrich-baseline` gives the baseline's chunks the same summaries and scores that enriched baseline **in the same process, against the same cases and the same per-query budget** as the plain one, then reports the split. The pairing is load-bearing: an earlier attempt compared a *plain* run to a separate *enriched* run, but `bench/*.md` is rewritten every run, so the chunk set drifted between them and the two "plain" baselines were not even equal. A caution from that first attempt is now corrected in the record: the baseline keyword arm firing on the same 11/33 in both arms is **not** evidence that enrichment failed to reach the index — it did reach it; FTS5's implicit-AND over a full-sentence query simply cannot match a summary that lacks the query's function words. The decomposition is reported against the confidence interval, never as a point estimate — on the 33-case set the arms differ by ~3 cases, inside the noise band.
+* **The harness is itself under test (#191)**: its pure logic — RRF fusion, the budgeted chunk pick, the FTS keyword arm, the `GoldenMatch` coverage matcher, and `CaseDiff` — is unit-tested from `Shonkor.Tests` via `InternalsVisibleTo` and an `extern alias bench`. This is not optional polish: the RAG coverage metric once measured **nothing** for an unknown period (#157) because no test asserted that a bare expected name could resolve to a node. A harness that under-reports is loud; one that reports a plausible number for a comparison it never performed is not.
 
 ---
 

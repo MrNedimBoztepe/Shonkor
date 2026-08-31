@@ -25,6 +25,16 @@ public sealed class McpToolContext
     /// <summary>Optional file parsers for filesystem-aware tools (reindex/check_edit/freshness); null when remote.</summary>
     public IEnumerable<IFileParser>? FileParsers { get; }
 
+    /// <summary>
+    /// The active plugin graph post-processors (#293/#294), loaded once with the parsers at server startup.
+    /// Handed to the <see cref="GraphIndexScanner"/> on the reindex path so a MCP-driven scan is constructed
+    /// exactly like the Web/CLI index (#319). These are a WHOLE-GRAPH phase (<see cref="IGraphPostProcessor"/>):
+    /// the scanner runs them only on a full <c>ScanDirectoryAsync</c>, never on a single-file reindex — so on
+    /// the edit loop they take effect on the next full scan, not per edited file. Empty when no plugins are
+    /// active or on the remote/tenant-locked relay.
+    /// </summary>
+    public IReadOnlyList<IGraphPostProcessor> PostProcessors { get; }
+
     /// <summary>Optional shared Roslyn compilation cache for incremental semantic relinking; null = name mode.</summary>
     public SemanticCompilationCache? CompilationCache { get; }
 
@@ -59,7 +69,8 @@ public sealed class McpToolContext
         IEmbeddingService? embeddingService,
         IEnumerable<IFileParser>? fileParsers,
         SemanticCompilationCache? compilationCache,
-        bool persistentSession = true)
+        bool persistentSession = true,
+        IReadOnlyList<IGraphPostProcessor>? postProcessors = null)
     {
         ProjectManager = projectManager ?? throw new ArgumentNullException(nameof(projectManager));
         Synthesizer = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
@@ -69,6 +80,7 @@ public sealed class McpToolContext
         FileParsers = fileParsers;
         CompilationCache = compilationCache;
         PersistentSession = persistentSession;
+        PostProcessors = postProcessors ?? Array.Empty<IGraphPostProcessor>();
     }
 
     /// <summary>
@@ -156,6 +168,39 @@ public sealed class McpToolContext
     /// Returns a one-line "may be stale" warning to append to an analysis result when the resolved symbol's
     /// FILE changed on disk since indexing, or "" when fresh / untracked / no filesystem access.
     /// </summary>
+    /// <summary>
+    /// Names the project an answer came from, and how big it is — e.g. <c> in project 'shonkor' (2.726 nodes)</c>.
+    ///
+    /// <para>
+    /// Meant above all for the EMPTY answer (#286). "No matches for 'X'." reads as <i>this symbol does not
+    /// exist</i>. The true statement is <i>this symbol does not exist in project X</i>, and a reader supplies
+    /// the missing words themselves — wrongly, when the index is pointed somewhere else. That is the #157
+    /// class in our own tool surface: a plausible answer to a question nobody asked. An agent hitting this
+    /// had to run <c>get_stats</c> AND <c>orient</c> and reason from node types to work out it was querying a
+    /// different repository; the node count is what finally gave it away, so it belongs where it is free.
+    /// </para>
+    /// <para>
+    /// Never throws: a scope note that can fail would turn a working search into an error, which is a worse
+    /// trade than an unlabelled result.
+    /// </para>
+    /// </summary>
+    public async Task<string> ScopeSuffixAsync(IGraphStore storage, string? projectName, CancellationToken ct = default)
+    {
+        try
+        {
+            var name = ResolveProjectName(projectName);
+            if (string.IsNullOrWhiteSpace(name)) name = ProjectManager.GetActiveProjectName();
+            if (string.IsNullOrWhiteSpace(name)) return string.Empty;
+
+            var stats = await storage.GetStatisticsAsync(ct).ConfigureAwait(false);
+            return $" in project '{name}' ({stats.TotalNodes:N0} nodes)";
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
     public async Task<string> StaleSuffixAsync(IGraphStore storage, GraphNode def, CancellationToken ct = default)
     {
         if (FileParsers == null || string.IsNullOrEmpty(def.FilePath)) return string.Empty;
@@ -198,7 +243,15 @@ public sealed class McpToolContext
 
         var stale = await StaleSuffixAsync(storage, def).ConfigureAwait(false);
 
-        if (incident.Count == 0) return string.Format(emptyMessage, def.Name, def.Type) + stale;
+        if (incident.Count == 0)
+        {
+            // #288 (Option 3): never emit an all-clear for a node type that structurally cannot carry the
+            // queried edge — point the caller at the node that can, instead of "safe to change in isolation".
+            var hint = EdgeCarrierRedirectHint(def);
+            if (!string.IsNullOrEmpty(hint))
+                return $"No {(incoming ? "inbound references to" : "outbound dependencies of")} '{def.Name}' ({def.Type})." + hint + stale;
+            return string.Format(emptyMessage, def.Name, def.Type) + stale;
+        }
 
         var filterNote = maxProvenance is { } mp ? $" (provenance ≤ {mp.ToString().ToLowerInvariant()})" : "";
         var sb = new System.Text.StringBuilder();
@@ -211,7 +264,11 @@ public sealed class McpToolContext
                 var other = neighbours.GetValueOrDefault(otherId);
                 var name = other?.Name ?? otherId;
                 var summary = other != null && !string.IsNullOrEmpty(other.Summary) ? $"  — {other.Summary}" : "";
-                sb.Append($"{g.Key}\t{name}\t{ToHandle(otherId, basePath)} {ProvenanceTag(e.Provenance)}{summary}\n");
+                // The anchor of an agent-authored edge is its SOURCE, which is `def` on the outbound side
+                // and the neighbour on the inbound one — the direction has to be resolved here, not
+                // assumed, or the divergence check compares the assertion against the wrong node.
+                var anchor = incoming ? other : def;
+                sb.Append($"{g.Key}\t{name}\t{ToHandle(otherId, basePath)} {ProvenanceTag(e, anchor)}{summary}\n");
             }
         }
         return sb.ToString().TrimEnd() + stale;

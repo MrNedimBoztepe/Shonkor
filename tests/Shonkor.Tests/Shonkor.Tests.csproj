@@ -53,5 +53,29 @@
     <ProjectReference Include="..\..\src\Shonkor.Plugin.Sitecore\Shonkor.Plugin.Sitecore.csproj" />
     <ProjectReference Include="..\..\src\Shonkor.Plugin.Kentico\Shonkor.Plugin.Kentico.csproj" />
     <ProjectReference Include="..\..\src\Shonkor.Plugin.Optimizely\Shonkor.Plugin.Optimizely.csproj" />
+    <!-- The TypeScript base plugin (#292): its sidecar tree (incl. node_modules) is copied next to the test
+         binary so the round-trip fixture test can start the real Node process. -->
+    <ProjectReference Include="..\..\src\Shonkor.Plugin.TypeScript\Shonkor.Plugin.TypeScript.csproj" />
   </ItemGroup>
+
+  <!--
+    Mirror the built TypeScript plugin folder (sidecar tree incl. node_modules, sidecar.settings.json)
+    next to the test binary. The parser resolves its plugin folder from its assembly location, which for a
+    ProjectReference is the test bin dir — so these files must sit there for the real round-trip test.
+    Runs after the referenced plugin has built (its sidecar copy target populated its own bin first).
+  -->
+  <Target Name="CopyTypeScriptPluginSidecarForTests" AfterTargets="Build">
+    <PropertyGroup>
+      <_TsPluginOut>$(MSBuildThisFileDirectory)..\..\src\Shonkor.Plugin.TypeScript\bin\$(Configuration)\net10.0</_TsPluginOut>
+    </PropertyGroup>
+    <ItemGroup>
+      <_TsPluginPayload Include="$(_TsPluginOut)\sidecar\**\*" />
+      <_TsPluginSettings Include="$(_TsPluginOut)\sidecar.settings.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_TsPluginPayload)"
+          DestinationFiles="@(_TsPluginPayload->'$(OutDir)sidecar\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" Condition="'@(_TsPluginPayload)' != ''" />
+    <Copy SourceFiles="@(_TsPluginSettings)" DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" Condition="'@(_TsPluginSettings)' != ''" />
+  </Target>
 </Project>

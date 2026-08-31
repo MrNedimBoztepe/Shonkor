@@ -55,34 +55,9 @@ public class ParserAndStorageTests
         Assert.NotNull(implementsEdge);
     }
 
-    [Fact]
-    public async Task JavaScriptParser_ShouldExtractImports()
-    {
-        // Arrange
-        var parser = new JavaScriptParser();
-        var jsCode = """
-            import { useState, useEffect } from 'react';
-            import UserService from './UserService';
-
-            export default function UserCard() {
-                return "User";
-            }
-            """;
-
-        // Act
-        var (nodes, edges) = await parser.ParseAsync("UserCard.js", jsCode);
-
-        // Assert
-        Assert.NotEmpty(nodes);
-        var componentNode = nodes.FirstOrDefault(n => n.Type == "JSComponent");
-        Assert.NotNull(componentNode);
-
-        // Check imports
-        var importEdges = edges.Where(e => e.Relationship == "IMPORTS").ToList();
-        Assert.NotEmpty(importEdges);
-        Assert.Contains(importEdges, e => e.TargetId.Contains("react"));
-        Assert.Contains(importEdges, e => e.TargetId.Contains("userservice", StringComparison.OrdinalIgnoreCase));
-    }
+    // (#312) The former JavaScriptParser_ShouldExtractImports smoke test is gone with the in-host parser.
+    // JS/TS import extraction is covered sharper by TypeScriptPluginTests (real sidecar) and by the
+    // JsGraphqlPhpParserRegressionTests BUG-012 cases against the plugin's Esprima fallback.
 
     [Fact]
     public async Task PhpModuleParser_ShouldExtractOxidModuleExtensions()
@@ -229,15 +204,23 @@ public class ParserAndStorageTests
     public async Task Scanner_ShouldStampParserDefaultProvenance()
     {
         // Enforcement (0.1c): the scanner stamps each parser's edges with the parser's DefaultProvenance,
-        // so deterministic Roslyn edges stay Extracted while heuristic JS edges become Inferred — even
-        // though neither parser tags provenance per edge.
+        // so deterministic Roslyn edges stay Extracted while heuristic JS edges become Inferred.
+        //
+        // The stamp only ever RAISES uncertainty, so a parser that rates an individual edge weaker than its
+        // own baseline keeps that rating. Since #402 RoslynAstParser does exactly that for its syntactic
+        // IMPLEMENTS/EXTENDS, which is why the old wording here — "neither parser tags provenance per edge"
+        // — is no longer true, and why this test asserts the baseline for the untagged edges only.
         var dir = Path.Combine(Path.GetTempPath(), $"shonkor_prov_{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         try
         {
             using var storage = new SqliteGraphStorageProvider(":memory:");
             await storage.InitializeAsync();
-            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser(), new JavaScriptParser() });
+            // #312: the JS side is the plugin's TypeScriptParser (DefaultProvenance = Inferred). An explicit
+            // bogus NodePath pins it to the deterministic Esprima fallback — no Node process, same edge shape.
+            await using var jsParser = new Shonkor.Plugin.TypeScript.TypeScriptParser(
+                new Shonkor.Plugin.TypeScript.SidecarSettings { NodePath = Path.Combine(dir, "no-such-node.exe") });
+            var scanner = new GraphIndexScanner(storage, new IFileParser[] { new RoslynAstParser(), jsParser });
 
             var csFile = Path.Combine(dir, "Foo.cs");
             await File.WriteAllTextAsync(csFile, "namespace D; public class Foo { public void Bar() {} }");
@@ -252,7 +235,7 @@ public class ParserAndStorageTests
             Assert.NotEmpty(contains);
             Assert.All(contains, e => Assert.Equal(Provenance.Extracted, e.Provenance));
 
-            // Heuristic JS IMPORTS edge → Inferred (stamped from the JavaScriptParser default).
+            // Heuristic JS IMPORTS edge → Inferred (stamped from the TypeScriptParser default).
             var imports = await storage.GetEdgesByRelationshipAsync("IMPORTS");
             Assert.NotEmpty(imports);
             Assert.All(imports, e => Assert.Equal(Provenance.Inferred, e.Provenance));
@@ -1128,7 +1111,7 @@ public class ParserAndStorageTests
                 Name = "BlogBox",
                 Properties = new Dictionary<string, string> {
                     ["sitecorePath"] = "/sitecore/layout/Renderings/Feature/Blog/BlogBox",
-                    ["controller"] = "MuM.Feature.Blog.Controllers.BlogController, MuM.Feature.Blog",
+                    ["controller"] = "Acme.Feature.Blog.Controllers.BlogController, Acme.Feature.Blog",
                     ["componentName"] = "BlogBox"
                 }
             },

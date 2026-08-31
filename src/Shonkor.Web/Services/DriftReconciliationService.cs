@@ -112,13 +112,20 @@ public sealed class DriftReconciliationService : BackgroundService
                 var storage = await _projectManager.GetStorageProviderAsync(project.Name, cancellationToken).ConfigureAwait(false);
 
                 var activeParsers = new List<IFileParser>(_parsers);
-                using var pluginLoad = enablePlugins
-                    ? AssemblyPluginLoader.LoadActive(_projectManager.WorkspacePath)
+                // Pass an IPluginHost so a plugin that opts into IPluginInitializable (#306) — e.g. the #292
+                // TypeScript sidecar — surfaces its diagnostics (timeouts/degradation/parse errors) through
+                // this background service's logger instead of silently discarding them into a NullLogger.
+                await using var pluginLoad = enablePlugins
+                    ? AssemblyPluginLoader.LoadActive(_projectManager.WorkspacePath, new PluginHost(_logger))
                     : AssemblyPluginLoadResult.Empty;
                 activeParsers.AddRange(pluginLoad.Parsers);
 
                 var scanner = new GraphIndexScanner(storage, activeParsers, _logger, semanticCsharp, _compilationCache,
-                    postProcessors: pluginLoad.PostProcessors.Concat(Shonkor.Infrastructure.Services.FirstPartyPostProcessors.Create()));
+                    // The first-party post-processors come from the scanner's constructor now (#332), so this
+                    // path passes only the plugins'. (Drift reconcile is not a full scan, so neither runs here —
+                    // they take effect on the next ScanDirectoryAsync. The hand-appended list this replaces was
+                    // therefore dead code, which is how the coverage gap stayed invisible.)
+                    postProcessors: pluginLoad.PostProcessors);
                 var projectConfig = _projectManager.GetProjectConfig(project.Name);
 
                 var result = await scanner.ReconcileDriftAsync(project.Path, projectConfig.ExcludePatterns, cancellationToken).ConfigureAwait(false);

@@ -78,7 +78,8 @@ public sealed class McpRequestHandler
         IEnumerable<IFileParser>? fileParsers = null,
         SemanticCompilationCache? compilationCache = null,
         bool persistentSession = true,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IReadOnlyList<IGraphPostProcessor>? postProcessors = null)
     {
         ArgumentNullException.ThrowIfNull(projectManager);
         ArgumentNullException.ThrowIfNull(synthesizer);
@@ -86,7 +87,7 @@ public sealed class McpRequestHandler
         _logger = logger;
 
         _ctx = new McpToolContext(projectManager, synthesizer, contextProjectName, lockToContextProject,
-            embeddingService, fileParsers, compilationCache, persistentSession);
+            embeddingService, fileParsers, compilationCache, persistentSession, postProcessors);
         _registry = new McpToolRegistry(McpToolRegistryFactory.CreateTools());
     }
 

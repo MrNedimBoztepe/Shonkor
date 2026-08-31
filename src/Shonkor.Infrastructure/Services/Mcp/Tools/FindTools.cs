@@ -25,7 +25,7 @@ public sealed class SearchGraphTool : IMcpTool
                 limit = new { type = "integer", description = "Max number of results to return (default 10, max 100)" },
                 type = new { type = "string", description = "Filter results to a specific node type (e.g. 'Class', 'Method', 'Interface', 'File', 'Record', 'Property', 'MarkdownSection', 'Concept'). Omit for all types." },
                 verbose = new { type = "boolean", description = "Include each hit's graph connections and full metadata as JSON (default false). Leave false for token-efficient lookups." },
-                projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
+                projectName = new { type = "string", description = "Optional project context name (e.g. 'my-app' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "query" }
         }
@@ -53,7 +53,7 @@ public sealed class SearchGraphTool : IMcpTool
             // no connections, no indentation. Closer to ripgrep output than verbose JSON.
             if (results.Count == 0)
             {
-                return SendToolResponse(id, $"No matches for '{query}'{(typeFilter != null ? $" (type={typeFilter})" : "")}.");
+                return SendToolResponse(id, $"No matches for '{query}'{(typeFilter != null ? $" (type={typeFilter})" : "")}{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.");
             }
 
             var lines = results.Select(r =>
@@ -110,7 +110,7 @@ public sealed class LocateTool : IMcpTool
             {
                 query = new { type = "string", description = "The symbol name or search text" },
                 limit = new { type = "integer", description = "Max number of results to return (default 15, max 100)" },
-                projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
+                projectName = new { type = "string", description = "Optional project context name (e.g. 'my-app' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "query" }
         }
@@ -130,7 +130,7 @@ public sealed class LocateTool : IMcpTool
         var results = await storage.SearchAsync(query, limit).ConfigureAwait(false);
         if (results.Count == 0)
         {
-            return SendToolResponse(id, $"No matches for '{query}'.");
+            return SendToolResponse(id, $"No matches for '{query}'{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.");
         }
 
         var basePath = ctx.GetProjectBasePath(projectName);
@@ -207,7 +207,7 @@ public sealed class SearchSemanticTool : IMcpTool
             var hint = anyBelow > 0
                 ? $" {anyBelow} weak hit(s) below the similarity floor ({minScore:0.##}) were hidden — lower minScore to see them."
                 : " (Have nodes been embedded by the enrichment worker yet?)";
-            return SendToolResponse(id, $"No semantically similar nodes for '{query}' at or above similarity {minScore:0.##}.{hint}");
+            return SendToolResponse(id, $"No semantically similar nodes for '{query}' at or above similarity {minScore:0.##}{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.{hint}");
         }
 
         var lines = results.Select(r =>
@@ -268,7 +268,7 @@ public sealed class SearchHybridTool : IMcpTool
         var fused = await ctx.HybridSearchAsync(storage, query, limit).ConfigureAwait(false);
         if (fused.Count == 0)
         {
-            return SendToolResponse(id, $"No hybrid matches for '{query}'.");
+            return SendToolResponse(id, $"No hybrid matches for '{query}'{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.");
         }
 
         var lines = fused.Select(r =>

@@ -12,6 +12,16 @@
 //   shonkor-bench <db> --set <f>       score a curated golden set JSON (e.g. bench/golden/agent-queries.json)
 //                                      instead of the auto-bootstrapped self-retrieval set
 //   shonkor-bench <db> --baseline <f>  gate P@1/MRR/Recall@k against baseline JSON, >5% rel drop exits 2
+//   shonkor-bench <db> --enrich-baseline
+//                                      give the RAG baseline's chunks the same AI summaries the graph's
+//                                      nodes carry (#189). The 2x2's "+9,1 pp = the graph" bundles topology
+//                                      with the summary-enriched indexed unit; run WITH and WITHOUT this
+//                                      flag and the difference between the two baselines is what the
+//                                      summaries alone bought — the rest is topology.
+//   shonkor-bench --diff <a> <b>       per-case rank-1 diff between two runs' bench/cases.json (#174):
+//                                      which cases changed their top hit, and in which direction. Needs no
+//                                      database. A LENS, not a gate — always exits 0; --baseline owns
+//                                      pass/fail. Every run writes bench/cases.json for this.
 //   shonkor-bench <db> --check-circularity <set> [--words N]
 //                                      validate a golden set for circularity (query vs target embedding
 //                                      document); exits 2 if any case shares > N content words (default 4)
@@ -45,6 +55,45 @@ if (!File.Exists(dbPath))
 var k = ArgValue(args, "--k") is { } ks && int.TryParse(ks, out var kp) ? kp : 10;
 var baselinePath = ArgValue(args, "--baseline");
 var setPath = ArgValue(args, "--set");
+
+// --diff <before.json> <after.json> (#174): which cases changed their rank-1 hit between two runs.
+// Placed before the database is opened — comparing two recorded runs needs no graph, and requiring one
+// would stop you diffing a run you no longer have the DB for, which is precisely when you want to.
+if (ArgValue(args, "--diff") is { } beforePath)
+{
+    var afterPath = ArgAfter(args, "--diff", 2);
+    if (afterPath is null)
+    {
+        Console.Error.WriteLine("[Error] --diff takes TWO files: --diff <before-cases.json> <after-cases.json>.");
+        return 2;
+    }
+    foreach (var p in new[] { beforePath, afterPath })
+    {
+        if (File.Exists(p)) continue;
+        Console.Error.WriteLine($"[Error] Cases file not found at '{p}'.");
+        return 2;
+    }
+
+    var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+    var beforeRuns = JsonSerializer.Deserialize<Dictionary<string, List<CaseOutcome>>>(File.ReadAllText(beforePath), opts) ?? [];
+    var afterRuns = JsonSerializer.Deserialize<Dictionary<string, List<CaseOutcome>>>(File.ReadAllText(afterPath), opts) ?? [];
+
+    Console.WriteLine($"# Per-case rank-1 diff\n\n`{beforePath}` → `{afterPath}`\n");
+    var regressions = 0;
+    foreach (var retriever in beforeRuns.Keys.Intersect(afterRuns.Keys, StringComparer.Ordinal).Order(StringComparer.Ordinal))
+    {
+        var flips = CaseDiff.Compare(beforeRuns[retriever], afterRuns[retriever]);
+        regressions += flips.Count(f => f.Direction == "REGRESSED");
+        Console.WriteLine(CaseDiff.Report(flips, retriever));
+    }
+
+    // Exit 0 either way: this is a LENS, not a gate. The baseline gate (--baseline) owns pass/fail; a flip
+    // is information to read, and failing on one would make people stop running it.
+    Console.WriteLine(regressions == 0
+        ? "No case regressed its rank-1 hit."
+        : $"{regressions} case(s) regressed — read them before calling the aggregate noise.");
+    return 0;
+}
 var compareRag = args.Contains("--compare-rag");
 
 List<GoldenCase>? golden = null;
@@ -296,8 +345,11 @@ var token = await TokenBenchmark.RunAsync(provider, synthesizer, Console.Out);
 Console.WriteLine($"  -> {token.ReductionPct:F1}% reduction over {token.Queries} queries ({token.NaiveTokens:N0} -> {token.CapsuleTokens:N0} tokens)\n");
 
 Console.WriteLine("[2/2] Retrieval precision");
+// Per-case rank-1 records (#174). Always collected — the artifact is only useful if it exists for the run
+// you later want to compare against, and by then it is too late to have remembered a flag.
+var outcomes = new Dictionary<string, List<CaseOutcome>>(StringComparer.Ordinal);
 var (fts, semantic, hybrid, contamination) = await RetrievalBenchmark.RunAsync(provider, allNodes, k, Console.Out,
-    golden, setPath is null ? null : Path.GetFileName(setPath));
+    golden, setPath is null ? null : Path.GetFileName(setPath), outcomes);
 Console.WriteLine();
 
 // #136: eval-corpus hygiene is a LOUD gate, not just a silent filter. If an index-excluded meta file
@@ -345,7 +397,8 @@ if (compareRag)
 {
     Console.WriteLine("[3/3] RAG baseline head-to-head (chunked-RAG vs Shonkor capsule)");
     var ragCases = golden ?? GoldenSetGenerator.Generate(allNodes);
-    rag = await RagBaselineBenchmark.RunAsync(provider, allNodes, CreateEmbeddingService(), ragCases, synthesizer, Console.Out);
+    rag = await RagBaselineBenchmark.RunAsync(provider, allNodes, CreateEmbeddingService(), ragCases, synthesizer, Console.Out,
+        enrichBaselineChunks: args.Contains("--enrich-baseline"));
     Console.WriteLine();
 
     report.AppendLine("## RAG baseline head-to-head");
@@ -373,7 +426,20 @@ if (compareRag)
         var graphDelta = (rag.ShonkorHybridCoverage - rag.RagHybridCoverage) * 100;
         var hybridGain = (rag.RagHybridCoverage - rag.RagCoverage) * 100;
         report.AppendLine($"**The graph's isolated contribution** (hybrid diagonal, same retrieval both sides): **{graphDelta:+0.0;-0.0;0.0} pp** ({rag.ShonkorHybridCoverage:P1} vs {rag.RagHybridCoverage:P1}).");
-        report.AppendLine($"Moving the *baseline* from vector-only to hybrid gains **{hybridGain:+0.0;-0.0;0.0} pp** — but read that with the next line before concluding the keyword arm is worthless.");
+        if (rag.RagEnrichedHybridCoverage is { } enrichedCov)
+        {
+            // #189/#284 decomposition, PAIRED in one process: of the graph diagonal, how much survives once
+            // the baseline's chunks carry the same AI summaries the graph's nodes do?
+            var summaryDelta = (enrichedCov - rag.RagHybridCoverage) * 100;      // what the summaries alone buy the baseline
+            var topologyResidual = (rag.ShonkorHybridCoverage - enrichedCov) * 100; // graph over an equal-richness baseline
+            report.AppendLine();
+            report.AppendLine($"**Decomposition (#189, paired):** summary-enriched baseline hybrid = **{enrichedCov:P1}**. " +
+                $"Of the +{graphDelta:0.0} pp graph diagonal, giving the baseline equal-richness text moves it **{summaryDelta:+0.0;-0.0;0.0} pp**, " +
+                $"leaving **{topologyResidual:+0.0;-0.0;0.0} pp** to topology. " +
+                $"On this {rag.Queries}-case set the two arms differ by {Math.Abs((enrichedCov - rag.RagHybridCoverage) * rag.Queries):0} case(s), so read the split against the interval, not as a point estimate.");
+        }
+        report.AppendLine();
+        report.AppendLine($"Moving the *baseline* from vector-only to hybrid gains **{hybridGain:+0.0;-0.0;0.0} pp** — but read that withthe next line before concluding the keyword arm is worthless.");
         report.AppendLine();
         report.AppendLine($"> **Why the baseline's keyword arm barely moves it:** it returned any hit on only **{rag.RagKeywordFiredQueries} of {rag.Queries}** queries. A raw 40-line source chunk does not keyword-match plain-English intent (\"how are api tokens hashed\" finds no chunk containing all those words). Shonkor's *nodes* do — a node carries a **name** and an **AI summary** that read like intent — which is why its hybrid arm gains where the baseline's does not. So the graph diagonal above is not pure topology: part of the gap is that the graph's indexed unit is keyword-matchable and a source chunk is not. That is a real advantage of the representation, named rather than hidden.");
         report.AppendLine();
@@ -402,7 +468,8 @@ File.WriteAllText(Path.Combine("bench", "metrics.json"), JsonSerializer.Serializ
     retrieval = metrics,
     ragBaseline = rag
 }, jsonOpts));
-Console.WriteLine("Wrote bench/report.md and bench/metrics.json");
+File.WriteAllText(Path.Combine("bench", "cases.json"), JsonSerializer.Serialize(outcomes, jsonOpts));
+Console.WriteLine("Wrote bench/report.md, bench/metrics.json and bench/cases.json");
 
 if (baselinePath is not null && File.Exists(baselinePath))
 {
@@ -445,10 +512,17 @@ if (baselinePath is not null && File.Exists(baselinePath))
 
 return 0;
 
-static string? ArgValue(string[] a, string name)
+static string? ArgValue(string[] a, string name) => ArgAfter(a, name, 1);
+
+/// <summary>The <paramref name="offset"/>-th argument after <paramref name="name"/>, or null if absent.</summary>
+/// <remarks>
+/// <c>ArgValue</c> is the offset-1 case; <c>--diff</c> (#174) needs the second one too. One helper rather
+/// than two so the "is it there, and is there room?" check exists once.
+/// </remarks>
+static string? ArgAfter(string[] a, string name, int offset)
 {
     var i = Array.IndexOf(a, name);
-    return i >= 0 && i + 1 < a.Length ? a[i + 1] : null;
+    return i >= 0 && i + offset < a.Length ? a[i + offset] : null;
 }
 
 static IEmbeddingService? CreateEmbeddingService()

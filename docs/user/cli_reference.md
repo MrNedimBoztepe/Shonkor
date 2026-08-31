@@ -35,6 +35,7 @@ Scans the specified directory and builds the semantic knowledge graph.
 * **Options:**
   * `-c, --config <file>`: Path to the configuration file (Default: `shonkor.json`).
   * `--embed`: Generate code embeddings during indexing (needs a reachable Ollama backend) so semantic/hybrid search works from the CLI and MCP paths.
+* **JS/TS prerequisite:** `.ts/.tsx/.js/.jsx` analysis is supplied by the `shonkor-typescript` plugin and needs **Node ≥ v18** on the machine (auto-discovered, or pinned via `NodePath` in `plugins/shonkor-typescript/sidecar.settings.json`). Without it the index still completes, degraded to the plugin's Esprima fallback, and the run logs a warning to stderr. See [Setup Guide → Step 3](setup_guide.md#step-3-node-runtime-for-jsts-analysis).
 * **C# resolution:** exact **semantic** resolution (Roslyn `SemanticModel` — disambiguated `REFERENCES_TYPE`, method-level `CALLS`) runs **by default**. It is non-lossy (unresolved references fall back to name matching) but builds a compilation per scan (~2.9× indexing time on a mid-size C# tree). Force the faster name-based resolver with `SHONKOR_SEMANTIC_CSHARP=false`.
 * **Example:**
   ```powershell

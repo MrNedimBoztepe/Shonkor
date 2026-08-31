@@ -40,6 +40,22 @@ internal static class GoldenMatch
         nodes.Where(n => Matches(n, c)).ToList();
 }
 
+/// <summary>
+/// What one retriever did on one golden case (#174) — the per-case record behind the aggregates.
+///
+/// <para>
+/// The metrics are means, and a mean that moves tells you nothing about WHICH cases moved. When the #172
+/// nesting change shifted exact-name P@1 by 1,5 pp, "noise" was a defensible reading and so was "a
+/// systematic effect at this sample size" — indistinguishable from the aggregate alone. Recording the
+/// rank-1 hit per case makes that question answerable by diffing two runs instead of arguing.
+/// </para>
+/// </summary>
+/// <param name="Query">The golden case's query, used as the join key when diffing two runs.</param>
+/// <param name="Top1Id">Id of the rank-1 hit after meta filtering, or empty when nothing was returned.</param>
+/// <param name="Top1Type">Node type of the rank-1 hit — the axis #174 suspects (a MarkdownSection displacing code).</param>
+/// <param name="Matched">Whether the rank-1 hit satisfied the case (i.e. this case's P@1 contribution).</param>
+internal sealed record CaseOutcome(string Query, string Top1Id, string Top1Type, bool Matched);
+
 /// <summary>Aggregate retrieval metrics for one retriever over a golden set.</summary>
 internal sealed record MetricSet(int Cases, double PrecisionAt1, double PrecisionAtK, double RecallAtK, double Mrr)
 {

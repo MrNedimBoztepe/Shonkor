@@ -80,24 +80,77 @@ public class OllamaFailureShapeTests
     }
 
     /// <summary>
-    /// The #215 bug, pinned against a real socket rather than a hand-built exception.
+    /// The #215 bug, pinned <b>deterministically</b> against a hand-built exception in the exact shape a real
+    /// <c>HttpClient</c> timeout produces — so the guard has teeth on every platform, regardless of load.
+    ///
+    /// <para>
+    /// The live-fixture sibling below (<see cref="ATimeout_IsNotAConnectError_ButIsStillTransient"/>) provokes a
+    /// <i>real</i> timeout and is the better evidence when it fires — but whether the runtime buries a
+    /// <see cref="SocketException"/> in the chain depends on which phase the timeout lands in, and under load on
+    /// Linux it can land <i>before</i> a socket-level error, producing a chain with nothing to bury (#285). That
+    /// makes the live test's teeth intermittent, so it now skips rather than fails when the shape is absent —
+    /// and this test carries the invariant that must never be skipped.
+    /// </para>
+    /// <para>
+    /// The chain is the one <c>OllamaRetry</c> documents (<c>OllamaRetry.cs:98-100</c>): a
+    /// <c>TaskCanceledException</c>/<c>TimeoutException</c> on top and a <b>real, present</b>
+    /// <see cref="SocketException"/> at the bottom. That buried socket error is what gives the assertion teeth:
+    /// the #215 regression was a chain-scan that answered <c>true</c> for <i>any</i> buried
+    /// <see cref="SocketException"/>. Because one is genuinely present here, dropping the cancellation-first
+    /// guard (<c>OllamaRetry.cs:149</c>) — or scanning for the socket error first again — makes
+    /// <see cref="OllamaRetry.IsConnectError"/> return <c>true</c> and <b>fails this test</b>, which is the whole
+    /// point. It has no network or load dependency, so it is deterministically green on every platform.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ATimeout_WithABuriedSocketError_IsNotAConnectError_ButIsStillTransient_Deterministically()
+    {
+        // The exact wreckage a fired HttpClient.Timeout leaves, built inner-first: a real SocketException at the
+        // bottom (the #215 trap), wrapped up through the cancellation/timeout layers HttpClient throws on top.
+        var buriedSocketError = new SocketException();
+        var chain =
+            new TaskCanceledException("A task was canceled.",
+                new TimeoutException("The operation was canceled.",
+                    new TaskCanceledException("A task was canceled.",
+                        new IOException("The response ended prematurely.", buriedSocketError))));
+
+        // Sanity: the buried SocketException really is in the chain, so a regression genuinely has something to
+        // trip over. If this ever stops holding, the assertions below would prove nothing.
+        Assert.Contains(Flatten(chain), e => e is SocketException);
+
+        // We DID reach the backend — it just never answered in time. The cancellation-first guard settles this
+        // before the buried SocketException is ever consulted; remove that guard and this flips to true.
+        Assert.False(OllamaRetry.IsConnectError(chain),
+            "a fired HttpClient timeout is not a connection failure, even though it buries a SocketException (#215)");
+
+        // Background work should still retry a timeout — nobody is waiting on it.
+        Assert.True(OllamaRetry.IsTransient(chain));
+    }
+
+    private static IEnumerable<Exception> Flatten(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException) yield return e;
+    }
+
+    /// <summary>
+    /// The #215 bug, pinned against a real socket rather than a hand-built exception — the best-effort evidence
+    /// that the runtime still produces the shape the deterministic test above hard-codes.
     ///
     /// <para>
     /// <b>The first assertion below can pass for the wrong reason (#240), so the fixture is checked first.</b>
     /// #215's whole point was that a real <c>HttpClient</c> timeout <i>buries a <see cref="SocketException"/></i>
     /// at the bottom of the chain, which the old chain-scan then mistook for a connection failure. Whether that
     /// <c>SocketException</c> is actually there depends on how the platform tears the socket down on
-    /// cancellation. If a platform produced a bare <c>TaskCanceledException</c> with no socket error inside,
-    /// <c>IsConnectError</c> would return <c>false</c> <b>without ever reaching the code path #215 broke</b> —
-    /// a green guard, guarding nothing.
-    /// </para>
-    /// <para>
-    /// So we assert that the provoked exception still has the #215 <i>shape</i> before asserting the verdict on
-    /// it. If a future runtime stops burying the socket error, this fails loudly and says so, instead of
-    /// quietly becoming decorative.
+    /// cancellation — and, crucially, on <b>which phase the timeout fires in</b>. Under load on a constrained
+    /// runner the cancellation can land <i>before</i> the connection reaches a socket-level error, so the chain
+    /// becomes a bare <c>TaskCanceledException -&gt; TimeoutException -&gt; TaskCanceledException -&gt;
+    /// HttpIOException</c> with nothing to bury (#285). That is a genuine runtime shape, not a bug — so when it
+    /// happens this test <b>skips</b> (it cannot exercise the trap without the trap), rather than failing
+    /// intermittently and teaching the team that a red build is noise. The deterministic sibling above holds the
+    /// invariant that must never be waved through.
     /// </para>
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task ATimeout_IsNotAConnectError_ButIsStillTransient()
     {
         using var hung = FakeOllamaBackend.ThatNeverResponds();
@@ -110,10 +163,14 @@ public class OllamaFailureShapeTests
         {
             if (e is SocketException) { hasBuriedSocketError = true; break; }
         }
-        Assert.True(hasBuriedSocketError,
-            $"a real HttpClient timeout is supposed to bury a SocketException in its chain — that is the whole " +
-            $"trap #215 fell into. This one did not ({string.Join(" -> ", Chain(ex))}), so the assertions below " +
-            $"would pass without exercising the classifier at all. The guard has lost its teeth: re-derive it.");
+        // Under load the cancellation can land before any socket error, leaving nothing to bury (#285). That is a
+        // real runtime shape, not a regression — so we SKIP (never fail) and let the deterministic sibling above
+        // carry the invariant. The trap can only be exercised when the runtime actually sets it.
+        Skip.IfNot(hasBuriedSocketError,
+            $"a real HttpClient timeout USUALLY buries a SocketException in its chain — the #215 trap — but this " +
+            $"run did not ({string.Join(" -> ", Chain(ex))}). Under load the timeout can fire before the socket " +
+            $"errors, so the shape is absent and this fixture cannot exercise the classifier. The deterministic " +
+            $"test ATimeout_WithABuriedSocketError_... pins the invariant regardless (#285).");
 
         Assert.False(OllamaRetry.IsConnectError(ex), "we DID reach the backend — it just never answered");
         Assert.True(OllamaRetry.IsTransient(ex), "background work should still retry a timeout");

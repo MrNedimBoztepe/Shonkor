@@ -7,9 +7,23 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Esprima" Version="3.0.6" />
+    <!-- No Esprima here: JS/TS parsing lives in the shonkor-typescript plugin (#292/#312), which carries
+         Esprima as its own private fallback dependency. The host must take no DEPENDENCY on it: no
+         Esprima.dll next to the host binaries and no entry in the host's .deps.json, i.e. nothing that
+         could resolve Esprima in the default ALC. The plugin's copy does travel with the host — as bytes
+         inside the embedded plugin ZIP — and is materialised into the plugin's install folder, where it
+         loads in the plugin's own ALC. The manifest half is guarded on every run by
+         HostCore_HasNoEsprimaDependency_SoNoLooseDllAndNoDepsEntryReachTheHost; the loose-dll half was
+         MEASURED once in #349 (publish of Shonkor.CLI: no Esprima.dll, 0 hits in shonkor.deps.json) and is
+         not continuously checked. -->
+    <!-- No YamlDotNet here either (#348): Sitecore .yml/Unicorn parsing lives in the shonkor-sitecore plugin,
+         which now carries YamlDotNet as its own private dependency. Until #348 this reference was dead in
+         Core's own code yet load-bearing for the plugin, which resolved YamlDotNet by ALC fall-through to the
+         host — plugin isolation simulated rather than provided. Same end state as Esprima above: no entry in
+         the host's .deps.json, so nothing can resolve YamlDotNet in the default ALC. Guarded on every run by
+         SitecorePluginPackagingTests (closure of Core + Web, plus the plugin-ALC load test). -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
-    <PackageReference Include="YamlDotNet" Version="18.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
   </ItemGroup>
 
 </Project>

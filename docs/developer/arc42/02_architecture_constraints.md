@@ -12,6 +12,7 @@ This chapter describes the technical and organizational constraints that influen
 | **SQLite (FTS5 + CTE)** | Use of SQLite as the sole database backend. | Database operations must be resolved via performant SQL commands. Recursive CTEs and FTS5 triggers must be created manually during setup. |
 | **No External Servers** | No dependencies on cloud RAG systems or external SaaS databases. | All logic (parser, storage, CLI, and web host) is executed locally on the user's machine. |
 | **Platform Support** | Support for Windows systems (and Linux/macOS via dotnet-core). | Use of platform-independent path separators and standardized file system access. |
+| **Node ≥ v18 (JS/TS only, bring-your-own)** | Real TypeScript semantics require the TypeScript Compiler API, which only runs on Node. Node is **not bundled** and is not a host dependency — it is an *optional* runtime the `shonkor-typescript` plugin discovers on the user's machine (`NodeDiscovery.RequiredMajorVersion` = 18). | The JS/TS parser cannot live in the host: it is an out-of-process **sidecar** behind an `IFileParser` adapter in an installable plugin, with an IPC + timeout budget. Because an optional prerequisite may be absent, the plugin must carry a **degradation path** — the private `EsprimaFallbackParser` — so indexing continues (coarser) instead of failing. See [Setup Guide → Step 3](../../user/setup_guide.md#step-3-node-runtime-for-jsts-analysis). |
 
 ---
 

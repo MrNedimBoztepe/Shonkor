@@ -870,11 +870,18 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
 
         // 3. Delete orphaned edges. The id list is referenced twice (SourceId/TargetId); named
         //    parameters can be reused, so the distinct-parameter count stays at the chunk size.
+        //
+        //    Agent-authored relationships are excluded (#434). A scan can rebuild what it extracted; it
+        //    cannot rebuild what someone else asserted about the code, and re-deriving is not a recovery —
+        //    the generator reproduced its own concept set for 8 of 48 nodes on identical input. Dropping
+        //    those edges here cost 27 084 of 28 145 on a real graph, silently.
         foreach (var chunk in nodeIds.Chunk(MaxSqlParameters))
         {
             await using var edgeCmd = connection.CreateCommand();
             var paramList = AddParams(edgeCmd, chunk, "@n");
-            edgeCmd.CommandText = $"DELETE FROM Edges WHERE SourceId IN ({paramList}) OR TargetId IN ({paramList});";
+            edgeCmd.CommandText =
+                $"DELETE FROM Edges WHERE (SourceId IN ({paramList}) OR TargetId IN ({paramList})) " +
+                $"AND {AgentAuthoredRelations.SqlExclusion};";
             await edgeCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -932,7 +939,11 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
                 paramNames.Add(p);
                 edgeCmd.Parameters.AddWithValue(p, chunk[i]);
             }
-            edgeCmd.CommandText = $"DELETE FROM Edges WHERE SourceId IN ({string.Join(", ", paramNames)});";
+            // Agent-authored edges are kept for the same reason as in DeleteByFilePathsAsync (#434): an
+            // edit to the file does not make someone's assertion about it wrong, and nothing regenerates it.
+            edgeCmd.CommandText =
+                $"DELETE FROM Edges WHERE SourceId IN ({string.Join(", ", paramNames)}) " +
+                $"AND {AgentAuthoredRelations.SqlExclusion};";
             await edgeCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -1056,6 +1067,33 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         command.CommandText = "PRAGMA user_version;";
         var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return result is null ? 0 : Convert.ToInt32(result);
+    }
+
+    /// <summary>Meta key holding the toolchain fingerprint (#408). The value is opaque to storage.</summary>
+    private const string ToolchainFingerprintKey = "toolchainFingerprint";
+
+    /// <inheritdoc />
+    public async Task<string?> GetToolchainFingerprintAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Value FROM Meta WHERE Key = @key;";
+        command.Parameters.AddWithValue("@key", ToolchainFingerprintKey);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+    }
+
+    /// <inheritdoc />
+    public async Task SetToolchainFingerprintAsync(string fingerprint, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
+
+        using var _writeScope = await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "INSERT OR REPLACE INTO Meta (Key, Value) VALUES (@key, @value);";
+        command.Parameters.AddWithValue("@key", ToolchainFingerprintKey);
+        command.Parameters.AddWithValue("@value", fingerprint);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -1534,15 +1572,32 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         // nodes/edges persisted while the node stayed flagged as pending — an inconsistent partial state.
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-        // 1. Fetch existing properties (to merge in the new benchmark metrics).
+        // 1. Fetch existing properties (to merge in the new benchmark metrics) and the anchor's content
+        //    hash, which is half of the source stamp each concept edge carries (#434).
         string? existingPropsJson;
+        string? anchorContentHash = null;
         await using (var selectCmd = connection.CreateCommand())
         {
             selectCmd.Transaction = transaction;
-            selectCmd.CommandText = "SELECT Metadata FROM Nodes WHERE Id = @Id;";
+            selectCmd.CommandText = "SELECT Metadata, ContentHash FROM Nodes WHERE Id = @Id;";
             selectCmd.Parameters.AddWithValue("@Id", nodeId);
-            existingPropsJson = await selectCmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+            await using var anchorReader = await selectCmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await anchorReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                existingPropsJson = anchorReader.IsDBNull(0) ? null : anchorReader.GetString(0);
+                anchorContentHash = anchorReader.IsDBNull(1) ? null : anchorReader.GetString(1);
+            }
+            else
+            {
+                existingPropsJson = null;
+            }
         }
+
+        // The stamp is computed ONCE per call, against the anchor as it is right now. Recomputing it per
+        // edge would let a concurrent write slip between two edges of the same assignment and stamp them
+        // with different source states — a divergence report that describes the writer, not the code.
+        var sourceStamp = SqliteRowMapper.SerializeMetadata(
+            SourceStateStamp.For(anchorContentHash, result.Model));
 
         // 2. Promote extracted concepts to first-class Concept nodes + RELATES_TO edges.
         if (result.ExtractedConcepts.Count > 0)
@@ -1561,15 +1616,21 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             await using var edgeCmd = connection.CreateCommand();
             edgeCmd.Transaction = transaction;
             // LLM-extracted concept links are heuristic — Inferred, never Extracted (TICKET-207).
+            //
+            // Properties carry the source stamp (#434): what the anchor looked like and which model made
+            // the call. On re-write it is refreshed, because the edge has just been re-asserted against
+            // the current anchor — that is the one moment the assignment and the code are known to agree.
             edgeCmd.CommandText =
                 """
-                INSERT INTO Edges (SourceId, TargetId, RelationType, Provenance)
-                VALUES (@SourceId, @TargetId, 'RELATES_TO', 1)
+                INSERT INTO Edges (SourceId, TargetId, RelationType, Provenance, Properties)
+                VALUES (@SourceId, @TargetId, 'RELATES_TO', 1, @Properties)
                 ON CONFLICT(SourceId, TargetId, RelationType) DO UPDATE SET
-                    Provenance = MIN(excluded.Provenance, Edges.Provenance);
+                    Provenance = MIN(excluded.Provenance, Edges.Provenance),
+                    Properties = excluded.Properties;
                 """;
             var pSourceId = edgeCmd.Parameters.Add("@SourceId", SqliteType.Text);
             var pTargetId = edgeCmd.Parameters.Add("@TargetId", SqliteType.Text);
+            edgeCmd.Parameters.AddWithValue("@Properties", (object?)sourceStamp ?? DBNull.Value);
             await edgeCmd.PrepareAsync(cancellationToken).ConfigureAwait(false);
 
             foreach (var concept in result.ExtractedConcepts)
@@ -1687,6 +1748,26 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     public async Task<int> PruneOrphanConceptsAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        // Agent-authored edges now outlive the clearing of their anchor's file (#434), which is right for a
+        // RE-INDEX — the node returns under the same id and the assertion still stands. It is wrong for a
+        // DELETION: the node never comes back, and an edge whose source is not a node is invisible to every
+        // traversal (#436). The two cases are indistinguishable at clearing time and trivially
+        // distinguishable afterwards, so the decision is made here, once the re-index has had its chance.
+        //
+        // This is not the auto-heal the decision rules out: nothing is re-derived. An assertion whose
+        // subject has demonstrably ceased to exist is dropped, not replaced by a fresh guess.
+        await using (var orphanEdges = connection.CreateCommand())
+        {
+            orphanEdges.CommandText =
+                $"""
+                DELETE FROM Edges
+                WHERE NOT ({AgentAuthoredRelations.SqlExclusion})
+                  AND NOT EXISTS (SELECT 1 FROM Nodes n WHERE n.Id = Edges.SourceId);
+                """;
+            await orphanEdges.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await using var command = connection.CreateCommand();
         // A concept is orphaned when no code node still RELATES_TO it. Deleting the node fires the FTS
         // delete trigger; concepts have no other edge kind, so nothing dangling is left behind.

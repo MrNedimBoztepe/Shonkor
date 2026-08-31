@@ -64,11 +64,43 @@ public sealed class GraphIndexScanner
 
         _storage = storage;
         _parsers = parsers.ToList();
-        _postProcessors = postProcessors?.ToList() ?? new List<IGraphPostProcessor>();
+        _postProcessors = ComposePostProcessors(postProcessors);
         _postProcessorContext = postProcessorContext ?? GraphPostProcessorContext.Empty;
         _logger = logger;
         _semanticCsharp = semanticCsharp;
         _compilationCache = compilationCache;
+    }
+
+    /// <summary>
+    /// Appends the always-on first-party post-processors (<see cref="FirstPartyPostProcessors"/>) to whatever the
+    /// caller supplied, so the security phase runs on EVERY full scan by construction (#332).
+    ///
+    /// <para>
+    /// It lives here rather than at the call sites because the call sites are exactly what failed: the web index
+    /// endpoint and the CLI never appended them, so a full scan triggered from either produced no
+    /// <c>security.suspicious-instruction-in-content</c> diagnostics — and the RAG prompt's injection flagging
+    /// (which reads that code) was silently inert on those graphs. The constructor is the one point every ingest
+    /// path must pass through, and there is deliberately no opt-out flag: a flag would only be the same gap in a
+    /// new shape.
+    /// </para>
+    ///
+    /// <para>
+    /// Caller-supplied entries whose <see cref="IGraphPostProcessor.Name"/> collides with a first-party one are
+    /// dropped. Diagnostics are stored keyed by that name and a re-scan REPLACES the set for a name, so a plugin
+    /// claiming <c>security.suspicious-content</c> and running after the first-party processor would wipe its
+    /// findings. Filtering by name makes the guarantee independent of ordering.
+    /// </para>
+    /// </summary>
+    private static List<IGraphPostProcessor> ComposePostProcessors(IEnumerable<IGraphPostProcessor>? callerSupplied)
+    {
+        var firstParty = FirstPartyPostProcessors.Create().ToList();
+        var reservedNames = firstParty.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var composed = callerSupplied?
+            .Where(p => p is not null && !reservedNames.Contains(p.Name))
+            .ToList() ?? new List<IGraphPostProcessor>();
+        composed.AddRange(firstParty);
+        return composed;
     }
 
     /// <summary>
@@ -101,10 +133,19 @@ public sealed class GraphIndexScanner
     /// <param name="excludePatterns">Glob patterns for files or directories to exclude.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <returns>An <see cref="IndexResult"/> summarizing the scan.</returns>
+    /// <param name="forceReparse">
+    /// Ignore every staleness signal and reparse every candidate file (#430). The content hash answers "did
+    /// this file change", never "did the code that interprets it change", so a parser fix, a rebuilt plugin
+    /// or a corrected post-processor leaves an existing graph untouched — measured: a full rescan of a real
+    /// solution with a corrected parser moved 0 of 1 679 wrongly-tiered edges. This is the manual escape
+    /// hatch for that class, and the oracle for the automatic detection in #408: a normal scan and a forced
+    /// one must agree, and any difference names a change dimension the key does not cover.
+    /// </param>
     public async Task<IndexResult> ScanDirectoryAsync(
         string directoryPath,
         IReadOnlyList<string> excludePatterns,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool forceReparse = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directoryPath);
         ArgumentNullException.ThrowIfNull(excludePatterns);
@@ -133,6 +174,30 @@ public sealed class GraphIndexScanner
         if (schemeStale)
         {
             Warn($"Node-id scheme is outdated; forcing a full reparse to migrate to scheme v{Shonkor.Core.Services.CsharpNodeId.SchemeVersion}.");
+        }
+
+        // 2b. The content hash answers "did this FILE change" and nothing else, so a corrected parser or a
+        //     rebuilt plugin leaves an existing graph untouched — measured: a full rescan of a real solution
+        //     with the #402-corrected parser moved 0 of 1 679 wrongly-tiered edges, because no source file
+        //     had changed. The toolchain fingerprint closes that: when the set of assemblies that interpret
+        //     the files differs from the one that built the graph, every file is stale by definition (#408).
+        //
+        //     A null stored value means "built before this existed", i.e. by an unknown toolchain — treated
+        //     as changed, which costs one forced scan per legacy graph and is a no-op on an empty one.
+        var toolchainFingerprint = ComputeToolchainFingerprint();
+        var storedFingerprint = await _storage.GetToolchainFingerprintAsync(cancellationToken).ConfigureAwait(false);
+        var toolchainChanged = !string.Equals(storedFingerprint, toolchainFingerprint, StringComparison.Ordinal);
+        if (toolchainChanged && storedFingerprint is not null)
+        {
+            Warn("The parser/plugin set differs from the one this graph was built with; reparsing every file.");
+        }
+
+        // 2c. All three reasons meet in ONE condition rather than three skip paths — two ways of expressing
+        //     "reparse anyway" is how they drift apart later. (#430 is the manual one.)
+        var reparseEverything = schemeStale || forceReparse || toolchainChanged;
+        if (forceReparse)
+        {
+            Warn("Forced reparse requested; the content-hash check is bypassed for every candidate file.");
         }
 
         // 3. Process candidate files incrementally
@@ -169,9 +234,11 @@ public sealed class GraphIndexScanner
                 var content = await SourceText.ReadAsync(filePath, ct).ConfigureAwait(false);
                 var contentHash = ComputeSha256Hash(content);
 
-                // Incremental Hash Check: skip if hash matches DB (unless the id scheme is stale, in which
-                // case every file must be reparsed to migrate its ids to the current scheme).
-                if (!schemeStale && existingHashes.TryGetValue(filePath, out var existingHash) && existingHash == contentHash)
+                // Incremental Hash Check: skip if the hash matches the DB — unless something has declared
+                // that the file must be reparsed regardless of its content (a stale node-id scheme, or an
+                // explicit --force). The hash answers "did this file change" and nothing else; when the code
+                // that INTERPRETS the file changed, only reparseEverything gets the correction into the data.
+                if (!reparseEverything && existingHashes.TryGetValue(filePath, out var existingHash) && existingHash == contentHash)
                 {
                     return; // Unchanged!
                 }
@@ -264,8 +331,9 @@ public sealed class GraphIndexScanner
         }
 
         // 5.5 Phase 2: graph-aware post-processors observe the assembled graph and add enrichment
-        //     (nodes/edges) + diagnostics. Additive and isolated — a failing post-processor is logged and
-        //     skipped. Whole-graph concern, so it runs on full scans only (not single-file reindex).
+        //     (nodes/edges) + diagnostics. Additive and isolated — a failing post-processor is logged, skipped
+        //     and recorded as a `postprocessor.incomplete` diagnostic so the gap is visible (#353). Whole-graph
+        //     concern, so it runs on full scans only (not single-file reindex).
         if (_postProcessors.Count > 0)
         {
             var view = new StorageBackedGraphView(_storage);
@@ -277,15 +345,49 @@ public sealed class GraphIndexScanner
                     var enrichment = await postProcessor.ProcessAsync(view, _postProcessorContext).ConfigureAwait(false);
                     if (enrichment.Nodes.Count > 0)
                         await _storage.UpsertNodesAsync(enrichment.Nodes, cancellationToken).ConfigureAwait(false);
+                    // Stamped exactly like parser output (#400): post-processor edges used to be upserted
+                    // raw, so an edge whose producer forgot to tag it defaulted to Extracted and a heuristic
+                    // link claimed compiler-grade trust. StampProvenance only ever RAISES uncertainty, so a
+                    // post-processor that already sets Inferred/Ambiguous per edge is unaffected.
                     if (enrichment.Edges.Count > 0)
-                        await _storage.UpsertEdgesAsync(enrichment.Edges, cancellationToken).ConfigureAwait(false);
+                        await _storage.UpsertEdgesAsync(
+                            enrichment.Edges.Select(e => StampProvenance(e, postProcessor.DefaultProvenance)),
+                            cancellationToken).ConfigureAwait(false);
                     // Replace exactly this post-processor's diagnostics (tagged by its Name) so a re-scan
                     // refreshes them without touching others.
                     await _storage.ReplaceDiagnosticsAsync(postProcessor.Name, enrichment.Diagnostics, cancellationToken).ConfigureAwait(false);
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // A cancelled scan is not a failed check: the storage calls above all take the token, so
+                    // the generic catch below would otherwise swallow the cancellation and let the scan carry
+                    // on to phase 6 as if nothing happened. Cancellation propagates immediately instead.
+                    // (It does not, on today's store, decide whether a marker is written: the marker write
+                    // uses the same cancelled token and fails inside its own best-effort catch. That is an
+                    // implementation detail of the storage provider, not something this catch guarantees.)
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     Warn($"Post-processor '{postProcessor.Name}' failed: {ex.Message}");
+
+                    // Leave the failure behind as data, not just as a log line (#353) — a stderr warning is
+                    // invisible to get_diagnostics and to the dashboard. The marker is written under the
+                    // SAME source as the processor's findings because ReplaceDiagnosticsAsync is keyed by
+                    // source: that both clears this run's now-stale findings and lets the next successful
+                    // scan clear the marker again. Best-effort in its own try/catch — a store that cannot
+                    // take the marker must not fail the scan at a new place.
+                    try
+                    {
+                        await _storage.ReplaceDiagnosticsAsync(
+                            postProcessor.Name,
+                            new[] { PostProcessorDiagnostics.Incomplete(postProcessor.Name, $"{ex.GetType().Name}: {ex.Message}") },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception markerEx)
+                    {
+                        Warn($"Could not record the incompleteness marker for '{postProcessor.Name}': {markerEx.Message}");
+                    }
                 }
             }
         }
@@ -293,6 +395,7 @@ public sealed class GraphIndexScanner
         // 6. Stamp the graph with the current node-id scheme — the whole tree was just (re)built under it,
         //    so any prior staleness is now resolved and get_stats stops recommending a re-index.
         await _storage.SetNodeIdSchemeVersionAsync(Shonkor.Core.Services.CsharpNodeId.SchemeVersion, cancellationToken).ConfigureAwait(false);
+        await _storage.SetToolchainFingerprintAsync(toolchainFingerprint, cancellationToken).ConfigureAwait(false);
 
         stopwatch.Stop();
         return new IndexResult(filesScanned, nodesCreated, edgesCreated, stopwatch.Elapsed);
@@ -762,6 +865,43 @@ public sealed class GraphIndexScanner
         !StructuralEdges.Contains(edge.Relationship) && (int)parserDefault > (int)edge.Provenance
             ? edge with { Provenance = parserDefault }
             : edge;
+
+    /// <summary>
+    /// An opaque fingerprint of the toolchain that will interpret this scan's files: every parser and every
+    /// post-processor, identified by its declaring assembly's <b>MVID</b> plus its own type name (#408).
+    ///
+    /// <para>
+    /// MVID rather than a version string, and the reason is not that deterministic builds make it stable —
+    /// it is that <b>nobody has to remember to bump it</b>. A version is a claim about an artifact; the MVID
+    /// is a property of it. The difference is measured: when four stale first-party plugins were rebuilt,
+    /// all four binaries changed and only one had moved its manifest version, so a version comparison would
+    /// have caught one of four (#414).
+    /// </para>
+    ///
+    /// <para>
+    /// The type name is folded in as well, so adding or removing a parser changes the fingerprint even when
+    /// no assembly did — that is a change to the toolchain just as much as a rebuild is.
+    /// </para>
+    ///
+    /// <para>
+    /// Known limit, stated rather than discovered later: this sees ASSEMBLIES. Behaviour that changes through
+    /// configuration rather than code — the <c>SHONKOR_SEMANTIC_CSHARP</c> switch, a plugin's own settings
+    /// file — is invisible to it. That dimension can be folded into this computation later without touching
+    /// the storage contract, which is why the stored value is an opaque string and not an assembly id. Until
+    /// then, <c>--force</c> (#430) is the escape hatch, and comparing a normal scan against a forced one is
+    /// how such a gap is detected rather than assumed.
+    /// </para>
+    /// </summary>
+    private string ComputeToolchainFingerprint()
+    {
+        var parts = _parsers.Select(p => p.GetType())
+            .Concat(_postProcessors.Select(p => p.GetType()))
+            .Select(t => $"{t.FullName}@{t.Assembly.ManifestModule.ModuleVersionId:N}")
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(s => s, StringComparer.Ordinal);
+
+        return ComputeSha256Hash(string.Join('\n', parts));
+    }
 
     private static string ComputeSha256Hash(string input)
     {

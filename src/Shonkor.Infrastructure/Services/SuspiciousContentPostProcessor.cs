@@ -21,15 +21,25 @@ public sealed class SuspiciousContentPostProcessor : IGraphPostProcessor
     private static readonly string[] ScannedTypes =
         { "File", "MarkdownSection", "Class", "Interface", "Record", "Struct", "Method", "Property" };
 
+    /// <summary>
+    /// Upper bound per <see cref="Regex.IsMatch(string)"/> call. These patterns run over attacker-controlled
+    /// repository content, and since #332 they run on EVERY full scan rather than only the webhook path — so the
+    /// adjacent <c>\s+</c> quantifiers get an explicit backtracking budget instead of an unbounded one. A
+    /// <see cref="RegexMatchTimeoutException"/> costs exactly the offending node (#353): the remaining findings
+    /// are kept and the run reports itself as incomplete, so a scan is never blocked by a pathological file and
+    /// never silently degraded by one either.
+    /// </summary>
+    private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(1);
+
     // Conservative, case-insensitive patterns — chosen to catch classic injection phrasings while keeping
     // false positives low (each requires an imperative directed at the model, not incidental prose).
     private static readonly Regex[] Patterns =
     {
-        new(@"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|context)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new(@"disregard\s+(the\s+)?(above|previous|earlier)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new(@"you\s+are\s+now\s+", RegexOptions.IgnoreCase | RegexOptions.Compiled),
-        new(@"^\s*(system|assistant|developer)\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Multiline),
-        new(@"\bnew\s+instructions\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled)
+        new(@"ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|context)", RegexOptions.IgnoreCase | RegexOptions.Compiled, MatchTimeout),
+        new(@"disregard\s+(the\s+)?(above|previous|earlier)", RegexOptions.IgnoreCase | RegexOptions.Compiled, MatchTimeout),
+        new(@"you\s+are\s+now\s+", RegexOptions.IgnoreCase | RegexOptions.Compiled, MatchTimeout),
+        new(@"^\s*(system|assistant|developer)\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Multiline, MatchTimeout),
+        new(@"\bnew\s+instructions\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled, MatchTimeout)
     };
 
     public string Name => "security.suspicious-content";
@@ -39,30 +49,53 @@ public sealed class SuspiciousContentPostProcessor : IGraphPostProcessor
         ArgumentNullException.ThrowIfNull(graph);
 
         var diagnostics = new List<GraphDiagnostic>();
+        var skippedNodes = 0;
+
         foreach (var type in ScannedTypes)
         {
             var nodes = await graph.NodesByTypeAsync(type).ConfigureAwait(false);
-            foreach (var node in nodes)
+            for (var i = 0; i < nodes.Count; i++)
             {
-                if (string.IsNullOrEmpty(node.Content))
+                // Per-node isolation (#353): the match below runs on attacker-controlled content under a 1 s
+                // backtracking budget, so a single pathological node can throw. Without this try/catch that
+                // one node discarded the findings of the entire run — the check silently switched itself off
+                // for the whole graph. One bad node now costs exactly that node.
+                try
                 {
-                    continue;
-                }
+                    var node = nodes[i];
+                    if (string.IsNullOrEmpty(node.Content))
+                    {
+                        continue;
+                    }
 
-                var match = Patterns.FirstOrDefault(p => p.IsMatch(node.Content));
-                if (match is null)
+                    var match = Patterns.FirstOrDefault(p => p.IsMatch(node.Content));
+                    if (match is null)
+                    {
+                        continue;
+                    }
+
+                    diagnostics.Add(new GraphDiagnostic(
+                        Code: "security.suspicious-instruction-in-content",
+                        Severity: DiagnosticSeverity.Warning,
+                        Message: $"Node '{node.Name}' contains text resembling an LLM instruction (possible prompt injection). " +
+                                 "Retrieved content is treated as untrusted data by the RAG prompt; review before trusting.",
+                        NodeId: node.Id,
+                        FilePath: node.FilePath));
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    continue;
+                    // Cancellation is not a per-node defect and must keep propagating to the scanner.
+                    skippedNodes++;
                 }
-
-                diagnostics.Add(new GraphDiagnostic(
-                    Code: "security.suspicious-instruction-in-content",
-                    Severity: DiagnosticSeverity.Warning,
-                    Message: $"Node '{node.Name}' contains text resembling an LLM instruction (possible prompt injection). " +
-                             "Retrieved content is treated as untrusted data by the RAG prompt; review before trusting.",
-                    NodeId: node.Id,
-                    FilePath: node.FilePath));
             }
+        }
+
+        // Salvaged findings and the honesty marker travel together, so the single ReplaceDiagnosticsAsync the
+        // scanner performs stores both atomically. No failure → no marker, so a clean run stays clean.
+        if (skippedNodes > 0)
+        {
+            diagnostics.Add(PostProcessorDiagnostics.Incomplete(
+                Name, $"{skippedNodes} node(s) could not be scanned"));
         }
 
         return new GraphEnrichment(Array.Empty<GraphNode>(), Array.Empty<GraphEdge>(), diagnostics);
@@ -70,8 +103,12 @@ public sealed class SuspiciousContentPostProcessor : IGraphPostProcessor
 }
 
 /// <summary>
-/// The always-on, first-party phase-2 post-processors, wired into every index path (CLI, index endpoint,
-/// webhook, drift). Centralized so the set is defined once rather than re-listed at each call site.
+/// The always-on, first-party phase-2 post-processors. Since #332 they are appended by
+/// <see cref="GraphIndexScanner"/>'s constructor rather than re-listed at each call site, so they run on every
+/// full scan by construction — no matter which ingest path (CLI, index endpoint, webhook, MCP) built the
+/// scanner. As a whole-graph phase they run on <c>ScanDirectoryAsync</c> only, never on a single-file reindex.
+/// A caller-supplied post-processor cannot displace one of these: entries whose <c>Name</c> collides with a
+/// first-party name are dropped by the scanner.
 /// </summary>
 public static class FirstPartyPostProcessors
 {

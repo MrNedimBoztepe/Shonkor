@@ -167,4 +167,20 @@ public class ReadmeBenchmarkNumbersTests
         Assert.Contains($"{fired} of 33", section);
         Assert.Contains("indexed unit", section); // the confound must be named, not just numbered
     }
+
+    [Fact]
+    public void RagHeadToHead_PublishesTheSummaryDecomposition()
+    {
+        // #189: the caveat above *names* a confound — the +9,1 might be the AI summaries, not the topology.
+        // Naming it is not enough; a sharp customer asks which, so we measured it (`--enrich-baseline`) and
+        // must publish the answer next to the claim. This guards that the reproducible command and the
+        // interval-not-point framing stay on the page — dropping the finding to leave only the flattering
+        // number is the exact #166 failure mode this file exists to catch, one decomposition deeper.
+        var section = Section(Readme(), "### 3.", "## ✨");
+
+        // The reproducible command a reader runs to check us — the finding is worthless if it can't be re-run.
+        Assert.Contains("--enrich-baseline", section);
+        // Reported against the confidence interval, never as a point estimate (the #284 discipline).
+        Assert.Contains("noise band", section);
+    }
 }

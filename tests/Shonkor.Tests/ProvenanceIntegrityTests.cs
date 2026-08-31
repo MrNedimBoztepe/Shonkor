@@ -192,8 +192,12 @@ public class ProvenanceIntegrityTests
 
             using var storage = new SqliteGraphStorageProvider(":memory:");
             await storage.InitializeAsync();
+            // #312: JS comes from the plugin's TypeScriptParser now. A bogus NodePath keeps the guard
+            // deterministic (Esprima fallback, no Node process) while preserving the Inferred JS IMPORTS edge.
+            await using var jsParser = new Shonkor.Plugin.TypeScript.TypeScriptParser(
+                new Shonkor.Plugin.TypeScript.SidecarSettings { NodePath = Path.Combine(dir, "no-such-node.exe") });
             var scanner = new GraphIndexScanner(storage,
-                new IFileParser[] { new RoslynAstParser(), new GraphQLParser(), new PhpModuleParser(), new JavaScriptParser(), new MarkdownHierarchyParser() },
+                new IFileParser[] { new RoslynAstParser(), new GraphQLParser(), new PhpModuleParser(), jsParser, new MarkdownHierarchyParser() },
                 semanticCsharp: true);
             await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
 
@@ -212,5 +216,155 @@ public class ProvenanceIntegrityTests
                 e => Assert.NotEqual(Provenance.Extracted, e.Provenance));
         }
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+
+    /// <summary>
+    /// #406, the durable form of the guard above. The whitelist check only asks "is anything Extracted that
+    /// should not be" — it is blind in the other direction, and it is stated in prose inside a test rather
+    /// than as data anything else can use.
+    ///
+    /// <para>
+    /// <see cref="ProvenanceInvariant"/> encodes the full <c>(RelationType, Provenance) -&gt; producer</c>
+    /// mapping, so this asserts every edge of a scanned graph sits at a tier its relationship may hold —
+    /// not merely that nothing over-claims. The same table drives the repair migration's before/after
+    /// counting, which is why it is data and not an assertion.
+    /// </para>
+    ///
+    /// <para>
+    /// Deliberately the same multi-producer fixture as the guard above rather than a wider one: what this
+    /// pins is the TABLE, and a table that disagrees with the producers fails here regardless of corpus
+    /// size. Running it against a real graph is report mode, not a test — a third-party plugin's
+    /// relationship is a gap in the table, not a defect, and must not turn someone else's build red.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Guard_EveryEdgeSitsAtATierItsRelationshipMayHold()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"shonkor_prov_table_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "Svc.cs"),
+                "namespace N { public interface IThing { void Go(); } "
+                + "public class Svc : IThing { public Helper H; public void Go() { var h = new Helper(); h.Use(); } } "
+                + "public class Helper { public void Use() { } } "
+                + "public class Derived : Svc { } }");
+            await File.WriteAllTextAsync(Path.Combine(dir, "q.graphql"),
+                "query Q { item { ...on Card { id } } }");
+            await File.WriteAllTextAsync(Path.Combine(dir, "metadata.php"),
+                "<?php $m = ['extend' => ['oxArticle' => 'My\\Article']];");
+            await File.WriteAllTextAsync(Path.Combine(dir, "doc.md"),
+                "# Title\nSee [the guide](./other.md) for details.");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            var scanner = new GraphIndexScanner(storage,
+                new IFileParser[] { new RoslynAstParser(), new GraphQLParser(), new PhpModuleParser(), new MarkdownHierarchyParser() },
+                semanticCsharp: true);
+            await scanner.ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            var all = await storage.GetAllEdgesAsync();
+            Assert.NotEmpty(all); // a table that passes because nothing was scanned proves nothing
+
+            var (violations, unclassified, totalEdges) = ProvenanceInvariant.Check(all);
+
+            Assert.True(violations.Count == 0,
+                "an edge holds a tier its relationship may not hold:\n" + ProvenanceInvariant.Report(violations, [], totalEdges));
+
+            // A relationship the first-party producers emit but the table omits is a hole in the table, and
+            // this fixture only runs first-party producers — so here it IS a failure.
+            Assert.True(unclassified.Count == 0,
+                "a first-party relationship is missing from ProvenanceInvariant.Rules:\n"
+                + ProvenanceInvariant.Report([], unclassified));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+
+    /// <summary>
+    /// #402: the heuristic that decides IMPLEMENTS vs EXTENDS is a naming convention — leading <c>I</c> plus
+    /// an uppercase second character — so every edge whose KIND it picks must be Inferred. This pins the
+    /// mislabel itself rather than only the tier: <c>Payload : IOManager</c> is a class deriving from a
+    /// class, and the parser calls it IMPLEMENTS. Which is fine, as long as it says it is guessing.
+    /// </summary>
+    [Fact]
+    public async Task SyntacticHeritage_IsInferred_EvenWhenTheNameHeuristicGetsTheKindWrong()
+    {
+        var code = """
+            namespace N {
+                public class IOManager { }                 // a CLASS whose name trips the 'I' heuristic
+                public interface Comparable { }            // an INTERFACE the heuristic will miss
+                public class Payload : IOManager, Comparable { }
+            }
+            """;
+
+        var (_, edges) = await new RoslynAstParser().ParseAsync("/r/Payload.cs", code);
+
+        // The heuristic is wrong about BOTH, in opposite directions...
+        var wrongWayImplements = Assert.Single(edges, e => e.Relationship == "IMPLEMENTS" && e.TargetId == "IOManager");
+        var wrongWayExtends = Assert.Single(edges, e => e.Relationship == "EXTENDS" && e.TargetId == "Comparable");
+
+        // ...and precisely because it can be, neither claims to be a compiler fact.
+        Assert.Equal(Provenance.Inferred, wrongWayImplements.Provenance);
+        Assert.Equal(Provenance.Inferred, wrongWayExtends.Provenance);
+
+        // Nothing this parser produces from a base list may be Extracted, whatever the names happen to be.
+        Assert.All(edges.Where(e => e.Relationship is "IMPLEMENTS" or "EXTENDS"),
+            e => Assert.NotEqual(Provenance.Extracted, e.Provenance));
+    }
+
+    /// <summary>
+    /// #402's real acceptance criterion, and what #399 left open: after this, <c>(RelationType, Provenance)</c>
+    /// tells the two producers of IMPLEMENTS/EXTENDS apart. The syntactic edge points at a bare type NAME and
+    /// is Inferred; the resolved edge points at a node ID and is Extracted. They never collide in storage,
+    /// so the resolved one is not downgraded — both exist, and the tier says which is which.
+    /// </summary>
+    [Fact]
+    public async Task HeritageEdges_TierNowIdentifiesTheProducer()
+    {
+        using var storage = await LinkAsync(
+            ("/r/IThing.cs", "namespace A { public interface IThing { } }"),
+            ("/r/Thing.cs", "using A; namespace A { public class Thing : IThing { } }"));
+
+        var heritage = (await storage.GetAllEdgesAsync())
+            .Where(e => e.Relationship is "IMPLEMENTS" or "EXTENDS")
+            .ToList();
+        Assert.NotEmpty(heritage);
+
+        foreach (var edge in heritage)
+        {
+            // A node id carries the file path and the '::' separator this repo mints ids with; a bare
+            // syntactic name never does. That is the observable difference between the two producers.
+            var targetIsResolvedNodeId = edge.TargetId.Contains("::", StringComparison.Ordinal);
+            Assert.Equal(
+                targetIsResolvedNodeId ? Provenance.Extracted : Provenance.Inferred,
+                edge.Provenance);
+        }
+
+        // Both producers really did run — otherwise the loop above proves nothing.
+        Assert.Contains(heritage, e => e.Provenance == Provenance.Extracted);
+        Assert.Contains(heritage, e => e.Provenance == Provenance.Inferred);
+    }
+
+    /// <summary>
+    /// The table has to stay internally consistent: a repair target that is not itself a legitimate tier
+    /// would move edges from one violation straight into another, and the migration would never converge.
+    /// </summary>
+    [Fact]
+    public void InvariantTable_RepairTargets_AreThemselvesLegitimate()
+    {
+        foreach (var rule in ProvenanceInvariant.Rules)
+        {
+            Assert.False(rule.Legitimate.Count == 0, $"{rule.Relationship} permits no tier at all");
+            if (rule.RepairTo is { } target)
+            {
+                Assert.True(rule.Legitimate.Contains(target),
+                    $"{rule.Relationship} repairs to {target}, which it does not itself permit");
+            }
+        }
+
+        // No duplicate relationships — a second entry would silently shadow the first.
+        Assert.Equal(
+            ProvenanceInvariant.Rules.Count,
+            ProvenanceInvariant.Rules.Select(r => r.Relationship).Distinct(StringComparer.Ordinal).Count());
     }
 }

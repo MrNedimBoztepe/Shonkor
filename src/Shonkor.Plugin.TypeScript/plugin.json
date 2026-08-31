@@ -1,0 +1,9 @@
+{
+  "id": "shonkor-typescript",
+  "name": "TypeScript / JavaScript (Node sidecar)",
+  "version": "1.0.0",
+  "description": "First-party JS/TS base parser: a Node sidecar runs the real TypeScript Compiler API behind an IFileParser adapter, emitting the JSComponent/IMPORTS shape with surfaced parse diagnostics. Degrades to the in-plugin Esprima fallback when Node is unavailable. Replaces the former in-host Esprima parser.",
+  "entryAssembly": "Shonkor.Plugin.TypeScript.dll",
+  "minHostApi": "1.0",
+  "targetExtensions": [".ts", ".tsx", ".js", ".jsx"]
+}

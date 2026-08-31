@@ -29,7 +29,8 @@ internal static class RagBaselineBenchmark
     private const int Hops = 2;
     private const int BudgetChars = 12000;
 
-    private sealed class Chunk
+    /// <summary>One baseline chunk. <c>internal</c> so the pure ranking logic below can be unit-tested (#191).</summary>
+    internal sealed class Chunk
     {
         public required string File { get; init; }
         public int StartLine { get; init; }
@@ -52,14 +53,16 @@ internal static class RagBaselineBenchmark
         double ShonkorSeedSurvival,
         double ShonkorHybridCoverage,
         int SeedMissedTarget,
-        int RagKeywordFiredQueries)
+        int RagKeywordFiredQueries,
+        double? RagEnrichedHybridCoverage = null)
     {
         public double TokenSavingPct => RagAvgTokens > 0 ? (1.0 - ShonkorAvgTokens / RagAvgTokens) * 100 : 0;
     }
 
     public static async Task<ComparisonResult?> RunAsync(
         SqliteGraphStorageProvider provider, IReadOnlyList<GraphNode> nodes, IEmbeddingService? emb,
-        List<GoldenCase> cases, ContextCapsuleSynthesizer synth, TextWriter log)
+        List<GoldenCase> cases, ContextCapsuleSynthesizer synth, TextWriter log,
+        bool enrichBaselineChunks = false)
     {
         if (emb is null) { log.WriteLine("  rag baseline: no embedding backend — skipped"); return null; }
 
@@ -69,6 +72,10 @@ internal static class RagBaselineBenchmark
             .Where(n => n.Type == "File" && !string.IsNullOrEmpty(n.FilePath) && File.Exists(n.FilePath!))
             .Select(n => n.FilePath!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var chunks = BuildChunks(files);
+        if (enrichBaselineChunks)
+        {
+            log.WriteLine("  rag baseline: also scoring a SUMMARY-ENRICHED baseline this run (#189/#284) — paired");
+        }
         log.WriteLine($"  rag baseline: {chunks.Count} chunks from {files.Count} files; embedding (cached)...");
 
         await EmbedChunksAsync(chunks, emb, Path.Combine("bench", "rag-chunk-cache.json"), log);
@@ -81,6 +88,24 @@ internal static class RagBaselineBenchmark
 
         // Keyword index over the chunks (#166), so the baseline's hybrid arm uses the SAME BM25 as the product.
         using var chunkFts = BuildChunkFts(embedded);
+
+        // #189/#284: the ENRICHED baseline is measured IN THIS SAME PROCESS, against the same cases and the
+        // same per-query budget as the plain one. The first cut compared a plain run to a separate enriched
+        // run, and the disk (bench/*.md is rewritten every run) drifted between them — so the "plain" baseline
+        // was not even the same in both. Pairing removes that confound: the only difference between the plain
+        // and enriched coverage below is the summary text, nothing else.
+        List<Chunk>? enrichedEmbedded = null;
+        SqliteConnection? enrichedFts = null;
+        if (enrichBaselineChunks)
+        {
+            var enrichedChunks = EnrichChunks(chunks, nodes);
+            await EmbedChunksAsync(enrichedChunks, emb, Path.Combine("bench", "rag-chunk-cache-enriched.json"), log);
+            enrichedEmbedded = enrichedChunks.Where(c => c.Embedding is { Length: > 0 }).ToList();
+            foreach (var ch in enrichedEmbedded) VectorMath.NormalizeL2(ch.Embedding!);
+            enrichedFts = BuildChunkFts(enrichedEmbedded);
+        }
+        using var _enrichedFts = enrichedFts;
+        double ragEnrichedHybridCov = 0;
 
         double ragTok = 0, ragCov = 0, ragHybridCov = 0, shTok = 0, shCov = 0, shSeedSurv = 0, shHybridCov = 0;
         var seedMissedTarget = 0;
@@ -160,13 +185,26 @@ internal static class RagBaselineBenchmark
             var fusedRank = RrfFuse(vectorRank, keywordRank);
             var (hybChunks, _) = PickWithinBudget(embedded, fusedRank, shTokQ);
             ragHybridCov += hybChunks.Any(ch => CoversExpected(ch, expectedNodes)) ? 1 : 0;
+
+            // Enriched baseline, same arithmetic on the enriched sets (#284). Paired to the plain arm above
+            // by construction: same query, same budget (shTokQ), same case — the delta is the summaries alone.
+            if (enrichedEmbedded is not null && enrichedFts is not null)
+            {
+                var evRank = enrichedEmbedded
+                    .Select((ch, i) => (i, sim: Score(qn, ch.Embedding!)))
+                    .OrderByDescending(x => x.sim).Select(x => x.i).ToList();
+                var eFused = RrfFuse(evRank, KeywordRankChunks(enrichedFts, c.Query));
+                var (eHyb, _) = PickWithinBudget(enrichedEmbedded, eFused, shTokQ);
+                ragEnrichedHybridCov += eHyb.Any(ch => CoversExpected(ch, expectedNodes)) ? 1 : 0;
+            }
             n++;
         }
 
         return n == 0
             ? null
             : new ComparisonResult(n, embedded.Count, ragTok / n, ragCov / n, ragHybridCov / n,
-                shTok / n, shCov / n, shSeedSurv / n, shHybridCov / n, seedMissedTarget, ragKeywordFired);
+                shTok / n, shCov / n, shSeedSurv / n, shHybridCov / n, seedMissedTarget, ragKeywordFired,
+                enrichedEmbedded is not null ? ragEnrichedHybridCov / n : null);
     }
 
     /// <summary>True when <paramref name="node"/>'s name appears as a whole word in the capsule text.</summary>
@@ -183,6 +221,58 @@ internal static class RagBaselineBenchmark
             idx = capsule.IndexOf(node.Name, idx + 1, StringComparison.Ordinal);
         }
         return false;
+    }
+
+    /// <summary>
+    /// Gives each chunk the AI summaries of the nodes whose line range it covers (#189).
+    ///
+    /// <para>
+    /// The +9,1 pp the 2×2 attributes to "the graph" is not pure topology. Shonkor's nodes carry summaries
+    /// from the enrichment worker that keyword-match plain-English intent; raw source chunks do not — which
+    /// is why the baseline's keyword arm fired on only 10 of 33 queries (#166/#188). So the honest reading of
+    /// the number is "the graph's topology PLUS its summary-enriched indexed unit", and those are two
+    /// different claims a sharp customer will separate for us if we do not.
+    /// </para>
+    /// <para>
+    /// Enriching the BASELINE's chunks equalises the indexed unit, so a run with this on isolates what the
+    /// topology alone buys. Summaries are appended, not substituted: the chunk must still be the code it was,
+    /// or the comparison changes two things at once.
+    /// </para>
+    /// </summary>
+    internal static List<Chunk> EnrichChunks(IReadOnlyList<Chunk> chunks, IReadOnlyList<GraphNode> nodes)
+    {
+        // Nodes grouped by file, so each chunk only scans its own file's symbols.
+        var byFile = nodes
+            .Where(n => !string.IsNullOrEmpty(n.FilePath) && !string.IsNullOrWhiteSpace(n.Summary))
+            .GroupBy(n => n.FilePath!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var enriched = new List<Chunk>(chunks.Count);
+        foreach (var ch in chunks)
+        {
+            var summaries = byFile.TryGetValue(ch.File, out var fileNodes)
+                ? fileNodes
+                    // A node belongs to this chunk when their line ranges overlap. Nodes without lines
+                    // (file-level) are skipped: attaching them to every chunk of the file would hand the
+                    // baseline a whole-file summary on each window, which over-corrects the other way.
+                    .Where(n => n.StartLine is { } s && n.EndLine is { } e && s <= ch.EndLine + 1 && e >= ch.StartLine + 1)
+                    .Select(n => n.Summary!.Trim())
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList()
+                : [];
+
+            enriched.Add(summaries.Count == 0
+                ? ch
+                : new Chunk
+                {
+                    File = ch.File,
+                    StartLine = ch.StartLine,
+                    EndLine = ch.EndLine,
+                    Text = string.Join("\n", summaries) + "\n" + ch.Text,
+                    Hash = Sha(string.Join("\n", summaries) + "\n" + ch.Text)
+                });
+        }
+        return enriched;
     }
 
     private static List<Chunk> BuildChunks(List<string> files)
@@ -275,7 +365,7 @@ internal static class RagBaselineBenchmark
     /// one, and at most 40) — the shared budgeted-pick both baseline arms use, so the vector and hybrid arms
     /// differ ONLY in their ranking, never in how the budget is applied.
     /// </summary>
-    private static (List<Chunk> Chunks, double Tokens) PickWithinBudget(
+    internal static (List<Chunk> Chunks, double Tokens) PickWithinBudget(
         IReadOnlyList<Chunk> chunks, List<int> order, double budgetTokens)
     {
         double used = 0;
@@ -297,7 +387,7 @@ internal static class RagBaselineBenchmark
     /// keyword arm that is the SAME BM25 the product uses — not a hand-rolled scorer (the #163 trap). Row i+1
     /// is chunk <c>embedded[i]</c>. The connection is kept open for the whole run and disposed by the caller.
     /// </summary>
-    private static SqliteConnection BuildChunkFts(IReadOnlyList<Chunk> chunks)
+    internal static SqliteConnection BuildChunkFts(IReadOnlyList<Chunk> chunks)
     {
         var conn = new SqliteConnection("Data Source=:memory:");
         conn.Open();
@@ -329,7 +419,7 @@ internal static class RagBaselineBenchmark
     /// by <c>bm25()</c>, and on an FTS syntax error (colons, slashes, operators) it falls back to <c>LIKE</c>
     /// over the query's word tokens — the same degradation <c>SqliteGraphStorageProvider</c> does.
     /// </summary>
-    private static List<int> KeywordRankChunks(SqliteConnection conn, string query)
+    internal static List<int> KeywordRankChunks(SqliteConnection conn, string query)
     {
         var order = new List<int>();
         try
@@ -362,7 +452,7 @@ internal static class RagBaselineBenchmark
     /// baseline's keyword+vector fusion is like-for-like with the product's — the only remaining difference
     /// between the two hybrid rows is the graph.
     /// </summary>
-    private static List<int> RrfFuse(List<int> vectorRank, List<int> keywordRank, int k = 60)
+    internal static List<int> RrfFuse(List<int> vectorRank, List<int> keywordRank, int k = 60)
     {
         var score = new Dictionary<int, double>();
         void Accumulate(List<int> ranked)

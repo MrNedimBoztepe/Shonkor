@@ -60,9 +60,14 @@ public static class PluginHostApi
     /// <summary>
     /// Current host plugin-API version. Bump the <b>major</b> on a breaking contract change; bump the
     /// <b>minor</b> on an additive one. History: 1.0 = IFileParser only; 1.1 = added the phase-2
-    /// <c>IGraphPostProcessor</c> / <c>IGraphView</c> contract (additive — 1.0 plugins still load).
+    /// <c>IGraphPostProcessor</c> / <c>IGraphView</c> contract (additive — 1.0 plugins still load);
+    /// 1.2 = added <c>PostProcessorDiagnostics</c>, the shared factory for the
+    /// <c>postprocessor.incomplete</c> marker a post-processor emits about its own run (additive — 1.1
+    /// plugins still load). The rule covers the contract SURFACE, not only the interfaces: a plugin that
+    /// calls the factory needs a way to say so, otherwise an older host installs it without a warning and
+    /// the call fails at scan time with a <c>MissingMethodException</c>.
     /// </summary>
-    public const string Version = "1.1";
+    public const string Version = "1.2";
 }
 
 /// <summary>

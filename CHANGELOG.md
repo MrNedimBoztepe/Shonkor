@@ -5,6 +5,140 @@ All notable changes to Shonkor are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — The container image could not be built at all, and the last one that was built shipped a known CVE (#388)
+- **The image build was broken since #313.** The Dockerfile's restore layer copied an enumerated list of four
+  `.csproj` files, and `Shonkor.Infrastructure` has referenced `Shonkor.Plugin.TypeScript` since #313. The
+  restore does **not** fail on that — NuGet silently skips a `ProjectReference` whose target is absent
+  (`Skipping project "..." because it was not found.`, exit 0). The subsequent `--no-restore` publish is what
+  breaks: `error NETSDK1004: Assets file '.../Shonkor.Plugin.TypeScript/obj/project.assets.json' not found`.
+  `ReferenceOutputAssembly=false` suppresses the assembly reference at compile time, not the build of the
+  referenced project. The layer now copies **every** `src/*/*.csproj` via a glob, so the next added reference
+  cannot rot it the same way.
+- **`Directory.Build.props` was not in the restore layer either, and that is a security bug.** That file
+  carries the `SQLitePCLRaw.lib.e_sqlite3` 3.50.3 override against CVE-2025-6965. Without it the image's
+  restore resolved the transitive, vulnerable **2.1.11** — reproduced: `warning NU1903: Package
+  'SQLitePCLRaw.lib.e_sqlite3' 2.1.11 has a known high severity vulnerability`, `project.assets.json`
+  recording `SQLitePCLRaw.lib.e_sqlite3/2.1.11`, build green. Green, because `TreatWarningsAsErrors` lives in
+  the very file that was missing. Local and CI builds were never affected; only the image was. What to do
+  about the already-published GHCR tags is tracked separately in #389.
+- **The build stage now carries Node.** `mcr.microsoft.com/dotnet/sdk:10.0` ships none, and `.dockerignore`
+  excludes `**/node_modules/`, so the TypeScript plugin's `npm ci` (`NpmInstallSidecar`) has to run inside the
+  image or `VerifySidecarReleaseDeps` fails the Release build — deliberately, so a silently degraded plugin
+  package can never ship. Node comes from the official image rather than `apt`, because Ubuntu 24.04 ships
+  Node 18 while the sidecar declares `"engines": { "node": ">=20" }`. The **runtime** image is unchanged and
+  still has no Node.
+- **The container's global `shonkor` command was broken too** — found by the new CI smoke check on its first
+  run, not by reading. The wrapper execs `/app/cli/Shonkor.CLI.dll`, but the CLI has set
+  `<AssemblyName>shonkor</AssemblyName>` since 2026-06-18 (`bef00e8`), ten days after the wrapper was written
+  (`8d9f6d8`). Every invocation died with *"The application '/app/cli/Shonkor.CLI.dll' does not exist"*. Same
+  root cause as the rest of this entry: nothing ever ran the image.
+- **Nothing was watching, which is why it went unnoticed for two weeks.** CD only runs on push to `main`, and
+  `main` had not moved since 2026-07-16 — before the whole TypeScript plugin. CI built the solution directly
+  and never touched the Dockerfile. CI now builds the image on every PR (without pushing) and smoke-checks
+  that the running container actually seeds the plugin with its sidecar deps
+  (`plugins/shonkor-typescript/sidecar/node_modules/typescript/package.json`), so a green build that produces
+  an incomplete artifact is caught too.
+
+### Documentation — The Node runtime prerequisite for JS/TS analysis is now written down (#351)
+- Since #312 the `shonkor-typescript` plugin is the **only** JS/TS path, and real TS semantics need Node
+  (>= v18, `NodeDiscovery.RequiredMajorVersion`). No document said so. The architecture chapters did mention a
+  "Node sidecar", but nothing anywhere named **the version bar, how to install or point at a Node, or what a
+  user gets when it is missing** — the operational half was absent, and `npm` had zero hits across `docs/`
+  entirely. The setup guide now has a **Step 3** covering the version bar, the
+  discovery order (configured `NodePath` → `PATH` → common install locations), and how to pin the path in
+  `plugins/shonkor-typescript/sidecar.settings.json`. arc42 chapter 2 lists the runtime as a technical
+  constraint, and the `index` command reference names it.
+- **The degradation is documented as it actually is, not as it reads best.** Without Node the index still
+  completes on the plugin's Esprima fallback, but the two report channels are not equally visible, and the
+  docs now say which is which: `TypeScriptSemanticLinker` (an `IGraphPostProcessor`) emits one queryable
+  `Info` diagnostic that the cross-file semantic pass was skipped — and only when the scan found `.ts`/`.tsx`
+  files at all — while the per-file "this file used the fallback" is a **log warning only**, because
+  `IFileParser.ParseAsync` returns nodes and edges and has no diagnostics channel. Two source comments that
+  claimed the parser degrades "visibly, with a diagnostic" were corrected to match.
+- Also noted: the repository's Dockerfile installs no Node, so JS/TS analysis inside the container runs
+  degraded unless you add one.
+
+### Changed — The Sitecore plugin now carries YamlDotNet itself; the host no longer provides it (#348)
+- **Action required for existing workspaces: reinstall the `shonkor-sitecore` plugin.** The host used to ship
+  `YamlDotNet.dll` and the plugin resolved it by ALC fall-through to the default context. That dead reference is
+  gone from `Shonkor.Core`, so a plugin installed from an older ZIP has no YAML library to load.
+- **The failure is quiet, which is why this note exists.** A stale install does not crash: each `.yml` fails
+  individually and is logged as a warning, and the run still ends with `=== Indexing Completed Successfully ===`
+  — with **zero** `SitecoreItem` nodes created. Neither the `minHostApi` check nor the entry-assembly hash
+  detects it, because only the entry DLL is verified. Measured on a fixture repo: 56 nodes, no Sitecore items,
+  green banner. The plugin manifest went `1.0.0` → `1.1.0` so the two artifacts can be told apart.
+- **Why it changed.** `Shonkor.Core` referenced `YamlDotNet` while no file under it used the library — the same
+  dead-reference residue #312 removed for Esprima. Removing it the same way would have broken the plugin, because
+  the plugin had no reference of its own and `Shonkor.Web` even force-loaded the assembly on purpose "so dynamic
+  plugins can reference it". That is plugin isolation *simulated*, not provided, and it contradicts the direction
+  ratified with #292/#312. Every plugin copying the Sitecore csproj would have inherited it.
+- **Proven, not assumed.** The plugin ZIP now carries `YamlDotNet.dll`, and an ALC guard asserts the assembly is
+  resolved from the plugin's own install folder rather than the host. The guard was hardened by inversion
+  *before* the host reference was removed: with the private copy deleted, parsing still succeeded — served by the
+  host — while the plugin's ALC held only its own assembly. That is the hidden coupling caught in the act, and it
+  is what the guard now prevents from returning.
+- Host side effect: the CLI output and its dependency manifest shrink by ~300 KB. `YamlDotNet` is now declared in
+  exactly one place in the repository.
+
+### Security — The first-party security post-processors ran on no regular ingest path at all (#332)
+- The ticket reported an *asymmetry* (webhook/drift append `FirstPartyPostProcessors`, the web index endpoint and
+  the CLI do not). Measuring it showed something worse: post-processors execute **only** in
+  `ScanDirectoryAsync`'s phase 5.5, and of the two paths that *did* append them, the webhook only reaches a full
+  scan when a push names **no** changed files, and drift reconcile never reaches one at all — its
+  `.Concat(FirstPartyPostProcessors.Create())` was **dead code**. So in practice **no** routine ingest produced
+  the security diagnostics. Measured on this repo: a `shonkor index` run yielded **0** diagnostics before, **17**
+  after (6 `security.suspicious-instruction-in-content`, 11 `csharp.ambiguous-type-reference`).
+- **The effect was not cosmetic.** `GroundingPrep` reads `security.suspicious-instruction-in-content` to populate
+  `RagPromptOptions.FlaggedNodeIds`. With no such diagnostics on a Web-/CLI-indexed graph, the RAG prompt's
+  injection flagging was silently inert — retrieved content that looks like an instruction to the model was
+  handed over unmarked. It now works on those graphs.
+- **Fixed by construction, not by another call-site list.** `GraphIndexScanner`'s constructor appends the
+  first-party post-processors itself, so every ingest path is covered including ones not yet written; the two
+  sites that appended them by hand now pass only the plugins' (their hand-appended copies would now be dropped
+  by the constructor's name filter anyway — the point is that the call site is no longer what guarantees
+  coverage, and one of those two lists was dead code to begin with). There is
+  deliberately **no opt-out flag** — that would be the same gap in a new shape.
+- **A plugin can no longer displace the security phase.** Diagnostics are stored keyed by post-processor `Name`
+  and a scan *replaces* the set for that name, so a plugin claiming `security.suspicious-content` and running
+  after the first-party one would erase its findings; only incidental ordering prevented that. Caller-supplied
+  post-processors whose name collides with a first-party one are now dropped, making the guarantee
+  order-independent.
+- **Hardened while the exposure grew (BUG-053).** The injection patterns run over attacker-controlled repository
+  content and now run on *every* index rather than only the webhook, so each `Regex` got an explicit 1 s
+  `matchTimeout`. Semantics are unchanged; a timeout surfaces through the existing post-processor failure
+  isolation as a logged warning, so a pathological file can never block a scan.
+- Unchanged: post-processors remain a **whole-graph** phase — they run on a full scan, never on a single-file
+  reindex. No graph content changes (`SuspiciousContentPostProcessor` emits diagnostics only); the CLI index cost
+  was measured before/after and is unchanged within noise (~10 s wall, ~300 MB peak working set) **on a repo of
+  this size** (~320 files). That is the limit of what was measured: these whole-graph passes materialise every
+  node of a type including `Content`, and that cost is *new* for the CLI and index-endpoint paths — the ones
+  large repositories are indexed through. Scaling is untested; see the follow-up on streaming the graph view.
+
+### Fixed — A JS module queried by its bare stem reported a false all-clear despite real importers (#288)
+- For a JavaScript/TypeScript file the parser emits **two** nodes: a `JSComponent` (`{path}::{stem}`) and, via
+  the scanner, a `File` node (id = the plain path). Every `IMPORTS` edge targets the **File** node; the component
+  only ever carries an inbound `CONTAINS`. So the two nodes hold **disjoint** inbound edges, and a query on the
+  bare module stem (`moco-api`) resolved to the component — which by construction has **no inbound `IMPORTS`** —
+  and every impact/safety tool answered *"nothing references it — safe to change in isolation"* while three
+  modules imported it. A false all-clear is worse than "not found": it is a recommendation.
+- **Option 1 — resolve the stem to its File node.** `ResolveDefinitionAsync` now redirects a resolved
+  `JSComponent` to the `File` node that backs it (the node that actually carries the import fan-in), so
+  `moco-api` and `moco-api.js` answer **identically** across `references`, `find_usages`, `blast_radius`,
+  `edit_plan`, `related_tests` and `rename_plan`. Query-time only — **no re-index required.**
+- **Option 3 — an all-clear must be earned.** No impact/safety tool emits *"safe to change in isolation"* for a
+  node type that structurally cannot receive the queried edge. In the residual case where a `JSComponent` has no
+  backing `File` node (so the redirect cannot fire), the tools point the caller at the file instead of implying
+  the symbol is unused.
+- **`edit_plan` had a distinct, related defect:** its incoming-edges query lacked the `StructuralRelationships`
+  filter the other tools apply, so it listed the module's own `CONTAINS` edge as a *"reference site"* and omitted
+  the three real importers — a plausible-looking, wrong worklist. `edit_plan` now excludes structural containment,
+  as `references`/`find_usages`/`rename_plan` already did.
+- **`get_subgraph` handle parsing** accepts both `/` and `\` separators for the same logical path: a handle
+  quoted back with the host separator (`@/src\background\moco-api.js`) used to resolve to a different, usually
+  non-existent id and silently return an empty (and therefore misleading) graph.
+- **Not done here:** Option 2 (merging/attributing the `JSComponent`'s edges to the file) is deliberately out of
+  scope — it reaches into `CrossTechLinker`'s Sitecore cross-tech linking and needs its own ticket.
+
 ### Added — The streaming path's no-retry rule is pinned, and its stated reason was wrong (#224)
 - The last of the three "safe by construction" claims in the resilience code to be checked. The other two:
   #215/#218 (the retry classifiers) were **broken**; #222 (deterministic failures are never retried) **held**,

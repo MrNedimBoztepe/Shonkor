@@ -235,7 +235,7 @@ public sealed class GetSubgraphTool : IMcpTool
                 hops = new { type = "integer", description = "Number of hops to traverse (default 2, max 5)" },
                 verbose = new { type = "boolean", description = "Return full node/edge JSON instead of the compact text form (default false)." },
                 maxChars = new { type = "integer", description = "Cap on the output size in characters (~4 chars/token, default 32768). Applies to the compact AND the verbose form." },
-                projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
+                projectName = new { type = "string", description = "Optional project context name (e.g. 'my-app' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "seeds" }
         }
@@ -270,8 +270,10 @@ public sealed class GetSubgraphTool : IMcpTool
                 var summary = !string.IsNullOrEmpty(n.Summary) ? $"\t— {n.Summary}" : "";
                 return $"{handle}\t{n.Type}\t{n.Name}{summary}";
             });
+            var byId = nodes.ToDictionary(n => n.Id, StringComparer.Ordinal);
             var edgeLines = edges.Select(e =>
-                $"{ToHandle(e.SourceId, basePath)} --{e.Relationship}--> {ToHandle(e.TargetId, basePath)} {ProvenanceTag(e.Provenance)}");
+                $"{ToHandle(e.SourceId, basePath)} --{e.Relationship}--> {ToHandle(e.TargetId, basePath)} " +
+                ProvenanceTag(e, byId.GetValueOrDefault(e.SourceId)));
 
             var sb = new System.Text.StringBuilder();
             sb.Append("NODES (").Append(nodes.Count).Append("):\n");
@@ -368,7 +370,7 @@ public sealed class GenerateCapsuleTool : IMcpTool
                 query = new { type = "string", description = "The seed query or topic to construct the capsule around" },
                 hops = new { type = "integer", description = "Traversal hops for context expansion (default 2, max 5)" },
                 maxChars = new { type = "integer", description = "Code-body budget in characters (~4 chars/token, default 12000 ≈ 3k tokens). The seed nodes that matched your query are ALWAYS rendered in full; lower-relevance neighbours have their bodies omitted (with a notice) once this budget is spent — never silent tail truncation. Raise it for more full-body context." },
-                projectName = new { type = "string", description = "Optional project context name (e.g. 'MuM' or 'Shonkor'). If omitted, uses the active project." }
+                projectName = new { type = "string", description = "Optional project context name (e.g. 'my-app' or 'Shonkor'). If omitted, uses the active project." }
             },
             required = new[] { "query" }
         }

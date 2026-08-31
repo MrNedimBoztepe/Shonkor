@@ -12,7 +12,16 @@ public record SemanticAnalysisResult
 {
     public string Summary { get; init; } = string.Empty;
     public List<string> ExtractedConcepts { get; init; } = new();
-    
+
+    /// <summary>
+    /// Which model produced this. Carried on the RESULT rather than supplied by the caller, because a
+    /// caller can only state what it believes was used — the same "the tool is constant" assumption that
+    /// let four stale plugin binaries run unnoticed (#411, #416). It is persisted with every edge this
+    /// result creates, so a stored assignment says what made it.
+    /// </summary>
+    public string Model { get; init; } = string.Empty;
+
+
     // Benchmark & Performance Metrics
     public int PromptTokens { get; init; }
     public int CompletionTokens { get; init; }
