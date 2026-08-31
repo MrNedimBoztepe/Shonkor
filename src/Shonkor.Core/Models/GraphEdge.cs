@@ -19,6 +19,14 @@ public record GraphEdge
     /// </summary>
     public Provenance Provenance { get; init; } = Provenance.Extracted;
 
+    /// <summary>
+    /// WHY this edge carries its tier (AP1, #428). The tier is DERIVED from this via
+    /// <c>ProvenanceReasons.TierOf</c>, never maintained beside it — two fields that must agree are two
+    /// fields that will not. Defaults to <see cref="ProvenanceReason.Unspecified"/>, which claims nothing:
+    /// an edge from a producer that has not been taught to set one must not be reported as evidenced.
+    /// </summary>
+    public ProvenanceReason Reason { get; init; } = ProvenanceReason.Unspecified;
+
     /// <summary>Dynamic, parser-specific attributes of the relationship.</summary>
     public Dictionary<string, string> Properties { get; init; } = new();
 }

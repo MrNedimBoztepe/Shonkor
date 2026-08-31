@@ -65,6 +65,7 @@ internal static class SqliteSchema
                 TargetId     TEXT NOT NULL,
                 RelationType TEXT NOT NULL,
                 Provenance   INTEGER NOT NULL DEFAULT 0,
+                Reason       INTEGER NOT NULL DEFAULT 0,
                 Properties   TEXT,
                 PRIMARY KEY (SourceId, TargetId, RelationType)
             );
@@ -76,6 +77,12 @@ internal static class SqliteSchema
         await TryExecuteAsync(connection, "ALTER TABLE Edges ADD COLUMN Provenance INTEGER NOT NULL DEFAULT 0;", cancellationToken).ConfigureAwait(false);
         // Edge properties (TICKET-207): dynamic parser-specific attributes, persisted as a JSON object.
         await TryExecuteAsync(connection, "ALTER TABLE Edges ADD COLUMN Properties TEXT;", cancellationToken).ConfigureAwait(false);
+        // AP1 (#428): WHY an edge holds its tier. Defaults to 0 = Unspecified, NOT to a real reason —
+        // unlike the Provenance column above, which defaults to Extracted and thereby made every
+        // pre-provenance edge claim to be a hard fact. Existing rows are assigned a reason by
+        // RecoverEdgeReasonsOnceAsync where (RelationType, Provenance) identifies the producer, and left
+        // unspecified where it does not.
+        await TryExecuteAsync(connection, "ALTER TABLE Edges ADD COLUMN Reason INTEGER NOT NULL DEFAULT 0;", cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_edges_source ON Edges(SourceId);", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_edges_target ON Edges(TargetId);", cancellationToken).ConfigureAwait(false);
@@ -199,6 +206,7 @@ internal static class SqliteSchema
 
         await NormalizeExistingEmbeddingsOnceAsync(connection, cancellationToken).ConfigureAwait(false);
         await RepairEdgeProvenanceOnceAsync(connection, cancellationToken).ConfigureAwait(false);
+        await RecoverEdgeReasonsOnceAsync(connection, cancellationToken).ConfigureAwait(false);
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -287,6 +295,92 @@ internal static class SqliteSchema
             $"INSERT OR REPLACE INTO Meta (Key, Value) VALUES ('{ProvenanceRepairMetaKey}', '1');",
             cancellationToken).ConfigureAwait(false);
     }
+    internal const string ReasonRecoveryMetaKey = "provenanceReasonRecoveryV1";
+    internal const string ReasonRecoveryDiagnosticSource = "provenance.reason";
+
+    /// <summary>
+    /// AP1 (#428) one-time migration: gives existing edges a <see cref="ProvenanceReason"/> where
+    /// <c>(RelationType, Provenance)</c> identifies the producer — the same predicate #399's repair used,
+    /// and sound for the same reason: edges record no producer, but for most families that pair names one.
+    ///
+    /// <para>
+    /// Where it does not, the edge keeps <see cref="ProvenanceReason.Unspecified"/>. The case that matters
+    /// is <c>IMPLEMENTS</c>/<c>EXTENDS</c> at <c>Extracted</c> in a graph indexed before #402: the
+    /// syntactic parser and the semantic linker both wrote exactly that pair, so assigning either reason
+    /// would be a guess wearing a migration's clothes. Those wait for a full scan.
+    /// </para>
+    ///
+    /// <para>
+    /// Runs once behind a <c>Meta</c> flag and is idempotent anyway — it only ever writes over
+    /// <c>Reason = 0</c>, so a reason a producer set is never overwritten by a recovered one. Each family
+    /// leaves an <c>Info</c> diagnostic with its count, so what was inferred stays separable after the
+    /// fact from what was measured.
+    /// </para>
+    /// </summary>
+    private static async Task RecoverEdgeReasonsOnceAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        var alreadyDone = await ScalarStringAsync(connection,
+            $"SELECT Value FROM Meta WHERE Key = '{ReasonRecoveryMetaKey}';", cancellationToken).ConfigureAwait(false);
+        if (alreadyDone == "1") return;
+
+        // The distinct (relation, tier) pairs actually present, so the migration touches what exists
+        // rather than iterating a table of what might.
+        var pairs = new List<(string Rel, Provenance Tier)>();
+        await using (var read = connection.CreateCommand())
+        {
+            read.CommandText = "SELECT DISTINCT RelationType, Provenance FROM Edges;";
+            await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                pairs.Add((reader.GetString(0), (Provenance)reader.GetInt32(1)));
+            }
+        }
+
+        var recovered = 0;
+        var unresolved = 0;
+        foreach (var (rel, tier) in pairs)
+        {
+            var reason = ProvenanceReasons.Recover(rel, tier);
+
+            await using var count = connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM Edges WHERE RelationType = @rel AND Provenance = @tier AND Reason = 0;";
+            count.Parameters.AddWithValue("@rel", rel);
+            count.Parameters.AddWithValue("@tier", (int)tier);
+            var affected = Convert.ToInt32(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+            if (affected == 0) continue;
+
+            if (reason == ProvenanceReason.Unspecified) { unresolved += affected; continue; }
+
+            await using var update = connection.CreateCommand();
+            update.CommandText =
+                "UPDATE Edges SET Reason = @reason WHERE RelationType = @rel AND Provenance = @tier AND Reason = 0;";
+            update.Parameters.AddWithValue("@reason", (int)reason);
+            update.Parameters.AddWithValue("@rel", rel);
+            update.Parameters.AddWithValue("@tier", (int)tier);
+            recovered += await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (recovered > 0 || unresolved > 0)
+        {
+            await using var audit = connection.CreateCommand();
+            audit.CommandText =
+                """
+                INSERT INTO Diagnostics (Source, Code, Severity, Message, NodeId, FilePath)
+                VALUES (@src, 'provenance.reason.recovered', @sev, @msg, NULL, NULL);
+                """;
+            audit.Parameters.AddWithValue("@src", ReasonRecoveryDiagnosticSource);
+            audit.Parameters.AddWithValue("@sev", (int)DiagnosticSeverity.Info);
+            audit.Parameters.AddWithValue("@msg",
+                $"{recovered} edge(s) were given a provenance reason recovered from (relation, tier); "
+                + $"{unresolved} could not be attributed and stay unspecified until a full scan re-derives them.");
+            await audit.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await ExecuteAsync(connection,
+            $"INSERT OR REPLACE INTO Meta (Key, Value) VALUES ('{ReasonRecoveryMetaKey}', '1');",
+            cancellationToken).ConfigureAwait(false);
+    }
+
 
     /// <summary>
     /// TICKET-215 one-time migration: L2-normalizes embeddings written before normalization-on-write, so the

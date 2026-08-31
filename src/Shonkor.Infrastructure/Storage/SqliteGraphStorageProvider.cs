@@ -264,10 +264,20 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         // over a compiler-proven one. Properties (JSON) are persisted and refreshed to the latest write.
         command.CommandText =
             """
-            INSERT INTO Edges (SourceId, TargetId, RelationType, Provenance, Properties)
-            VALUES (@SourceId, @TargetId, @RelationType, @Provenance, @Properties)
+            INSERT INTO Edges (SourceId, TargetId, RelationType, Provenance, Reason, Properties)
+            VALUES (@SourceId, @TargetId, @RelationType, @Provenance, @Reason, @Properties)
             ON CONFLICT(SourceId, TargetId, RelationType) DO UPDATE SET
                 Provenance = MIN(excluded.Provenance, Edges.Provenance),
+                -- The reason must follow the tier that won, or the two describe different edges (AP1,
+                -- #428). A writer with no reason never erases one that exists; on a tie the newer wins,
+                -- because it is the more recent statement about the same evidence. SQLite evaluates every
+                -- assignment against the pre-update row, so reading Edges.Provenance here is the OLD tier.
+                Reason = CASE
+                    WHEN excluded.Reason = 0 THEN Edges.Reason
+                    WHEN Edges.Reason = 0 THEN excluded.Reason
+                    WHEN excluded.Provenance <= Edges.Provenance THEN excluded.Reason
+                    ELSE Edges.Reason
+                END,
                 Properties = excluded.Properties;
             """;
 
@@ -275,6 +285,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var pTarget = command.Parameters.Add("@TargetId", SqliteType.Text);
         var pRelation = command.Parameters.Add("@RelationType", SqliteType.Text);
         var pProvenance = command.Parameters.Add("@Provenance", SqliteType.Integer);
+        var pReason = command.Parameters.Add("@Reason", SqliteType.Integer);
         var pProperties = command.Parameters.Add("@Properties", SqliteType.Text);
 
         await command.PrepareAsync(cancellationToken).ConfigureAwait(false);
@@ -285,6 +296,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
             pTarget.Value = edge.TargetId;
             pRelation.Value = edge.Relationship;
             pProvenance.Value = (int)edge.Provenance;
+            pReason.Value = (int)edge.Reason;
             pProperties.Value = SqliteRowMapper.SerializeMetadata(edge.Properties);
 
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -628,7 +640,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         {
             edgeCommand.CommandText =
                 """
-                SELECT SourceId, TargetId, RelationType, Provenance, Properties
+                SELECT SourceId, TargetId, RelationType, Provenance, Reason, Properties
                 FROM Edges
                 WHERE SourceId = @id OR TargetId = @id;
                 """;
@@ -685,7 +697,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT SourceId, TargetId, RelationType, Provenance, Properties
+            SELECT SourceId, TargetId, RelationType, Provenance, Reason, Properties
             FROM Edges
             WHERE RelationType = @rel;
             """;
@@ -705,7 +717,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
     {
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT SourceId, TargetId, RelationType, Provenance, Properties FROM Edges;";
+        command.CommandText = "SELECT SourceId, TargetId, RelationType, Provenance, Reason, Properties FROM Edges;";
 
         var edges = new List<GraphEdge>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -1490,7 +1502,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var paramList = string.Join(", ", paramNames);
         command.CommandText =
             $"""
-            SELECT SourceId, TargetId, RelationType, Provenance, Properties
+            SELECT SourceId, TargetId, RelationType, Provenance, Reason, Properties
             FROM Edges
             WHERE SourceId IN ({paramList})
                OR TargetId IN ({paramList});
@@ -1550,7 +1562,7 @@ public sealed class SqliteGraphStorageProvider : IGraphStorageProvider, IDisposa
         var paramList = string.Join(", ", paramNames);
         command.CommandText =
             $"""
-            SELECT SourceId, TargetId, RelationType, Provenance, Properties
+            SELECT SourceId, TargetId, RelationType, Provenance, Reason, Properties
             FROM Edges
             WHERE SourceId IN ({paramList})
               AND TargetId IN ({paramList});
