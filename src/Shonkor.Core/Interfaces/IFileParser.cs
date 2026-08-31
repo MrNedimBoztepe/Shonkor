@@ -37,6 +37,14 @@ public interface IFileParser
     Provenance DefaultProvenance => Provenance.Extracted;
 
     /// <summary>
+    /// WHY this parser's edges hold their tier (AP1, #428). Default-implemented as
+    /// <see cref="ProvenanceReason.Unspecified"/> so a plugin built against an older contract still
+    /// compiles — and so it stays silent rather than having a reason invented for it. An edge that sets
+    /// its own reason keeps it; one that does not inherits this.
+    /// </summary>
+    ProvenanceReason DefaultReason => ProvenanceReason.Unspecified;
+
+    /// <summary>
     /// Declares the node types this parser produces, with metadata for UI filtering.
     /// </summary>
     IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; }

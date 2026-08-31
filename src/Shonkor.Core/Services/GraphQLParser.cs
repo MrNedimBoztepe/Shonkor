@@ -20,6 +20,9 @@ public sealed partial class GraphQLParser : IFileParser
     /// <c>DEFINED_IN</c> edges stay Extracted via the scanner's structural-edge exemption.</remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
+    /// <summary>Schema relationships read from the document, resolved by name (AP1, #428).</summary>
+    public ProvenanceReason DefaultReason => ProvenanceReason.UniqueNameMatch;
+
     /// <inheritdoc />
     public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
     {

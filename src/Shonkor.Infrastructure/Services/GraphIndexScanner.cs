@@ -254,7 +254,7 @@ public sealed class GraphIndexScanner
                 {
                     var (nodes, edges) = await parser.ParseAsync(filePath, content).ConfigureAwait(false);
                     foreach (var node in nodes) allNodesToUpsert.Add(node);
-                    foreach (var edge in edges) allEdgesToUpsert.Add(StampProvenance(edge, parser.DefaultProvenance));
+                    foreach (var edge in edges) allEdgesToUpsert.Add(StampReason(StampProvenance(edge, parser.DefaultProvenance), parser.DefaultReason));
                 }
 
                 // Create a File node to represent the scanned file itself.
@@ -355,7 +355,7 @@ public sealed class GraphIndexScanner
                     // post-processor that already sets Inferred/Ambiguous per edge is unaffected.
                     if (enrichment.Edges.Count > 0)
                         await _storage.UpsertEdgesAsync(
-                            enrichment.Edges.Select(e => StampProvenance(e, postProcessor.DefaultProvenance)),
+                            enrichment.Edges.Select(e => StampReason(StampProvenance(e, postProcessor.DefaultProvenance), postProcessor.DefaultReason)),
                             cancellationToken).ConfigureAwait(false);
                     // Replace exactly this post-processor's diagnostics (tagged by its Name) so a re-scan
                     // refreshes them without touching others.
@@ -756,7 +756,7 @@ public sealed class GraphIndexScanner
         {
             var (parsedNodes, parsedEdges) = await parser.ParseAsync(fullPath, content).ConfigureAwait(false);
             nodes.AddRange(parsedNodes);
-            foreach (var edge in parsedEdges) edges.Add(StampProvenance(edge, parser.DefaultProvenance));
+            foreach (var edge in parsedEdges) edges.Add(StampReason(StampProvenance(edge, parser.DefaultProvenance), parser.DefaultReason));
         }
 
         var storedContent = TruncateFileContent(content);
@@ -876,6 +876,33 @@ public sealed class GraphIndexScanner
         !StructuralEdges.Contains(edge.Relationship) && (int)parserDefault > (int)edge.Provenance
             ? edge with { Provenance = parserDefault }
             : edge;
+
+    /// <summary>
+    /// Gives an edge the producer's default reason when it set none (AP1, #428), and gives structural
+    /// edges <see cref="ProvenanceReason.Structural"/> regardless of who emitted them.
+    ///
+    /// <para>
+    /// Deliberately NOT a second capping rule beside <see cref="StampProvenance"/>. The tier is derived
+    /// from the reason, so capping both independently is how two fields that must agree stop agreeing —
+    /// the failure that left 1 354 edges stranded between the scanner's <c>max()</c> and the store's
+    /// <c>MIN()</c> until #399. An edge that states its own reason keeps it; one that states none inherits.
+    /// </para>
+    ///
+    /// <para>
+    /// A producer that has not been taught to declare a reason yields <see cref="ProvenanceReason.Unspecified"/>,
+    /// which claims nothing. That is the correct outcome for a third-party plugin built against an older
+    /// contract: silence, not a fabricated attribution.
+    /// </para>
+    /// </summary>
+    private static GraphEdge StampReason(GraphEdge edge, ProvenanceReason producerDefault)
+    {
+        if (StructuralEdges.Contains(edge.Relationship))
+            return edge.Reason == ProvenanceReason.Structural ? edge : edge with { Reason = ProvenanceReason.Structural };
+
+        return edge.Reason != ProvenanceReason.Unspecified || producerDefault == ProvenanceReason.Unspecified
+            ? edge
+            : edge with { Reason = producerDefault };
+    }
 
     /// <summary>
     /// An opaque fingerprint of the toolchain that will interpret this scan's files: every parser and every

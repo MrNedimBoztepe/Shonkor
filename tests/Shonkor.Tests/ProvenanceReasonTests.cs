@@ -193,3 +193,88 @@ public sealed class ProvenanceReasonTests
         }
     }
 }
+
+/// <summary>
+/// AP1 part two (#428): the producers state their reason, so a full scan leaves no edge unattributed.
+/// The one that matters is <c>IMPLEMENTS</c>/<c>EXTENDS</c> — indistinguishable until now, and therefore
+/// the one family the repair table had to leave alone (#402, #405).
+/// </summary>
+public sealed class ProducerReasonTests : IDisposable
+{
+    private readonly List<string> _dirs = new();
+
+    public void Dispose()
+    {
+        foreach (var d in _dirs)
+        {
+            try { if (Directory.Exists(d)) Directory.Delete(d, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    private string DirWith(string fileName, string content)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "shonkor-reason-prod-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        _dirs.Add(dir);
+        File.WriteAllText(Path.Combine(dir, fileName), content);
+        return dir;
+    }
+
+    /// <summary>
+    /// The syntactic parser names its heritage edges for what they are. Before this, the same edge from
+    /// the semantic linker and from the parser were one undifferentiated population at the same tier.
+    /// </summary>
+    [Fact]
+    public async Task SyntacticHeritageIsNamedAsSuch()
+    {
+        var dir = DirWith("A.cs", "public interface IThing { }\npublic class Thing : IThing { }\n");
+
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+        await new Shonkor.Infrastructure.Services.GraphIndexScanner(storage, new[] { new RoslynAstParser() })
+            .ScanDirectoryAsync(dir, Array.Empty<string>());
+
+        var heritage = (await storage.GetAllEdgesAsync())
+            .Where(e => e.Relationship is "IMPLEMENTS" or "EXTENDS").ToList();
+
+        Assert.NotEmpty(heritage);
+        Assert.All(heritage, e => Assert.Equal(ProvenanceReason.SyntacticHeritage, e.Reason));
+        // And the derived tier still agrees with the stored one — the invariant the whole design rests on.
+        Assert.All(heritage, e => Assert.Equal(e.Provenance, ProvenanceReasons.TierOf(e.Reason)));
+    }
+
+    /// <summary>Structural containment is named structurally whoever emitted it.</summary>
+    [Fact]
+    public async Task ContainmentIsAlwaysStructural()
+    {
+        var dir = DirWith("B.cs", "public class Outer { public void M() { } }\n");
+
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+        await new Shonkor.Infrastructure.Services.GraphIndexScanner(storage, new[] { new RoslynAstParser() })
+            .ScanDirectoryAsync(dir, Array.Empty<string>());
+
+        var contains = (await storage.GetAllEdgesAsync()).Where(e => e.Relationship == "CONTAINS").ToList();
+        Assert.NotEmpty(contains);
+        Assert.All(contains, e => Assert.Equal(ProvenanceReason.Structural, e.Reason));
+    }
+
+    /// <summary>
+    /// A parser that declares no reason produces unattributed edges rather than borrowed ones — the
+    /// correct outcome for a plugin built against an older contract.
+    /// </summary>
+    [Fact]
+    public void TheContractDefaultsToSilence()
+    {
+        Shonkor.Core.Interfaces.IFileParser parser = new SilentParser();   // via the interface: the default lives there
+        Assert.Equal(ProvenanceReason.Unspecified, parser.DefaultReason);
+    }
+
+    private sealed class SilentParser : Shonkor.Core.Interfaces.IFileParser
+    {
+        public IReadOnlySet<string> SupportedExtensions { get; } = new HashSet<string> { ".silent" };
+        public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = Array.Empty<NodeTypeDescriptor>();
+        public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(string filePath, string content)
+            => Task.FromResult<(IReadOnlyList<GraphNode>, IReadOnlyList<GraphEdge>)>((Array.Empty<GraphNode>(), Array.Empty<GraphEdge>()));
+    }
+}

@@ -125,7 +125,12 @@ public static class SemanticCsharpLinker
 
         if (edges.Count == 0) return;
         await storage.UpsertEdgesAsync(
-            edges.Select(e => new GraphEdge { SourceId = e.Source, TargetId = e.Target, Relationship = e.Relationship, Provenance = e.Provenance }),
+            edges.Select(e => new GraphEdge { SourceId = e.Source, TargetId = e.Target, Relationship = e.Relationship, Provenance = e.Provenance,
+                // Derived from the tier this linker assigned, not asserted (AP1, #428). It emits
+                // Extracted for a resolved symbol AND weaker tiers for its name-based fallback, so
+                // stamping SemanticSymbol on all of them would be the fabricated attribution this whole
+                // design exists to prevent. Recover() is the one place that mapping lives.
+                Reason = ProvenanceReasons.Recover(e.Relationship, e.Provenance) }),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -150,7 +155,12 @@ public static class SemanticCsharpLinker
 
         if (edges.Count == 0) return;
         await storage.UpsertEdgesAsync(
-            edges.Select(e => new GraphEdge { SourceId = e.Source, TargetId = e.Target, Relationship = e.Relationship, Provenance = e.Provenance }),
+            edges.Select(e => new GraphEdge { SourceId = e.Source, TargetId = e.Target, Relationship = e.Relationship, Provenance = e.Provenance,
+                // Derived from the tier this linker assigned, not asserted (AP1, #428). It emits
+                // Extracted for a resolved symbol AND weaker tiers for its name-based fallback, so
+                // stamping SemanticSymbol on all of them would be the fabricated attribution this whole
+                // design exists to prevent. Recover() is the one place that mapping lives.
+                Reason = ProvenanceReasons.Recover(e.Relationship, e.Provenance) }),
             cancellationToken).ConfigureAwait(false);
     }
 
