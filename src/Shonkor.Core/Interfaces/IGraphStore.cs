@@ -148,4 +148,29 @@ public interface IGraphStore
     /// <see cref="SetNodeIdSchemeVersionAsync"/>.
     /// </summary>
     Task SetToolchainFingerprintAsync(string fingerprint, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The revision the indexed tree was at when this graph was built, or <c>null</c> when none was
+    /// recorded — a graph built before this existed, or a tree that is not a repository.
+    ///
+    /// <para>
+    /// AP8 stage 1 (#449): without it, the only staleness question the index can answer is "did this one
+    /// file change". The question an agent actually has before trusting a result is "does this graph match
+    /// the tree I am working in", and that needs a whole-graph marker.
+    /// </para>
+    ///
+    /// <para>
+    /// An opaque string, for the same reason as the toolchain fingerprint: it is a value to compare, never
+    /// one to parse. It happens to be a commit id today; a caller that reads it as one would break the
+    /// moment a non-git tree records something else.
+    /// </para>
+    /// </summary>
+    Task<string?> GetIndexedRevisionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stamps the revision the tree was at when the scan started. Deliberately the START, not the end: a
+    /// commit landing mid-scan would otherwise be recorded as indexed while half the graph predates it,
+    /// and an index that overstates its currency is worse than one that understates it.
+    /// </summary>
+    Task SetIndexedRevisionAsync(string revision, CancellationToken cancellationToken = default);
 }

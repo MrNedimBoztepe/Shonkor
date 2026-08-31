@@ -151,6 +151,10 @@ public sealed class GraphIndexScanner
         ArgumentNullException.ThrowIfNull(excludePatterns);
 
         var stopwatch = Stopwatch.StartNew();
+        // Read BEFORE any work (#449): a commit landing mid-scan would otherwise be stamped as indexed
+        // while half the graph predates it. An index that overstates its currency is worse than one that
+        // understates it — the whole point of the marker is that it can be trusted when it says "matches".
+        var revisionAtStart = WorkingTreeRevision.TryRead(directoryPath);
         var filesScanned = 0;
         var nodesCreated = 0;
         var edgesCreated = 0;
@@ -396,6 +400,13 @@ public sealed class GraphIndexScanner
         //    so any prior staleness is now resolved and get_stats stops recommending a re-index.
         await _storage.SetNodeIdSchemeVersionAsync(Shonkor.Core.Services.CsharpNodeId.SchemeVersion, cancellationToken).ConfigureAwait(false);
         await _storage.SetToolchainFingerprintAsync(toolchainFingerprint, cancellationToken).ConfigureAwait(false);
+        // Only when there is one to record (#449). A tree that is not a repository leaves the marker
+        // ABSENT, and absent is reported as "unknown" — never as "matches", which is the one reading that
+        // would make the disclosure worse than none.
+        if (revisionAtStart is not null)
+        {
+            await _storage.SetIndexedRevisionAsync(revisionAtStart, cancellationToken).ConfigureAwait(false);
+        }
 
         stopwatch.Stop();
         return new IndexResult(filesScanned, nodesCreated, edgesCreated, stopwatch.Elapsed);
