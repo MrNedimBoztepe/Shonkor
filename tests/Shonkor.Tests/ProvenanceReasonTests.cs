@@ -278,3 +278,62 @@ public sealed class ProducerReasonTests : IDisposable
             => Task.FromResult<(IReadOnlyList<GraphNode>, IReadOnlyList<GraphEdge>)>((Array.Empty<GraphNode>(), Array.Empty<GraphEdge>()));
     }
 }
+
+/// <summary>
+/// The acceptance criterion of AP1, as a test: after a full scan, no edge is left unattributed (#428).
+///
+/// <para>
+/// It is here because its absence cost a real defect. The semantic linker was first given
+/// <c>ProvenanceReasons.Recover</c> — the MIGRATION's heuristic, which answers "cannot tell" for
+/// <c>IMPLEMENTS</c>/<c>EXTENDS</c> at <c>Extracted</c> because in a stored graph both producers wrote
+/// that pair. Inside the linker there is nothing to tell. Measured on the shonkor graph itself: <b>102
+/// edges</b> came out of a full scan with no reason, and every test that only asked "does it have a
+/// reason somewhere" stayed green.
+/// </para>
+/// </summary>
+public sealed class FullScanAttributionTests : IDisposable
+{
+    private string? _dir;
+
+    public void Dispose()
+    {
+        try { if (_dir is not null && Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
+    }
+
+    [Fact]
+    public async Task AFullSemanticScanLeavesNoEdgeUnattributed()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "shonkor-attrib-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dir);
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Model.cs"), """
+            namespace Fixture;
+            public interface IRepository { void Save(); }
+            public abstract class RepositoryBase : IRepository { public abstract void Save(); }
+            public class UserRepository : RepositoryBase
+            {
+                public override void Save() { }
+                public void Use() { var other = new UserRepository(); other.Save(); }
+            }
+            """);
+
+        using var storage = new SqliteGraphStorageProvider(":memory:");
+        await storage.InitializeAsync();
+        // semanticCsharp: true — the linker is the producer whose attribution was wrong.
+        var scanner = new Shonkor.Infrastructure.Services.GraphIndexScanner(
+            storage, new[] { new RoslynAstParser() }, semanticCsharp: true);
+        await scanner.ScanDirectoryAsync(_dir, Array.Empty<string>());
+
+        var edges = await storage.GetAllEdgesAsync();
+        Assert.NotEmpty(edges);
+
+        var unattributed = edges.Where(e => e.Reason == ProvenanceReason.Unspecified)
+            .Select(e => $"{e.Relationship} [{e.Provenance}] {e.SourceId} -> {e.TargetId}")
+            .ToList();
+
+        Assert.True(unattributed.Count == 0,
+            $"{unattributed.Count} edge(s) came out of a full scan with no reason:\n" + string.Join("\n", unattributed.Take(10)));
+
+        // And the reason still derives the tier the edge actually carries.
+        Assert.All(edges, e => Assert.Equal(e.Provenance, ProvenanceReasons.TierOf(e.Reason)));
+    }
+}
