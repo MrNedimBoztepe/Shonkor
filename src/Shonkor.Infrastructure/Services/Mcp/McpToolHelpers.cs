@@ -621,4 +621,84 @@ public static class McpToolHelpers
 
     public static string SendError(JsonElement id, int code, string message) =>
         JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code, message } });
+
+    /// <summary>
+    /// An allow/deny filter over <see cref="ProvenanceReason"/> (AP2, #456). Both lists are accepted and
+    /// <b>deny wins</b> on any overlap — a caller who names a reason on both sides is stating a
+    /// contradiction, and resolving it toward the more restrictive reading is the only choice that cannot
+    /// silently widen a result someone believed they had narrowed.
+    /// </summary>
+    /// <param name="Allow">When non-empty, only these reasons pass. Empty means "no allow-list".</param>
+    /// <param name="Deny">These reasons never pass, allow-list or not.</param>
+    public readonly record struct ReasonFilter(IReadOnlySet<ProvenanceReason> Allow, IReadOnlySet<ProvenanceReason> Deny)
+    {
+        public bool IsEmpty => Allow.Count == 0 && Deny.Count == 0;
+
+        /// <summary>
+        /// Whether an edge's reason passes.
+        ///
+        /// <para>
+        /// <see cref="ProvenanceReason.Unspecified"/> is admitted by an allow-list unless it is named
+        /// explicitly (ratified). It is not a reason, so a strict reading would exclude it — and on a graph
+        /// indexed before every producer declared one, that is most of the graph. A filter that answers
+        /// "nothing found" because the data predates the vocabulary is a wrong answer wearing a correct
+        /// one's clothes. Naming it explicitly still excludes it, and the count is always disclosed.
+        /// </para>
+        /// </summary>
+        public bool Passes(ProvenanceReason reason)
+        {
+            if (Deny.Contains(reason)) return false;
+            if (Allow.Count == 0) return true;
+            return Allow.Contains(reason) || reason == ProvenanceReason.Unspecified;
+        }
+    }
+
+    /// <summary>
+    /// Reads the <c>reasons</c> (allow) and <c>excludeReasons</c> (deny) arguments. Unrecognised names are
+    /// ignored rather than rejected — a client written against a newer build may know reasons this one does
+    /// not, and failing the whole call over a name is worse than filtering by the ones we understand. The
+    /// disclosure names what was actually applied, so an ignored value is visible rather than assumed.
+    /// </summary>
+    public static ReasonFilter ReadReasonFilter(JsonNode? args)
+    {
+        static IReadOnlySet<ProvenanceReason> Read(JsonNode? node)
+        {
+            var set = new HashSet<ProvenanceReason>();
+            if (node is null) return set;
+
+            var raw = node is JsonArray array
+                ? array.Select(v => v?.ToString() ?? string.Empty)
+                : node.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            foreach (var name in raw)
+            {
+                if (Enum.TryParse<ProvenanceReason>(name.Trim(), ignoreCase: true, out var parsed)) set.Add(parsed);
+            }
+            return set;
+        }
+
+        return new ReasonFilter(Read(args?["reasons"]), Read(args?["excludeReasons"]));
+    }
+
+    /// <summary>The schema blurb, so every edge-bearing tool describes the pair identically.</summary>
+    public const string ReasonsDescription =
+        "Optional allow-list over WHY an edge exists, by ProvenanceReason name (e.g. SemanticSymbol, "
+        + "SyntacticHeritage, UniqueNameMatch, AmbiguousNameMatch, PathConvention, CmsConfiguration, "
+        + "ModelAssertion). Only these pass. The tier filter cannot express this: at depth 5 on a real "
+        + "solution 83 % of reachable nodes need at least one unproven edge, so 'provenance' offers only "
+        + "'discard 83 %' or 'accept everything'. Edges with no recorded reason still pass unless "
+        + "Unspecified is named explicitly.";
+
+    /// <summary>
+    /// What a reason filter removed (AP2, #456). Emitted only when it removed something — unlike the
+    /// model-involvement note, whose zero case distinguishes "no model involved" from "not checked".
+    /// This filter is opt-in: a caller who passed none is not owed a line saying none was applied.
+    /// </summary>
+    public static string ReasonFilterNote(int excluded) =>
+        excluded == 0 ? string.Empty : $" {excluded} more were excluded by the reason filter.";
+
+    /// <summary>The deny counterpart.</summary>
+    public const string ExcludeReasonsDescription =
+        "Optional deny-list over ProvenanceReason names. These never pass, and win over 'reasons' on "
+        + "overlap. Use it to keep a broad traversal while removing one kind of evidence.";
 }

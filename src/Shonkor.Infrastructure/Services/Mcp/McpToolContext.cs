@@ -266,7 +266,8 @@ public sealed class McpToolContext
     public async Task<string> EdgeReportAsync(
         IGraphStorageProvider storage, string? projectName, string symbol, bool incoming, string verb, string emptyMessage,
         Provenance? maxProvenance = null,
-        bool includeModelEdges = false)
+        bool includeModelEdges = false,
+        McpToolHelpers.ReasonFilter reasonFilter = default)
     {
         var basePath = GetProjectBasePath(projectName);
         var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
@@ -281,8 +282,11 @@ public sealed class McpToolContext
             .ToList();
         // AP7 stage 2 (#445): a model's association is not a reference. Excluded by default; the count of
         // what was held back is reported below, so a shorter answer is never a quieter one.
-        var incident = directional.Where(e => PassesModelEdgeFilter(e.Relationship, includeModelEdges)).ToList();
-        var excludedModel = directional.Count - incident.Count;
+        var afterModelFilter = directional.Where(e => PassesModelEdgeFilter(e.Relationship, includeModelEdges)).ToList();
+        var excludedModel = directional.Count - afterModelFilter.Count;
+        // AP2 (#456): filter by WHY the edge exists, not only by how much to believe it.
+        var incident = afterModelFilter.Where(e => reasonFilter.Passes(e.Reason)).ToList();
+        var excludedByReason = afterModelFilter.Count - incident.Count;
 
         var stale = await StaleSuffixAsync(storage, def).ConfigureAwait(false);
         var revisionNote = await RevisionSuffixAsync(storage, projectName).ConfigureAwait(false);   // #449
@@ -293,7 +297,7 @@ public sealed class McpToolContext
             // queried edge — point the caller at the node that can, instead of "safe to change in isolation".
             // The empty result carries the disclosure too. Without it a consumer cannot tell "empty, and no
             // model was involved" from "a tool that does not report model involvement at all" (#445).
-            var empty = ModelInvolvementNote(Array.Empty<string>(), excludedModel) + revisionNote;
+            var empty = ModelInvolvementNote(Array.Empty<string>(), excludedModel) + ReasonFilterNote(excludedByReason) + revisionNote;
             var hint = EdgeCarrierRedirectHint(def);
             if (!string.IsNullOrEmpty(hint))
                 return $"No {(incoming ? "inbound references to" : "outbound dependencies of")} '{def.Name}' ({def.Type})." + hint + stale + empty;
@@ -319,7 +323,7 @@ public sealed class McpToolContext
             }
         }
         // AP7 stage 1 (#445): say how much of this rests on model assertions rather than extracted code.
-        return sb.ToString().TrimEnd() + stale + ModelInvolvementNote(incident.Select(e => e.Relationship), excludedModel) + revisionNote;
+        return sb.ToString().TrimEnd() + stale + ModelInvolvementNote(incident.Select(e => e.Relationship), excludedModel) + ReasonFilterNote(excludedByReason) + revisionNote;
     }
 
     /// <summary>

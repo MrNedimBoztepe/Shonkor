@@ -37,6 +37,8 @@ public sealed class BlastRadiusTool : IMcpTool
                 maxDepth = new { type = "integer", description = "Max reverse-traversal depth (default 5). No hard cap — a persistent index can afford deeper traversal; when the limit truncates results, 'truncatedAtDepth' is true." },
                 minTier = new { type = "string", description = "Minimum trust tier to traverse: 'extracted' = only compiler-proven edges (conservative); 'inferred' = proven + heuristic (excludes ambiguous); 'ambiguous'/'all' (default) = every edge. Edges below the tier are pruned DURING traversal, so the result is a true subset." },
                 includeModelEdges = new { type = "boolean", description = IncludeModelEdgesDescription },
+                reasons = new { type = "array", items = new { type = "string" }, description = ReasonsDescription },
+                excludeReasons = new { type = "array", items = new { type = "string" }, description = ExcludeReasonsDescription },
                 projectName = new { type = "string", description = "Optional project context name. If omitted, uses the active project." }
             },
             required = new[] { "nodeOrFile" }
@@ -56,6 +58,8 @@ public sealed class BlastRadiusTool : IMcpTool
         var maxDepth = Math.Max(1, ReadInt(args?["maxDepth"], 5));
         var minTier = ReadMinTier(args);
         var includeModelEdges = ReadIncludeModelEdges(args);
+        var reasonFilter = ReadReasonFilter(args);          // AP2 (#456)
+        var excludedByReason = 0;
         var excludedModelEdges = 0;
 
         // Resolve the target to one or more SEED nodes (a file expands to its defined symbols).
@@ -107,6 +111,8 @@ public sealed class BlastRadiusTool : IMcpTool
                 // the tier filter, so the result stays a true subset rather than a filtered rendering of a
                 // walk that already exploded through Concept hubs.
                 if (!PassesModelEdgeFilter(e.Relationship, includeModelEdges)) { excludedModelEdges++; continue; }
+                // AP2 (#456): pruned during traversal like the tier filter, so the result stays a true subset.
+                if (!reasonFilter.Passes(e.Reason)) { excludedByReason++; continue; }
 
                 var newDepth = depth + 1;
                 if (newDepth > maxDepth) { truncated = true; continue; }
@@ -190,6 +196,7 @@ public sealed class BlastRadiusTool : IMcpTool
                     // silently smaller answer. Zero here with includeModelEdges=false means the graph had
                     // none to offer, not that nobody looked.
                     excluded = excludedModelEdges,
+                    excludedByReasonFilter = excludedByReason,
                     included = includeModelEdges,
                     relationships = AgentAuthoredRelations.All.Order(StringComparer.Ordinal).ToArray()
                 }
