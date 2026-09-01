@@ -26,6 +26,9 @@ public sealed class SitecoreUnicornPlugin : IFileParser
     /// <remarks>GUID-regex relationship matching over YAML — heuristic, never Extracted (TICKET-207).</remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
+    /// <summary>Links read out of serialized item content (AP1, #428).</summary>
+    public ProvenanceReason DefaultReason => ProvenanceReason.DocumentLink;
+
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".yml", ".yaml" }.ToFrozenSet();
 

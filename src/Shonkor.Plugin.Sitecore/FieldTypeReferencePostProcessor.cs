@@ -93,7 +93,9 @@ public sealed class FieldTypeReferencePostProcessor : IGraphPostProcessor
                     {
                         if (emittedEdges.Add($"{item.Id}->{target}"))
                         {
-                            edges.Add(new GraphEdge { SourceId = item.Id, TargetId = target, Relationship = "REFERENCES_ITEM" });
+                            edges.Add(new GraphEdge { SourceId = item.Id, TargetId = target, Relationship = "REFERENCES_ITEM",
+                                // A GUID-shaped field value read as an item link (AP1, #428).
+                                Reason = ProvenanceReason.FieldValueReference });
                         }
                     }
                     else // positively a text/number field — a GUID here is not an item link

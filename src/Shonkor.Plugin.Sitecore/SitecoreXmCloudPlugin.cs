@@ -38,6 +38,9 @@ public sealed class SitecoreXmCloudPlugin : IFileParser
     /// membership edges stay Extracted via the scanner's structural-edge exemption.</remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
+    /// <summary>Component registrations read from JSS/XM Cloud configuration (AP1, #428).</summary>
+    public ProvenanceReason DefaultReason => ProvenanceReason.CmsConfiguration;
+
     public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } = new[]
     {
         new NodeTypeDescriptor("XmCloudComponent", "CMS", true),

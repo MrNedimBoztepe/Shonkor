@@ -16,6 +16,9 @@ public sealed class KenticoPlugin : IFileParser
     /// <remarks>Regex/convention-based CMS extraction — heuristic, never Extracted (TICKET-207).</remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
+    /// <summary>Page types and modules read from Kentico configuration (AP1, #428).</summary>
+    public ProvenanceReason DefaultReason => ProvenanceReason.CmsConfiguration;
+
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".cs" }.ToFrozenSet();
 

@@ -337,3 +337,72 @@ public sealed class FullScanAttributionTests : IDisposable
         Assert.All(edges, e => Assert.Equal(e.Provenance, ProvenanceReasons.TierOf(e.Reason)));
     }
 }
+
+/// <summary>
+/// A producer's default reason may only be applied where it agrees with the tier the edge carries
+/// (AP1, #428). <c>TypeScriptSemanticLinker</c> declares <c>Extracted</c>/<c>SemanticSymbol</c> and also
+/// emits <c>Ambiguous</c> edges; stamping its default on those would make the reason imply a tier the
+/// edge does not have — a contradiction that is worse than silence, because it states something false
+/// with the full weight of the type system.
+/// </summary>
+public sealed class ReasonNeverContradictsTierTests
+{
+    private sealed class MixedTierParser : Shonkor.Core.Interfaces.IFileParser
+    {
+        public IReadOnlySet<string> SupportedExtensions { get; } =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".mixed" };
+        public IReadOnlyList<NodeTypeDescriptor> NodeTypeDescriptors { get; } =
+            new[] { new NodeTypeDescriptor("MixedType", "Code", true) };
+        public Provenance DefaultProvenance => Provenance.Extracted;
+        public ProvenanceReason DefaultReason => ProvenanceReason.SemanticSymbol;
+
+        public Task<(IReadOnlyList<GraphNode> Nodes, IReadOnlyList<GraphEdge> Edges)> ParseAsync(string filePath, string content)
+        {
+            var a = filePath + "::A";
+            var b = filePath + "::B";
+            return Task.FromResult<(IReadOnlyList<GraphNode>, IReadOnlyList<GraphEdge>)>((
+                new GraphNode[]
+                {
+                    new() { Id = a, Type = "MixedType", Name = "A", FilePath = filePath, Content = content },
+                    new() { Id = b, Type = "MixedType", Name = "B", FilePath = filePath, Content = content },
+                },
+                new GraphEdge[]
+                {
+                    new() { SourceId = a, TargetId = b, Relationship = "CALLS", Provenance = Provenance.Extracted },
+                    new() { SourceId = b, TargetId = a, Relationship = "REFERENCES_TYPE", Provenance = Provenance.Ambiguous },
+                }));
+        }
+    }
+
+    [Fact]
+    public async Task TheDefaultIsAppliedOnlyWhereItAgreesWithTheTier()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "shonkor-mixed-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(dir, "x.mixed"), "content");
+
+            using var storage = new SqliteGraphStorageProvider(":memory:");
+            await storage.InitializeAsync();
+            await new Shonkor.Infrastructure.Services.GraphIndexScanner(storage, new[] { new MixedTierParser() })
+                .ScanDirectoryAsync(dir, Array.Empty<string>());
+
+            var edges = await storage.GetAllEdgesAsync();
+            var matching = edges.Single(e => e.Relationship == "CALLS");
+            var conflicting = edges.Single(e => e.Relationship == "REFERENCES_TYPE");
+
+            Assert.Equal(ProvenanceReason.SemanticSymbol, matching.Reason);
+            Assert.Equal(ProvenanceReason.Unspecified, conflicting.Reason);
+
+            // The invariant that matters: no edge claims a reason implying a tier it does not carry.
+            Assert.All(edges, e => Assert.True(
+                e.Reason == ProvenanceReason.Unspecified || ProvenanceReasons.TierOf(e.Reason) == e.Provenance,
+                $"{e.Relationship} carries {e.Provenance} but its reason {e.Reason} implies {ProvenanceReasons.TierOf(e.Reason)}"));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+}

@@ -83,6 +83,9 @@ public sealed class TypeScriptSemanticLinker : IGraphPostProcessor, IPluginIniti
     /// </summary>
     public Provenance DefaultProvenance => Provenance.Extracted;
 
+    /// <summary>Resolved through the TypeScript compiler API, not matched by name (AP1, #428).</summary>
+    public ProvenanceReason DefaultReason => ProvenanceReason.SemanticSymbol;
+
     /// <inheritdoc />
     public void Initialize(IPluginHost host)
     {

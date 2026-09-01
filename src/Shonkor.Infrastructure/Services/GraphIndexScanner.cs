@@ -899,9 +899,17 @@ public sealed class GraphIndexScanner
         if (StructuralEdges.Contains(edge.Relationship))
             return edge.Reason == ProvenanceReason.Structural ? edge : edge with { Reason = ProvenanceReason.Structural };
 
-        return edge.Reason != ProvenanceReason.Unspecified || producerDefault == ProvenanceReason.Unspecified
-            ? edge
-            : edge with { Reason = producerDefault };
+        if (edge.Reason != ProvenanceReason.Unspecified || producerDefault == ProvenanceReason.Unspecified)
+            return edge;
+
+        // The default applies only where it AGREES with the tier this edge actually carries. A producer
+        // that emits more than one tier — TypeScriptSemanticLinker emits Extracted and Ambiguous — would
+        // otherwise stamp its optimistic default onto its own weaker edges, and the reason would imply a
+        // tier the edge does not have. That contradiction is worse than no reason: an unattributed edge
+        // says "unknown", a wrong one says something false with the full weight of the type system.
+        return ProvenanceReasons.TierOf(producerDefault) == edge.Provenance
+            ? edge with { Reason = producerDefault }
+            : edge;
     }
 
     /// <summary>
