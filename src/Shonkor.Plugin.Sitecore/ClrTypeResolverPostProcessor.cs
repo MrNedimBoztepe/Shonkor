@@ -72,7 +72,8 @@ public sealed class ClrTypeResolverPostProcessor : IGraphPostProcessor
                 if (matches.Count == 1)
                 {
                     // Unique simple-name match — heuristic (not compiler-proven), so Inferred, not Extracted.
-                    edges.Add(new GraphEdge { SourceId = clr.Id, TargetId = matches[0].Id, Relationship = "RESOLVES_TO", Provenance = Provenance.Inferred });
+                    edges.Add(new GraphEdge { SourceId = clr.Id, TargetId = matches[0].Id, Relationship = "RESOLVES_TO", Provenance = Provenance.Inferred,
+                        Reason = ProvenanceReason.TypeResolutionUnique });   // exactly one candidate (#428)
                 }
                 else
                 {
@@ -85,6 +86,9 @@ public sealed class ClrTypeResolverPostProcessor : IGraphPostProcessor
                             TargetId = match.Id,
                             Relationship = "RESOLVES_TO",
                             Provenance = Provenance.Ambiguous,
+                            // Several candidates. Split from the unique case so the tier stays derivable
+                            // from the reason without an exception (AP1, #428).
+                            Reason = ProvenanceReason.TypeResolutionAmbiguous,
                             Properties = new Dictionary<string, string> { ["confidence"] = "ambiguous" }
                         });
                     }

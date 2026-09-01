@@ -18,6 +18,9 @@ public sealed class HelixSemanticPlugin : IFileParser
     /// <remarks>Path/convention-based Helix layer inference — heuristic, never Extracted (TICKET-207).</remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
+    /// <summary>Helix layers and modules are derived from where a file sits, not from what it says (AP1, #428).</summary>
+    public ProvenanceReason DefaultReason => ProvenanceReason.PathConvention;
+
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {

@@ -88,6 +88,9 @@ public sealed class TypeScriptParser : IFileParser, IPluginInitializable, IAsync
     /// </remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
+    /// <summary>Module specifiers resolved by name, not to a file the graph contains (AP1, #428).</summary>
+    public ProvenanceReason DefaultReason => ProvenanceReason.ImportSpecifier;
+
     /// <inheritdoc />
     /// <remarks>
     /// The module-level <c>JSComponent</c> (kept for parity + cross-tech coexistence) plus the #293 symbol

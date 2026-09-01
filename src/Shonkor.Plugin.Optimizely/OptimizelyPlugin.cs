@@ -16,6 +16,9 @@ public sealed class OptimizelyPlugin : IFileParser
     /// <remarks>Regex/convention-based CMS extraction — heuristic, never Extracted (TICKET-207).</remarks>
     public Provenance DefaultProvenance => Provenance.Inferred;
 
+    /// <summary>Content types read from Optimizely attributes and configuration (AP1, #428).</summary>
+    public ProvenanceReason DefaultReason => ProvenanceReason.CmsConfiguration;
+
     public IReadOnlySet<string> SupportedExtensions { get; } =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".cs" }.ToFrozenSet();
 

@@ -194,7 +194,12 @@ public static class CrossTechLinker
                     SourceId = node.Id,
                     TargetId = moduleId,
                     Relationship = "BELONGS_TO_MODULE",
-                    Provenance = Provenance.Inferred
+                    Provenance = Provenance.Inferred,
+                    // Derived from where the file sits, not from what it says (AP1, #428). #454 intended
+                    // to set this and its edit silently did not apply, leaving 21 352 edges unattributed
+                    // on a real graph — the largest single gap, and invisible because the PR's other
+                    // three edits in the same file did land.
+                    Reason = ProvenanceReason.PathConvention
                 });
             }
         }
