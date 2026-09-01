@@ -2,6 +2,7 @@
 
 using Shonkor.Core.Models;
 using Shonkor.Core.Services;
+using Shonkor.Infrastructure.Services.Mcp;
 using Shonkor.Infrastructure.Storage;
 
 namespace Shonkor.Tests;
@@ -404,5 +405,96 @@ public sealed class ReasonNeverContradictsTierTests
         {
             try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
         }
+    }
+}
+
+/// <summary>
+/// AP2 (#456): filter paths by WHY an edge exists, not only by how much to believe it.
+///
+/// <para>
+/// Measured on live <c>sitecoreMuM</c> with 416 seeds: the weakest-link tier degrades monotonically with
+/// depth — 52 % of reachable nodes are still fully proven at depth 1, 17 % at depth 5. So at depth 5 a
+/// tier filter offers exactly two settings, discard 83 % or accept everything, and neither answers
+/// "what actually depends on this?".
+/// </para>
+/// </summary>
+public sealed class ReasonFilterTests
+{
+    private static System.Text.Json.Nodes.JsonObject Args(string json) =>
+        (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(json)!;
+
+    [Fact]
+    public void NoArgumentsMeansNoFilter()
+    {
+        var f = McpToolHelpers.ReadReasonFilter(Args("{}"));
+        Assert.True(f.IsEmpty);
+        foreach (ProvenanceReason r in Enum.GetValues<ProvenanceReason>()) Assert.True(f.Passes(r));
+    }
+
+    [Fact]
+    public void AnAllowListAdmitsOnlyWhatItNames()
+    {
+        var f = McpToolHelpers.ReadReasonFilter(Args("{\"reasons\":[\"SemanticSymbol\"]}"));
+        Assert.True(f.Passes(ProvenanceReason.SemanticSymbol));
+        Assert.False(f.Passes(ProvenanceReason.SyntacticHeritage));
+    }
+
+    /// <summary>Ratified: deny wins on overlap — the only reading that cannot silently widen a result.</summary>
+    [Fact]
+    public void DenyWinsOverAllow()
+    {
+        var f = McpToolHelpers.ReadReasonFilter(
+            Args("{\"reasons\":[\"SemanticSymbol\",\"PathConvention\"],\"excludeReasons\":[\"PathConvention\"]}"));
+
+        Assert.True(f.Passes(ProvenanceReason.SemanticSymbol));
+        Assert.False(f.Passes(ProvenanceReason.PathConvention));
+    }
+
+    /// <summary>
+    /// Ratified, and the one that protects older graphs: <c>Unspecified</c> passes an allow-list it is not
+    /// named in. A strict reading would exclude it — and on a graph indexed before every producer declared
+    /// a reason, that is most of the graph. "Nothing found" because the data predates the vocabulary is a
+    /// wrong answer wearing a correct one's clothes.
+    /// </summary>
+    [Fact]
+    public void UnspecifiedSurvivesAnAllowListUnlessNamed()
+    {
+        Assert.True(McpToolHelpers.ReadReasonFilter(Args("{\"reasons\":[\"SemanticSymbol\"]}"))
+            .Passes(ProvenanceReason.Unspecified));
+
+        Assert.False(McpToolHelpers.ReadReasonFilter(Args("{\"excludeReasons\":[\"Unspecified\"]}"))
+            .Passes(ProvenanceReason.Unspecified));
+    }
+
+    /// <summary>Accepts a comma-separated string as well as an array; names are case-insensitive.</summary>
+    [Theory]
+    [InlineData("{\"reasons\":\"semanticsymbol, pathconvention\"}")]
+    [InlineData("{\"reasons\":[\"SEMANTICSYMBOL\",\"PathConvention\"]}")]
+    public void ReadsBothShapesCaseInsensitively(string json)
+    {
+        var f = McpToolHelpers.ReadReasonFilter(Args(json));
+        Assert.True(f.Passes(ProvenanceReason.SemanticSymbol));
+        Assert.True(f.Passes(ProvenanceReason.PathConvention));
+        Assert.False(f.Passes(ProvenanceReason.ModelAssertion));
+    }
+
+    /// <summary>
+    /// An unknown name is ignored rather than rejected — a newer client may know reasons this build does
+    /// not, and failing the call over a name is worse than filtering by the ones we understand.
+    /// </summary>
+    [Fact]
+    public void UnknownNamesAreIgnored_NotFatal()
+    {
+        var f = McpToolHelpers.ReadReasonFilter(Args("{\"reasons\":[\"SemanticSymbol\",\"NotAReasonYet\"]}"));
+        Assert.True(f.Passes(ProvenanceReason.SemanticSymbol));
+        Assert.False(f.Passes(ProvenanceReason.ModelAssertion));
+    }
+
+    /// <summary>A result that shrank because of the filter says so; one that did not shrink stays quiet.</summary>
+    [Fact]
+    public void TheNoteAppearsOnlyWhenTheFilterRemovedSomething()
+    {
+        Assert.Contains("7 more were excluded by the reason filter", McpToolHelpers.ReasonFilterNote(7));
+        Assert.Equal(string.Empty, McpToolHelpers.ReasonFilterNote(0));
     }
 }
