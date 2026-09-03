@@ -74,6 +74,44 @@ public class FilePathComparisonTests
         Assert.DoesNotContain('/', expanded[root.Length..].Replace(Path.DirectorySeparatorChar, '|'));
     }
 
+    /// <summary>
+    /// #463: projects.json is hand- and web-edited, and <c>C:/Projects/Brain</c> is a valid Windows path that
+    /// every other layer accepts. FromHandle re-seated the handle's relative part on the host separator but
+    /// left the base exactly as spelled, so the reconstructed id read <c>C:/Projects/Brain\src\Foo.cs</c> and
+    /// matched no node — while ToHandle, which goes through <see cref="FilePaths.TryGetRelative"/>, minted the
+    /// handle just fine. The project handed out identifiers it then refused to take back.
+    /// </summary>
+    [Fact]
+    public void AHandle_RoundTrips_WhateverSeparatorTheProjectRootWasRegisteredWith()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "proj", "nested");
+        var inside = Path.Combine(root, "src", "File.cs");
+
+        // Only Windows has a second spelling: there '/' and '\' are both separators, so 'C:/x' and 'C:\x'
+        // name the same directory. On Linux '\' is an ordinary filename character, so substituting it would
+        // name a different file — there is no alternative spelling to round-trip.
+        var spellings = OperatingSystem.IsWindows()
+            ? new[] { root, root.Replace('\\', '/') }
+            : new[] { root };
+
+        foreach (var registered in spellings)
+        {
+            Assert.Equal("@/src/File.cs", McpToolHelpers.ToHandle(inside, registered));
+            Assert.Equal(inside, McpToolHelpers.FromHandle("@/src/File.cs", registered));
+        }
+    }
+
+    /// <summary>#463: a registered root with a trailing separator must not double it back in.</summary>
+    [Fact]
+    public void AHandle_RoundTrips_WhenTheProjectRootWasRegisteredWithATrailingSeparator()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "proj");
+        var inside = Path.Combine(root, "src", "File.cs");
+
+        Assert.Equal(inside, McpToolHelpers.FromHandle("@/src/File.cs", root + Path.DirectorySeparatorChar));
+        Assert.Equal(inside, McpToolHelpers.FromHandle("@/src/File.cs", root + "/"));
+    }
+
     [Fact]
     public void TheProjectRootItself_HasNoRelativeForm_AndIsLeftAlone()
     {

@@ -264,7 +264,16 @@ public static class McpToolHelpers
             var rel = handle[2..]
                 .Replace('\\', System.IO.Path.DirectorySeparatorChar)
                 .Replace('/', System.IO.Path.DirectorySeparatorChar);
-            return System.IO.Path.Combine(basePath.TrimEnd('\\', '/'), rel);
+            // #463: the base needs the same re-seating as the relative part. It comes from projects.json
+            // verbatim, and 'C:/Projects/Brain' is a valid Windows path that every other layer accepts —
+            // but Path.Combine keeps its separators, so the reconstructed id read 'C:/Projects/Brain\src\…'
+            // and matched no node. ToHandle never had this problem: it goes through FilePaths.TryGetRelative,
+            // whose Path.GetRelativePath normalizes. The project minted handles it then refused to take back.
+            var root = basePath
+                .Replace('\\', System.IO.Path.DirectorySeparatorChar)
+                .Replace('/', System.IO.Path.DirectorySeparatorChar)
+                .TrimEnd(System.IO.Path.DirectorySeparatorChar);
+            return System.IO.Path.Combine(root, rel);
         }
         return handle;
     }
