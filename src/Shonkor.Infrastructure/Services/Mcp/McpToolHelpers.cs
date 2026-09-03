@@ -389,19 +389,54 @@ public static class McpToolHelpers
     }
 
     /// <summary>
-    /// Resolves a free-text symbol to its best-matching definition node: prefers an exact-name declaration
-    /// (Class/Method/…), then any exact-name node, then the first declaration, then the first hit. A resolved
-    /// node that structurally cannot carry impact/dependency edges is redirected to the one that can (#288 —
-    /// see <see cref="RedirectToEdgeCarrierAsync"/>).
+    /// Resolves a free-text symbol to its best-matching definition node. A **type declaration** with that
+    /// exact name wins outright; only when none exists does the search-ranked fallback chain run (exact-name
+    /// declaration, any exact-name node, first declaration, first hit). A resolved node that structurally
+    /// cannot carry impact/dependency edges is redirected to the one that can (#288 — see
+    /// <see cref="RedirectToEdgeCarrierAsync"/>).
     /// </summary>
     public static async Task<GraphNode?> ResolveDefinitionAsync(IGraphStorageProvider storage, string symbol)
+        => (await ResolveDefinitionWithPeersAsync(storage, symbol).ConfigureAwait(false)).Node;
+
+    /// <summary>
+    /// As <see cref="ResolveDefinitionAsync"/>, but also returns the other same-named type declarations that
+    /// were passed over, so a caller can disclose the pick instead of choosing silently (#462).
+    /// </summary>
+    public static async Task<(GraphNode? Node, IReadOnlyList<GraphNode> OtherSameName)> ResolveDefinitionWithPeersAsync(
+        IGraphStorageProvider storage, string symbol)
     {
+        // #462: ask the store for the type declaration by name rather than hoping it lands in the search
+        // window. It did not: a type's constructor carries the TYPE's name, so IsExactNameMatch accepted it,
+        // DeclarationTypes ranked it equal to the class, and FTS order decided. For a hub type the Class node
+        // was not even among the top SymbolSearchLimit hits — it sat behind a MarkdownSection and the type's
+        // own members — so edit_plan answered "safe to change in isolation" for a class with 71 incident edges.
+        var byName = await storage.GetDefinitionsByNamesAsync(new[] { symbol }).ConfigureAwait(false);
+        if (byName.TryGetValue(symbol, out var declarations) && declarations.Count > 0)
+        {
+            // Deterministic pick: same symbol, same answer, run after run.
+            var ordered = declarations.OrderBy(n => n.Id, StringComparer.Ordinal).ToList();
+            return (ordered[0], ordered.Skip(1).ToList());
+        }
+
         var hits = (await storage.SearchAsync(symbol, SymbolSearchLimit).ConfigureAwait(false)).Select(h => h.Node).ToList();
         var def = hits.FirstOrDefault(n => IsExactNameMatch(n, symbol) && DeclarationTypes.Contains(n.Type))
             ?? hits.FirstOrDefault(n => IsExactNameMatch(n, symbol))
             ?? hits.FirstOrDefault(n => DeclarationTypes.Contains(n.Type))
             ?? hits.FirstOrDefault();
-        return def is null ? null : await RedirectToEdgeCarrierAsync(storage, def).ConfigureAwait(false);
+        return (def is null ? null : await RedirectToEdgeCarrierAsync(storage, def).ConfigureAwait(false), Array.Empty<GraphNode>());
+    }
+
+    /// <summary>
+    /// #462: names the declaration a tool picked when several share the symbol's name, so the choice is
+    /// visible rather than silent. Empty when the name was unambiguous, which keeps the common path quiet.
+    /// </summary>
+    public static string SameNameDeclarationNote(GraphNode picked, IReadOnlyList<GraphNode> others, string basePath)
+    {
+        if (others is null || others.Count == 0) return string.Empty;
+        var where = string.Join(", ", others.Take(3).Select(n => Shorten(string.IsNullOrEmpty(n.FilePath) ? n.Id : n.FilePath, basePath)));
+        var more = others.Count > 3 ? $" and {others.Count - 3} more" : string.Empty;
+        return $"\nNOTE: {others.Count + 1} declarations are named '{picked.Name}'. This answer is about the one in "
+             + $"{Shorten(string.IsNullOrEmpty(picked.FilePath) ? picked.Id : picked.FilePath, basePath)}; the others are in {where}{more}.";
     }
 
     /// <summary>
