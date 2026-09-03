@@ -12,6 +12,8 @@
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
+    <!-- LSP spike (#467): JSON-RPC over stdio to a headless language server. Bench only — never Core. -->
+    <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
   </ItemGroup>
 
   <ItemGroup>
