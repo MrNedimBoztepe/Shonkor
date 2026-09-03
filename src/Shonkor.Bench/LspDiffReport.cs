@@ -169,18 +169,19 @@ internal static class LspDiffReport
 
         sb.AppendLine("## Reverse gap — server pairs the graph lacks");
         sb.AppendLine();
-        sb.AppendLine("| Relationship | External | Generated | Unmappable | LinkerScope | Other |");
-        sb.AppendLine("|--------------|---------:|----------:|-----------:|------------:|------:|");
+        sb.AppendLine("| Relationship | External | Generated | Unmappable | LinkerScope | Implicit | Other |");
+        sb.AppendLine("|--------------|---------:|----------:|-----------:|------------:|---------:|------:|");
         foreach (var rel in LspDiff.Relations)
         {
             if (rel == LspDiff.Instantiates) continue;
             var xs = r.Gaps.Where(g => g.Relationship == rel).ToList();
-            sb.AppendLine($"| {rel} | {xs.Count(g => g.Bucket == GapBucket.External)} | {xs.Count(g => g.Bucket == GapBucket.Generated)} | {xs.Count(g => g.Bucket == GapBucket.Unmappable)} | {xs.Count(g => g.Bucket == GapBucket.LinkerScope)} | {xs.Count(g => g.Bucket == GapBucket.Other)} |");
+            sb.AppendLine($"| {rel} | {xs.Count(g => g.Bucket == GapBucket.External)} | {xs.Count(g => g.Bucket == GapBucket.Generated)} | {xs.Count(g => g.Bucket == GapBucket.Unmappable)} | {xs.Count(g => g.Bucket == GapBucket.LinkerScope)} | {xs.Count(g => g.Bucket == GapBucket.Implicit)} | {xs.Count(g => g.Bucket == GapBucket.Other)} |");
         }
         sb.AppendLine();
         sb.AppendLine("Buckets: External = file outside the solution root; Generated = obj/, *.g.cs, *.Designer.cs, GlobalUsings, AssemblyInfo; "
                       + "Unmappable = file in graph but no node of the relation's granularity at the line (or two); LinkerScope = a node exists but "
                       + "`SemanticCsharpLinker` never attributes that relation to its kind (CALLS from constructor/property bodies); "
+                      + "Implicit = no call site names the callee (`using` disposal, `foreach`, `await`, operators — the linker only walks InvocationExpressionSyntax); "
                       + "**Other = node exists, edge missing — the number that counts.**");
         sb.AppendLine();
         foreach (var bucket in Enum.GetValues<GapBucket>())

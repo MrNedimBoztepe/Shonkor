@@ -47,6 +47,16 @@ internal static class LspDiffRunner
                               + "Re-index (shonkor index) so both sides describe the same code, then rerun.");
             return 1;
         }
+        // HEAD alone is not enough: the server reads the working tree, the graph read the tree at index time.
+        // A modified .cs file shifts every line below the edit and the line-containment mapping silently
+        // mis-attributes — measured as spurious "no-node" gaps in the very file being edited.
+        var dirty = GitDirtyCsFiles(rootDir);
+        if (!o.LoadOnly && dirty.Count > 0)
+        {
+            console.WriteLine($"[Error] {dirty.Count} .cs file(s) differ from HEAD in the working tree ({string.Join(", ", dirty.Take(5))}{(dirty.Count > 5 ? ", …" : "")}). "
+                              + "Commit or stash, re-index, then rerun — the graph and the server must see the same text.");
+            return 1;
+        }
 
         var nodesById = allNodes.ToDictionary(n => n.Id, StringComparer.Ordinal);
         var nodesByFile = LspDiff.GroupByFile(allNodes, rootDir);
@@ -55,9 +65,9 @@ internal static class LspDiffRunner
 
         if (!o.LoadOnly)
         {
-            if (selection.UnspecifiedEdges > 0)
+            if (selection.UnspecifiedInScope > 0)
             {
-                console.WriteLine($"[Error] {selection.UnspecifiedEdges:N0} edge(s) carry Reason=Unspecified — this graph predates #428 or was never fully rescanned. Refusing to diff against it.");
+                console.WriteLine($"[Error] {selection.UnspecifiedInScope:N0} edge(s) of the relations under test carry Reason=Unspecified — this graph predates #428 or was never fully rescanned. Refusing to diff against it.");
                 return 1;
             }
             if (selection.SemanticEdges == 0)
@@ -88,6 +98,12 @@ internal static class LspDiffRunner
             UnspecifiedEdges = selection.UnspecifiedEdges
         };
 
+        if (selection.UnspecifiedEdges > 0)
+        {
+            var offenders = string.Join(", ", edges.Where(e => e.Reason == ProvenanceReason.Unspecified)
+                .GroupBy(e => e.Relationship, StringComparer.Ordinal).Select(g => $"{g.Key} ×{g.Count()}"));
+            result.Notes.Add($"{selection.UnspecifiedEdges} edge(s) outside the relations under test carry Reason=Unspecified ({offenders}) — a producer that has not declared its reason (#428 gap), not a C# linker edge.");
+        }
         console.WriteLine($"LSP diff: {pairs.Count} pair(s) from {seedFiles.Count} seed file(s); server `{o.LspCommand}`");
         Directory.CreateDirectory(o.OutputDir);
         await using var log = new StreamWriter(Path.Combine(o.OutputDir, "lsp-diff.log"), append: false) { AutoFlush = true };
@@ -142,7 +158,16 @@ internal static class LspDiffRunner
             }
             console.WriteLine($"  ready: {result.TReadySeconds:F1}s{(result.ReadyByFallback ? " (fallback probe)" : "")}");
 
-            if (!o.LoadOnly) await DiffAsync(client, pairs, nodesById, nodesByFile, rootDir, result, console, ct).ConfigureAwait(false);
+            if (!o.LoadOnly)
+            {
+                // The reverse gap is measured against EVERY graph source of a target, not only the seed files'
+                // — otherwise every non-seed caller the graph knows perfectly well would be counted as missing.
+                var graphSources = edges
+                    .Where(e => e.Reason == ProvenanceReason.SemanticSymbol)
+                    .GroupBy(e => (e.TargetId, e.Relationship))
+                    .ToDictionary(g => g.Key, g => (IReadOnlySet<string>)g.Select(e => e.SourceId).ToHashSet(StringComparer.Ordinal));
+                await DiffAsync(client, pairs, graphSources, nodesById, nodesByFile, rootDir, result, console, log, ct).ConfigureAwait(false);
+            }
             result.Timings = client.Timings.ToList();
         }
 
@@ -150,10 +175,12 @@ internal static class LspDiffRunner
         return 0;
     }
 
-    private static async Task DiffAsync(LspClient client, IReadOnlyList<EdgePair> pairs, Dictionary<string, GraphNode> nodesById,
-        Dictionary<string, List<GraphNode>> nodesByFile, string rootDir, LspDiffResult result, TextWriter console, CancellationToken ct)
+    private static async Task DiffAsync(LspClient client, IReadOnlyList<EdgePair> pairs,
+        IReadOnlyDictionary<(string TargetId, string Relationship), IReadOnlySet<string>> allGraphSources, Dictionary<string, GraphNode> nodesById,
+        Dictionary<string, List<GraphNode>> nodesByFile, string rootDir, LspDiffResult result, TextWriter console, TextWriter log, CancellationToken ct)
     {
         var symbolCache = new Dictionary<string, IReadOnlyList<DocumentSymbol>>(FilePaths.Comparer);
+        var textCache = new Dictionary<string, string>(FilePaths.Comparer);
         var groups = pairs.GroupBy(p => (p.TargetId, p.Relationship)).ToList();
         var done = 0;
 
@@ -178,6 +205,8 @@ internal static class LspDiffRunner
                 anchor = LspDiff.FindAnchor(target, symbols);
                 if (!anchor.Found)
                 {
+                    log.WriteLine($"[anchor] {anchor.Failure}: {target.Type} {target.Name} {target.StartLine}-{target.EndLine} in {targetFile}; symbols: "
+                                  + string.Join(", ", symbols.Select(s => $"{s.Name}@{s.SelectionRange.Start.Line + 1}[{s.Range.Start.Line + 1}-{s.Range.End.Line + 1}]")));
                     foreach (var p in group) result.Pairs.Add(new PairResult(p, LspOutcome.Unmappable, $"anchor: {anchor.Failure}"));
                     continue;
                 }
@@ -187,7 +216,8 @@ internal static class LspDiffRunner
                 {
                     LspDiff.Calls => await client.IncomingCallersAsync(targetFile, anchor.Position!, ct).ConfigureAwait(false),
                     LspDiff.ReferencesType or LspDiff.Instantiates => await client.ReferencesAsync(targetFile, anchor.Position!, ct).ConfigureAwait(false),
-                    LspDiff.Overrides or LspDiff.ImplementsMember => await client.ImplementationsAsync(targetFile, anchor.Position!, ct).ConfigureAwait(false),
+                    LspDiff.Implements or LspDiff.Extends or LspDiff.Overrides or LspDiff.ImplementsMember
+                        => await client.ImplementationsAsync(targetFile, anchor.Position!, ct).ConfigureAwait(false),
                     _ => []
                 };
             }
@@ -199,15 +229,17 @@ internal static class LspDiffRunner
 
             var mapped = locations.Select(l => (Location: l, Mapped: LspDiff.MapToNode(l.Uri, l.Range.Start.Line, rel, nodesByFile))).ToList();
             var lspIds = mapped.Where(m => m.Mapped.IsOk).Select(m => m.Mapped.NodeId!).ToHashSet(StringComparer.Ordinal);
-            var graphSources = group.Select(p => p.SourceId).ToHashSet(StringComparer.Ordinal);
+            var graphSources = allGraphSources.GetValueOrDefault((targetId, rel)) ?? group.Select(p => p.SourceId).ToHashSet(StringComparer.Ordinal);
 
             foreach (var p in group)
             {
-                var outcome = LspDiff.Classify(p, anchorFound: true, nodesById.GetValueOrDefault(p.SourceId), lspIds);
+                var source = nodesById.GetValueOrDefault(p.SourceId);
+                var outcome = LspDiff.Classify(p, anchorFound: true, source, lspIds);
                 var note = outcome switch
                 {
                     LspOutcome.Unmappable => "dangling source",
-                    LspOutcome.Contradicted => $"server returned {locations.Count} location(s), {lspIds.Count} mapped",
+                    LspOutcome.Contradicted => $"server returned {locations.Count} location(s), {lspIds.Count} mapped"
+                        + (rel == LspDiff.ReferencesType && !MentionsName(source!, target.Name, rootDir, textCache) ? "; source file has no textual occurrence of the target name (inferred `var`/lambda type — a reference the linker counts and the server does not)" : ""),
                     _ => null
                 };
                 result.Pairs.Add(new PairResult(p, outcome, note));
@@ -220,7 +252,9 @@ internal static class LspDiffRunner
                 if (m.IsOk && graphSources.Contains(m.NodeId!)) continue;
                 var key = m.NodeId ?? $"{loc.Uri}:{loc.Range.Start.Line}";
                 if (!seen.Add(key)) continue;
-                result.Gaps.Add(new GapEntry(targetId, rel, loc.Uri, loc.Range.Start.Line, LspDiff.Bucket(loc.Uri, rootDir, m), m.NodeId, m.Status));
+                var implicitSite = rel == LspDiff.Calls && m.IsOk && loc.Sites.Count > 0
+                    && LspDiff.IsImplicitCall(LinesOf(LspDiff.FileOf(loc.Uri), textCache), loc.Sites, target.Name);
+                result.Gaps.Add(new GapEntry(targetId, rel, loc.Uri, loc.Range.Start.Line, LspDiff.Bucket(loc.Uri, rootDir, m, implicitSite), m.NodeId, m.Status));
             }
         }
     }
@@ -279,18 +313,44 @@ internal static class LspDiffRunner
         console.WriteLine($"Wrote {md} and {json}");
     }
 
-    private static string? GitHead(string dir)
+    private static IReadOnlyList<string> LinesOf(string file, Dictionary<string, string> textCache)
+    {
+        if (!File.Exists(file)) return [];
+        if (!textCache.TryGetValue(file, out var text)) textCache[file] = text = File.ReadAllText(file);
+        return text.Split('\n');
+    }
+
+    /// <summary>Whether the source node's file mentions the target's name at all — cheap evidence for "the graph saw an inferred type, the server saw no identifier".</summary>
+    private static bool MentionsName(GraphNode source, string name, string rootDir, Dictionary<string, string> textCache)
+    {
+        var file = LspDiff.FullPathOf(source, rootDir);
+        if (file is null || !File.Exists(file)) return true; // unknown — do not claim anything
+        if (!textCache.TryGetValue(file, out var text)) textCache[file] = text = File.ReadAllText(file);
+        return text.Contains(name, StringComparison.Ordinal);
+    }
+
+    private static string? GitHead(string dir) => Git(dir, "rev-parse HEAD")?.Trim() is { Length: > 0 } head ? head : null;
+
+    /// <summary>Tracked-modified and untracked <c>.cs</c> files — the ones whose text the server and the graph would disagree on.</summary>
+    private static List<string> GitDirtyCsFiles(string dir) =>
+        (Git(dir, "status --porcelain --untracked-files=all") ?? string.Empty)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Length > 3 ? l[3..].Trim() : string.Empty)
+            .Where(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+    private static string? Git(string dir, string arguments)
     {
         try
         {
-            using var p = Process.Start(new ProcessStartInfo("git", $"-C \"{dir}\" rev-parse HEAD")
+            using var p = Process.Start(new ProcessStartInfo("git", $"-C \"{dir}\" {arguments}")
             {
                 RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true
             });
             if (p is null) return null;
-            var head = p.StandardOutput.ReadToEnd().Trim();
+            var output = p.StandardOutput.ReadToEnd();
             p.WaitForExit();
-            return p.ExitCode == 0 && head.Length > 0 ? head : null;
+            return p.ExitCode == 0 ? output : null;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {

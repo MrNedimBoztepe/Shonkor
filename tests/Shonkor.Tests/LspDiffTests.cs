@@ -80,10 +80,15 @@ public class LspDiffTests
     {
         var nodes = Corpus().ToDictionary(n => n.Id, StringComparer.Ordinal);
         var selection = LspDiff.SelectSeeds(nodes,
-            [Edge("A.cs::A::M", "B.cs::B", "REFERENCES_TYPE", ProvenanceReason.Unspecified), Edge("A.cs::A::N", "B.cs::B", "REFERENCES_TYPE")],
+            [
+                Edge("A.cs::A::M", "B.cs::B", "REFERENCES_TYPE", ProvenanceReason.Unspecified),
+                Edge("A.cs::A::N", "B.cs::B", "REFERENCES_TYPE"),
+                Edge("A.cs::A", "B.cs::B", "DEFINES_COMPONENT", ProvenanceReason.Unspecified) // another producer's relation — reported, not blocking
+            ],
             Root);
 
-        Assert.Equal(1, selection.UnspecifiedEdges);
+        Assert.Equal(2, selection.UnspecifiedEdges);
+        Assert.Equal(1, selection.UnspecifiedInScope);
         Assert.Equal(1, selection.SemanticEdges);
     }
 
@@ -160,6 +165,14 @@ public class LspDiffTests
 
         Assert.True(mapped.IsOk);
         Assert.Equal("B.cs::B::C", mapped.NodeId);
+    }
+
+    [Fact]
+    public void MapToNode_ImplementsAndExtends_MapTheImplementingTypesDeclarationLine_ToTheInnermostType()
+    {
+        // `implementation` on an interface answers with the implementing type's identifier line (line 10 = nested C).
+        Assert.Equal("B.cs::B::C", LspDiff.MapToNode(UriOf("B.cs"), 9, "IMPLEMENTS", ByFile()).NodeId);
+        Assert.Equal("B.cs::B", LspDiff.MapToNode(UriOf("B.cs"), 0, "EXTENDS", ByFile()).NodeId);
     }
 
     [Fact]
@@ -254,7 +267,19 @@ public class LspDiffTests
         Assert.Equal(GapBucket.Unmappable, LspDiff.Bucket(UriOf("A.cs"), Root, new MappedSource(null, "no-node")));
         Assert.Equal(GapBucket.Unmappable, LspDiff.Bucket(UriOf("A.cs"), Root, new MappedSource(null, "ambiguous")));
         Assert.Equal(GapBucket.LinkerScope, LspDiff.Bucket(UriOf("B.cs"), Root, new MappedSource("B.cs::B::ctor", "linker-scope")));
+        Assert.Equal(GapBucket.Implicit, LspDiff.Bucket(UriOf("A.cs"), Root, ok, implicitSite: true));
         Assert.Equal(GapBucket.Other, LspDiff.Bucket(UriOf("A.cs"), Root, ok));
+    }
+
+    [Fact]
+    public void IsImplicitCall_WhenNoCallSiteLineNamesTheCallee_LikeUsingDisposal()
+    {
+        string[] lines = ["using var p = new Provider();", "p.Run();", "return p.Size;"];
+        static LspRange At(int line) => new() { Start = new LspPosition { Line = line }, End = new LspPosition { Line = line } };
+
+        Assert.True(LspDiff.IsImplicitCall(lines, [At(0)], "Dispose"));      // `using` — no identifier at the site
+        Assert.False(LspDiff.IsImplicitCall(lines, [At(1)], "Run()"));       // an ordinary invocation
+        Assert.False(LspDiff.IsImplicitCall(lines, [], "Dispose"));          // no sites known — claim nothing
     }
 
     // ---- helpers ------------------------------------------------------------------------------------------------
@@ -264,6 +289,7 @@ public class LspDiffTests
     [InlineData("Foo(int, string)", "Foo")]
     [InlineData("Foo<T>", "Foo")]
     [InlineData("IBar.Baz()", "Baz")]
+    [InlineData("DefaultReason : ProvenanceReason", "DefaultReason")] // Roslyn's property symbol name carries the type
     public void BareName_StripsParameterListTypeArgumentsAndExplicitInterfacePrefix(string symbol, string expected) =>
         Assert.Equal(expected, LspDiff.BareName(symbol));
 

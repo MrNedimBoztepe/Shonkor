@@ -43,6 +43,9 @@ internal sealed class LspClient : IAsyncDisposable
         _rpc = new JsonRpc(handler);
         _rpc.AddLocalRpcTarget(new ServerCallbacks(this), new JsonRpcTargetOptions { NotifyClientOfEvents = false });
         _rpc.Disconnected += (_, e) => Log($"[rpc] disconnected: {e.Reason} {e.Description}");
+        // Binding failures on incoming notifications are otherwise invisible — they surface only here.
+        _rpc.TraceSource.Switch.Level = SourceLevels.Warning;
+        _rpc.TraceSource.Listeners.Add(new TextWriterTraceListener(log));
         _rpc.StartListening();
     }
 
@@ -135,9 +138,12 @@ internal sealed class LspClient : IAsyncDisposable
     }
 
     /// <summary>Marks readiness from the fallback probe (first non-empty <c>references</c> on a control symbol).</summary>
-    public void MarkReadyByFallback()
+    public void MarkReadyByFallback() => MarkReady("fallback probe");
+
+    private void MarkReady(string via)
     {
         if (_ready.TrySetResult()) ReadyElapsed = _clock.Elapsed;
+        Log($"[client] ready via {via} at {_clock.Elapsed.TotalSeconds:F1}s");
     }
 
     /// <summary><c>textDocument/didOpen</c> with the raw file text — sent once per file.</summary>
@@ -194,7 +200,12 @@ internal sealed class LspClient : IAsyncDisposable
                 if (!call.TryGetProperty("from", out var from)) continue;
                 var caller = JsonSerializer.Deserialize<CallHierarchyItem>(from.GetRawText(), ReadOptions);
                 if (caller?.Uri is null || caller.SelectionRange is null) continue;
-                callers.Add(new LspLocation { Uri = caller.Uri, Range = caller.SelectionRange });
+                // fromRanges are the call SITES inside the caller — kept so a gap can be told apart as an
+                // implicit call (`using` disposal) rather than a missing edge.
+                var sites = call.TryGetProperty("fromRanges", out var fr) && fr.ValueKind == JsonValueKind.Array
+                    ? JsonSerializer.Deserialize<List<LspRange>>(fr.GetRawText(), ReadOptions) ?? []
+                    : [];
+                callers.Add(new LspLocation { Uri = caller.Uri, Range = caller.SelectionRange, Sites = sites });
             }
         }
         return callers;
@@ -297,6 +308,13 @@ internal sealed class LspClient : IAsyncDisposable
         [JsonRpcMethod("workspace/codeLens/refresh", UseSingleObjectParameterDeserialization = true)]
         public object? CodeLensRefresh(JsonElement parameters) => null;
 
+        [JsonRpcMethod("window/_roslyn_showToast", UseSingleObjectParameterDeserialization = true)]
+        public object? ShowToast(JsonElement parameters)
+        {
+            owner.Log($"[server] _roslyn_showToast {parameters.GetRawText()}");
+            return null;
+        }
+
         [JsonRpcMethod("window/showMessageRequest", UseSingleObjectParameterDeserialization = true)]
         public object? ShowMessageRequest(JsonElement parameters)
         {
@@ -304,12 +322,14 @@ internal sealed class LspClient : IAsyncDisposable
             return null;
         }
 
+        // Roslyn sends this notification WITHOUT params. A handler that demands a parameter object never
+        // matches, the notification is dropped silently, and "the server never became ready" is the wrong
+        // conclusion — measured: all projects loaded at 5,5 s, readiness never observed. Both shapes are bound.
+        [JsonRpcMethod("workspace/projectInitializationComplete")]
+        public void ProjectInitializationComplete() => owner.MarkReady("workspace/projectInitializationComplete");
+
         [JsonRpcMethod("workspace/projectInitializationComplete", UseSingleObjectParameterDeserialization = true)]
-        public void ProjectInitializationComplete(JsonElement parameters)
-        {
-            if (owner._ready.TrySetResult()) owner.ReadyElapsed = owner._clock.Elapsed;
-            owner.Log($"[server] workspace/projectInitializationComplete at {owner._clock.Elapsed.TotalSeconds:F1}s");
-        }
+        public void ProjectInitializationComplete(JsonElement parameters) => owner.MarkReady("workspace/projectInitializationComplete (with params)");
 
         [JsonRpcMethod("window/logMessage", UseSingleObjectParameterDeserialization = true)]
         public void LogMessage(JsonElement parameters) =>
@@ -434,6 +454,9 @@ internal sealed record LspLocation
 {
     [JsonPropertyName("uri")] public string Uri { get; init; } = string.Empty;
     [JsonPropertyName("range")] public LspRange Range { get; init; } = new();
+
+    /// <summary>Call sites inside the caller (<c>incomingCalls.fromRanges</c>); empty for plain locations.</summary>
+    [JsonIgnore] public IReadOnlyList<LspRange> Sites { get; init; } = [];
 }
 
 internal sealed record LspLocationLink

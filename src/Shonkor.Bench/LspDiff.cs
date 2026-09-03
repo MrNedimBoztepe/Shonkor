@@ -33,6 +33,9 @@ internal enum GapBucket
     /// <summary>A node exists but the linker does not attribute that relation to its kind (e.g. CALLS from a constructor or property body — <c>SemanticCsharpLinker</c> only walks <c>MethodDeclarationSyntax</c>).</summary>
     LinkerScope,
 
+    /// <summary>A call without an identifier at the site — <c>using</c> disposal, <c>foreach</c>, <c>await</c>, operators. The call hierarchy counts it; the linker only walks <c>InvocationExpressionSyntax</c>.</summary>
+    Implicit,
+
     /// <summary>A node exists at the right granularity and the graph simply lacks the edge.</summary>
     Other
 }
@@ -43,8 +46,12 @@ internal sealed record EdgePair(string SourceId, string TargetId, string Relatio
 /// <summary>A seed file with the number of distinct SemanticSymbol pairs originating in it.</summary>
 internal sealed record SeedFile(string File, int Pairs);
 
-/// <summary>The mechanical seed pick plus the sanity counters the report must show.</summary>
-internal sealed record SeedSelection(IReadOnlyList<SeedFile> Seeds, int SemanticEdges, int UnspecifiedEdges);
+/// <summary>
+/// The mechanical seed pick plus the sanity counters the report must show. <see cref="UnspecifiedEdges"/> is
+/// graph-wide; <see cref="UnspecifiedInScope"/> counts only the five relations under test — a plugin that
+/// forgot its reason on some other relation must not block the diff, but it must be reported.
+/// </summary>
+internal sealed record SeedSelection(IReadOnlyList<SeedFile> Seeds, int SemanticEdges, int UnspecifiedEdges, int UnspecifiedInScope);
 
 /// <summary>Where to point the request for a target node, or why that is impossible.</summary>
 internal sealed record AnchorResult(LspPosition? Position, string? Failure)
@@ -71,11 +78,17 @@ internal static class LspDiff
     public const string ReferencesType = "REFERENCES_TYPE";
     public const string Calls = "CALLS";
     public const string Instantiates = "INSTANTIATES";
+    public const string Implements = "IMPLEMENTS";
+    public const string Extends = "EXTENDS";
     public const string Overrides = "OVERRIDES";
     public const string ImplementsMember = "IMPLEMENTS_MEMBER";
 
-    /// <summary>The relations the semantic linker emits, in report order.</summary>
-    public static readonly string[] Relations = [ReferencesType, Calls, Instantiates, Overrides, ImplementsMember];
+    /// <summary>
+    /// The relations the semantic linker emits, in report order. IMPLEMENTS/EXTENDS are the type-level pair
+    /// (<c>SemanticCsharpLinker</c> emits them at SemanticSymbol too); their oracle is
+    /// <c>textDocument/implementation</c> on the interface/base type, which answers with the implementing/derived types.
+    /// </summary>
+    public static readonly string[] Relations = [ReferencesType, Calls, Instantiates, Implements, Extends, Overrides, ImplementsMember];
 
     private static readonly HashSet<string> TypeKinds = new(StringComparer.Ordinal) { "Class", "Interface", "Record", "Struct", "Enum" };
     private static readonly HashSet<string> MemberKinds = new(StringComparer.Ordinal) { "Method", "Constructor", "Property" };
@@ -84,14 +97,16 @@ internal static class LspDiff
     public static string? FullPathOf(GraphNode node, string rootDir) =>
         string.IsNullOrEmpty(node.FilePath) ? null : Path.GetFullPath(node.FilePath, rootDir);
 
-    /// <summary>Nodes with a file and a line span, keyed by absolute path under the platform's path comparer.</summary>
+    /// <summary>
+    /// Every node with a file, keyed by absolute path under the platform's path comparer. File nodes (no line
+    /// span) are kept so "the file is indexed but nothing covers the line" stays distinguishable from "the
+    /// file is not in the graph at all".
+    /// </summary>
     public static Dictionary<string, List<GraphNode>> GroupByFile(IEnumerable<GraphNode> nodes, string rootDir)
     {
         var byFile = new Dictionary<string, List<GraphNode>>(FilePaths.Comparer);
         foreach (var n in nodes)
         {
-            if (n.StartLine is null || n.EndLine is null) continue;
-            if (!TypeKinds.Contains(n.Type) && !MemberKinds.Contains(n.Type)) continue;
             var file = FullPathOf(n, rootDir);
             if (file is null) continue;
             if (!byFile.TryGetValue(file, out var list)) byFile[file] = list = [];
@@ -111,9 +126,14 @@ internal static class LspDiff
         var pairsByFile = new Dictionary<string, HashSet<EdgePair>>(FilePaths.Comparer);
         var semantic = 0;
         var unspecified = 0;
+        var unspecifiedInScope = 0;
         foreach (var e in edges)
         {
-            if (e.Reason == ProvenanceReason.Unspecified) unspecified++;
+            if (e.Reason == ProvenanceReason.Unspecified)
+            {
+                unspecified++;
+                if (Relations.Contains(e.Relationship, StringComparer.Ordinal)) unspecifiedInScope++;
+            }
             if (e.Reason != ProvenanceReason.SemanticSymbol) continue;
             semantic++;
             if (!nodesById.TryGetValue(e.SourceId, out var source)) continue;
@@ -129,7 +149,7 @@ internal static class LspDiff
             .ThenBy(s => s.File, StringComparer.Ordinal)
             .Take(top)
             .ToList();
-        return new SeedSelection(seeds, semantic, unspecified);
+        return new SeedSelection(seeds, semantic, unspecified, unspecifiedInScope);
     }
 
     /// <summary>All distinct SemanticSymbol pairs whose source node lives in one of <paramref name="seedFiles"/>.</summary>
@@ -188,7 +208,8 @@ internal static class LspDiff
         return relationship switch
         {
             // Linker: nearest enclosing TypeDeclarationSyntax (SemanticCsharpLinker.cs:253) — the innermost type.
-            ReferencesType => Innermost(covering, TypeKinds) ?? new MappedSource(null, "no-node"),
+            // IMPLEMENTS/EXTENDS: `implementation` answers with the implementing/derived type's declaration line.
+            ReferencesType or Implements or Extends => Innermost(covering, TypeKinds) ?? new MappedSource(null, "no-node"),
             // Linker: nearest enclosing MethodDeclarationSyntax only (:280). A constructor/property body is a
             // real node the linker never attributes a CALLS to — that is linker scope, not a mapping failure.
             Calls => Innermost(covering, ["Method"]) ?? (Innermost(covering, MemberKinds) is { IsOk: true } member
@@ -208,28 +229,49 @@ internal static class LspDiff
         return lspSourceIds.Contains(pair.SourceId) ? LspOutcome.Confirmed : LspOutcome.Contradicted;
     }
 
-    /// <summary>Which cause an LSP-only location falls under. Generated is tested before external: <c>obj/</c> sits inside the root.</summary>
-    public static GapBucket Bucket(string uri, string rootDir, MappedSource mapped)
+    /// <summary>
+    /// Which cause an LSP-only location falls under. Generated is tested before external: <c>obj/</c> sits
+    /// inside the root. <paramref name="implicitSite"/> is the caller's finding that no call site names the
+    /// callee (<c>using</c> disposal and friends) — it only matters once a node exists.
+    /// </summary>
+    public static GapBucket Bucket(string uri, string rootDir, MappedSource mapped, bool implicitSite = false)
     {
         var file = FileOf(uri);
         if (IsGenerated(file)) return GapBucket.Generated;
         if (!FilePaths.TryGetRelative(file, rootDir, out _)) return GapBucket.External;
         return mapped.Status switch
         {
-            "ok" => GapBucket.Other,
+            "ok" => implicitSite ? GapBucket.Implicit : GapBucket.Other,
             "linker-scope" => GapBucket.LinkerScope,
             _ => GapBucket.Unmappable
         };
+    }
+
+    /// <summary>Whether none of the call-site lines mention the callee — an implicit call the linker cannot see in an <c>InvocationExpressionSyntax</c> walk.</summary>
+    public static bool IsImplicitCall(IReadOnlyList<string> fileLines, IEnumerable<LspRange> sites, string calleeName)
+    {
+        var name = BareName(calleeName);
+        var any = false;
+        foreach (var s in sites)
+        {
+            any = true;
+            for (var l = s.Start.Line; l <= s.End.Line && l < fileLines.Count; l++)
+                if (l >= 0 && fileLines[l].Contains(name, StringComparison.Ordinal)) return false;
+        }
+        return any;
     }
 
     /// <summary>The absolute local path behind a <c>file:</c> URI (or a plain path), normalised for comparison.</summary>
     public static string FileOf(string uriOrPath) =>
         Path.GetFullPath(Uri.TryCreate(uriOrPath, UriKind.Absolute, out var u) && u.IsFile ? u.LocalPath : uriOrPath);
 
-    /// <summary>The identifier without parameter list, type arguments or explicit-interface prefix — what both sides call the symbol.</summary>
+    /// <summary>
+    /// The identifier without parameter list, type arguments, explicit-interface prefix or Roslyn's
+    /// <c>" : Type"</c> suffix on properties (<c>DefaultReason : ProvenanceReason</c>) — what both sides call the symbol.
+    /// </summary>
     public static string BareName(string name)
     {
-        var cut = name.IndexOfAny(['(', '<']);
+        var cut = name.IndexOfAny(['(', '<', ':']);
         var bare = cut >= 0 ? name[..cut] : name;
         var dot = bare.LastIndexOf('.');
         return (dot >= 0 ? bare[(dot + 1)..] : bare).Trim();
