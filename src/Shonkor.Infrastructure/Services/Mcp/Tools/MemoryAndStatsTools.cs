@@ -307,6 +307,16 @@ public sealed class VerifyExistsTool : IMcpTool
         var projectName = args?["projectName"]?.ToString();
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var basePath = ctx.GetProjectBasePath(projectName);
+        // #462: resolve through the shared resolver so a bare type name reports the TYPE, not its
+        // same-named constructor. Picking the first exact-name search hit made this tool disagree with
+        // every other one about what the symbol is.
+        var (resolved, others) = await ResolveDefinitionWithPeersAsync(storage, symbol).ConfigureAwait(false);
+        if (resolved != null && IsExactNameMatch(resolved, symbol))
+        {
+            return SendToolResponse(id, $"YES — '{resolved.Name}' ({resolved.Type}) exists at {ToHandle(resolved.Id, basePath)}."
+                + SameNameDeclarationNote(resolved, others, basePath));
+        }
+
         var hits = (await storage.SearchAsync(symbol, SymbolSearchLimit).ConfigureAwait(false)).Select(h => h.Node).ToList();
 
         var exact = hits.FirstOrDefault(n => IsExactNameMatch(n, symbol));

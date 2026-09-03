@@ -234,7 +234,7 @@ public sealed class FindUsagesTool : IMcpTool
         var basePath = ctx.GetProjectBasePath(projectName);
         var maxProv = ReadProvenanceFilter(args);
 
-        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+        var (def, sameName) = await ResolveDefinitionWithPeersAsync(storage, symbol).ConfigureAwait(false);
         if (def == null)
         {
             throw McpToolException.SymbolNotFound(symbol!);
@@ -258,7 +258,8 @@ public sealed class FindUsagesTool : IMcpTool
             // #288 (Option 3): if the resolved node cannot carry the queried edge, say so and point at the
             // node that can, rather than implying the symbol is genuinely unused.
             var hint = EdgeCarrierRedirectHint(def);
-            return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.{hint}");
+            return SendToolResponse(id, $"No usages of '{def.Name}' ({def.Type}) found{await ctx.ScopeSuffixAsync(storage, projectName).ConfigureAwait(false)}.{hint}"
+                + SameNameDeclarationNote(def, sameName, basePath));
         }
 
         var filterNote = maxProv is { } mp ? $" (provenance ≤ {mp.ToString().ToLowerInvariant()})" : "";
@@ -277,7 +278,8 @@ public sealed class FindUsagesTool : IMcpTool
         return SendToolResponse(id, sb.ToString().TrimEnd()
             + await ctx.StaleSuffixAsync(storage, def).ConfigureAwait(false)
             + ModelInvolvementNote(incoming.Select(e => e.Relationship), excludedModel)
-            + ReasonFilterNote(excludedByReason));   // AP7 (#445) + AP2 (#456)
+            + ReasonFilterNote(excludedByReason)     // AP7 (#445) + AP2 (#456)
+            + SameNameDeclarationNote(def, sameName, basePath));   // #462
     }
 }
 

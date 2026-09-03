@@ -354,7 +354,7 @@ public sealed class EditPlanTool : IMcpTool
         var storage = await ctx.GetStorageAsync(projectName).ConfigureAwait(false);
         var basePath = ctx.GetProjectBasePath(projectName);
 
-        var def = await ResolveDefinitionAsync(storage, symbol).ConfigureAwait(false);
+        var (def, sameName) = await ResolveDefinitionWithPeersAsync(storage, symbol).ConfigureAwait(false);
         if (def == null)
         {
             throw McpToolException.SymbolNotFound(symbol!);
@@ -394,6 +394,7 @@ public sealed class EditPlanTool : IMcpTool
             }
         }
         sb.Append("After editing: reindex_file each changed path, then find_usages / related_tests to confirm.");
+        sb.Append(SameNameDeclarationNote(def, sameName, basePath));
         return SendToolResponse(id, sb.ToString());
     }
 }
