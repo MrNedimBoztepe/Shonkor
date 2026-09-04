@@ -18,11 +18,19 @@ if [ $# -ge 1 ]; then
   c=$(bash "$here/keys-c.sh" "$1" 4 3 3)
 else
   # The C block is the tail of the committed file from the first class C task to the closing bracket.
-  from=$(grep -n '"class": "C"' "$out" | head -n1 | cut -d: -f1)
+  # `|| true`: under `set -o pipefail` a grep without a hit would end the script silently (exit 1)
+  # before the check below ever ran.
+  from=$(grep -n '"class": "C"' "$out" | head -n1 | cut -d: -f1 || true)
   [ -n "$from" ] || { echo "no class C task in $out — pass <corpus-root>" >&2; exit 1; }
   c=$(printf '[\n'; tail -n +"$from" "$out")
-  echo "C: carried over $(printf '%s\n' "$c" | grep -c '"id":') tasks from the committed $out" >&2
+  c_count=$(printf '%s\n' "$c" | grep -c '"id":' || true)
+  [ "$c_count" -eq 10 ] || { echo "expected 10 class C tasks in $out, found $c_count — pass <corpus-root>" >&2; exit 1; }
+  echo "C: carried over $c_count tasks from the committed $out" >&2
 fi
 # Each script prints a complete array; join them by dropping the closing / opening bracket lines.
-{ printf '%s' "$ab" | sed '$d'; printf ',\n'; printf '%s\n' "$c" | sed '1d'; } > "$out"
-echo "wrote $out ($(grep -c '"id":' "$out") tasks)" >&2
+# Assert the total before touching the file so that a short run never overwrites a good corpus.
+joined=$(printf '%s' "$ab" | sed '$d'; printf ',\n'; printf '%s\n' "$c" | sed '1d')
+total=$(printf '%s\n' "$joined" | grep -c '"id":' || true)
+[ "$total" -eq 30 ] || { echo "expected 30 tasks, got $total — not writing $out" >&2; exit 1; }
+printf '%s\n' "$joined" > "$out"
+echo "wrote $out ($total tasks)" >&2
