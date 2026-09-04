@@ -31,6 +31,7 @@ internal sealed class LspClient : IAsyncDisposable
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly HashSet<string> _openedFiles = new(Shonkor.Core.Services.FilePaths.Comparer);
     private readonly List<string> _dynamicRegistrations = [];
+    private readonly List<string> _loadErrors = [];
     private bool _disposed;
 
     private LspClient(Process process, Stopwatch clock, TextWriter log)
@@ -60,6 +61,13 @@ internal sealed class LspClient : IAsyncDisposable
 
     /// <summary>Methods the server registered dynamically via <c>client/registerCapability</c>.</summary>
     public IReadOnlyList<string> DynamicRegistrations => _dynamicRegistrations;
+
+    /// <summary>
+    /// <c>window/logMessage</c> entries that report a project the server could not load
+    /// (<see cref="LspDiff.IsProjectLoadError"/>). Loading continues without the project, so this is the only
+    /// trace of a run whose numbers are wrong.
+    /// </summary>
+    public IReadOnlyList<string> LoadErrors { get { lock (_loadErrors) return _loadErrors.ToList(); } }
 
     /// <summary>Stopwatch marks of every request issued after the server was ready.</summary>
     public List<LspTiming> Timings { get; } = [];
@@ -332,8 +340,13 @@ internal sealed class LspClient : IAsyncDisposable
         public void ProjectInitializationComplete(JsonElement parameters) => owner.MarkReady("workspace/projectInitializationComplete (with params)");
 
         [JsonRpcMethod("window/logMessage", UseSingleObjectParameterDeserialization = true)]
-        public void LogMessage(JsonElement parameters) =>
-            owner.Log($"[server:log] {(parameters.TryGetProperty("message", out var m) ? m.GetString() : parameters.GetRawText())}");
+        public void LogMessage(JsonElement parameters)
+        {
+            var message = parameters.TryGetProperty("message", out var m) ? m.GetString() : parameters.GetRawText();
+            owner.Log($"[server:log] {message}");
+            if (LspDiff.IsProjectLoadError(message))
+                lock (owner._loadErrors) owner._loadErrors.Add(message!);
+        }
 
         [JsonRpcMethod("window/showMessage", UseSingleObjectParameterDeserialization = true)]
         public void ShowMessage(JsonElement parameters) => owner.Log($"[server:show] {parameters.GetRawText()}");

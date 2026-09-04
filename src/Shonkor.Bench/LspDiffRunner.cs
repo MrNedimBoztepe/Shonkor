@@ -153,6 +153,7 @@ internal static class LspDiffRunner
             {
                 result.Notes.Add("Server never became ready — no request was issued, no verdict exists.");
                 console.WriteLine("  [EXPECTED ERROR] server never became ready; writing what was measured.");
+                RecordLoadErrors(client, result);
                 Write(result, o.OutputDir, console);
                 return 1;
             }
@@ -169,6 +170,7 @@ internal static class LspDiffRunner
                 await DiffAsync(client, pairs, graphSources, nodesById, nodesByFile, rootDir, result, console, log, ct).ConfigureAwait(false);
             }
             result.Timings = client.Timings.ToList();
+            RecordLoadErrors(client, result);
         }
 
         Write(result, o.OutputDir, console);
@@ -302,6 +304,8 @@ internal static class LspDiffRunner
 
         console.WriteLine();
         console.WriteLine($"t_init {result.TInitSeconds:F1}s, t_ready {result.TReadySeconds:F1}s{(result.ReadyByFallback ? " (fallback)" : "")}");
+        if (result.ProjectLoadErrors.Count > 0)
+            console.WriteLine($"  NOTE: {result.ProjectLoadErrors.Count} project load error(s) — results are not trustworthy (see {md} → Notes, and lsp-diff.log).");
         foreach (var rel in LspDiff.Relations)
         {
             var xs = result.Pairs.Where(p => p.Pair.Relationship == rel).ToList();
@@ -320,13 +324,20 @@ internal static class LspDiffRunner
         return text.Split('\n');
     }
 
-    /// <summary>Whether the source node's file mentions the target's name at all — cheap evidence for "the graph saw an inferred type, the server saw no identifier".</summary>
+    /// <summary>Whether the source node's file mentions the target's name as an identifier — cheap evidence for "the graph saw an inferred type, the server saw no identifier".</summary>
     private static bool MentionsName(GraphNode source, string name, string rootDir, Dictionary<string, string> textCache)
     {
         var file = LspDiff.FullPathOf(source, rootDir);
         if (file is null || !File.Exists(file)) return true; // unknown — do not claim anything
         if (!textCache.TryGetValue(file, out var text)) textCache[file] = text = File.ReadAllText(file);
-        return text.Contains(name, StringComparison.Ordinal);
+        return LspDiff.MentionsIdentifier(text, name);
+    }
+
+    /// <summary>Copies the server's project-load errors into the result and adds the "not trustworthy" note. Called once per run, right before the report is written.</summary>
+    private static void RecordLoadErrors(LspClient client, LspDiffResult result)
+    {
+        result.ProjectLoadErrors = client.LoadErrors.ToList();
+        if (LspDiff.ProjectLoadErrorNote(result.ProjectLoadErrors) is { } note) result.Notes.Add(note);
     }
 
     private static string? GitHead(string dir) => Git(dir, "rev-parse HEAD")?.Trim() is { Length: > 0 } head ? head : null;

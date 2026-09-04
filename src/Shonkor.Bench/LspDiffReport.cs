@@ -36,6 +36,9 @@ internal sealed class LspDiffResult
     public List<GapEntry> Gaps { get; set; } = [];
     public int TargetsQueried { get; set; }
     public int TargetsAnchored { get; set; }
+
+    /// <summary>Server log lines that report a project it could not load — non-empty means the numbers above are not trustworthy.</summary>
+    public List<string> ProjectLoadErrors { get; set; } = [];
     public List<string> Notes { get; set; } = [];
 
     public bool HasProvider(string name) =>

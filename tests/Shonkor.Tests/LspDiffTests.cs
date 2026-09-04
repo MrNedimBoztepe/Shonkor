@@ -301,4 +301,43 @@ public class LspDiffTests
         Assert.Equal(10, LspDiff.Percentile(xs, 95));
         Assert.Equal(0, LspDiff.Percentile([], 50));
     }
+
+    [Fact]
+    public void MentionsIdentifier_MatchesWholeIdentifiersOnly_NeverASubstring()
+    {
+        // The three shapes that hid behind a plain Contains on the real run: a longer identifier that ends
+        // with the name, a test-method name that starts with it, and a genuine occurrence.
+        Assert.False(LspDiff.MentionsIdentifier("var f = ReadReasonFilter(args);", "ReasonFilter"));
+        Assert.False(LspDiff.MentionsIdentifier("public async Task NodeState_IsProbedOnce()", "NodeState"));
+        Assert.True(LspDiff.MentionsIdentifier("var f = new ReasonFilter(args);", "ReasonFilter"));
+        Assert.True(LspDiff.MentionsIdentifier("x.NodeState;", "NodeState"));
+        Assert.True(LspDiff.MentionsIdentifier("ReasonFilter", "ReasonFilter"));
+        Assert.False(LspDiff.MentionsIdentifier("anything", ""));                    // an empty name matches nothing
+        Assert.False(LspDiff.MentionsIdentifier("ValueTuple`2 x", "ValueTuple`3")); // metacharacters are literal
+    }
+
+    [Fact]
+    public void IsProjectLoadError_RecognisesRoslynsErrorWhileLoading_AndNothingElse()
+    {
+        Assert.True(LspDiff.IsProjectLoadError(@"Error while loading C:\x\Shonkor.Infrastructure.csproj: MSB3030 could not copy"));
+        Assert.True(LspDiff.IsProjectLoadError(@"[solution/open] [LanguageServerProjectSystem] Error while loading C:\x\A.csproj"));
+        Assert.False(LspDiff.IsProjectLoadError(@"Warning while loading C:\x\A.csproj: MSIL vs x86"));
+        Assert.False(LspDiff.IsProjectLoadError(@"Laden von ""C:\x\A.csproj"" erfolgreich abgeschlossen"));
+        Assert.False(LspDiff.IsProjectLoadError(null));
+    }
+
+    [Fact]
+    public void ProjectLoadErrorNote_IsNullWithoutErrors_AndNamesCountAndFirstErrorOtherwise()
+    {
+        Assert.Null(LspDiff.ProjectLoadErrorNote([]));
+
+        var note = LspDiff.ProjectLoadErrorNote(["Error while loading A.csproj: x", "Error while loading B.csproj: y"]);
+        Assert.NotNull(note);
+        Assert.StartsWith("2 project load error(s) — results are not trustworthy", note);
+        Assert.Contains("Error while loading A.csproj: x", note);
+        Assert.DoesNotContain("B.csproj", note); // the full list lives in the JSON, the note names the first
+
+        var longMessage = new string('e', 400);
+        Assert.Contains(new string('e', 300) + "…", LspDiff.ProjectLoadErrorNote([longMessage]));
+    }
 }

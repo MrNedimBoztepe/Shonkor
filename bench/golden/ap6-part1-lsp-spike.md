@@ -25,8 +25,10 @@ The diff was run against the exe directly with `--stdio --logLevel Information -
 
 Client capabilities sent: `documentSymbol.hierarchicalDocumentSymbolSupport=true`, `callHierarchy`,
 `implementation`, `references`, `workspace.configuration`, `workspace.workspaceFolders`; **no**
-`dynamicRegistration` anywhere, so every provider had to be static. Zero `client/registerCapability`
-requests arrived.
+`dynamicRegistration` anywhere, so every provider had to be static. One `client/registerCapability`
+request arrived regardless — `textDocument/documentColor`, from the Razor cohost ("Requesting 1 Razor
+cohost registrations" in the server log; `dynamicRegistrations` in `bench/lsp-diff.json`). None of the
+four providers the diff needs was registered dynamically.
 
 `capabilities` keys returned (full dump in `bench/lsp-diff.md` after every run):
 
@@ -159,14 +161,29 @@ the sub-millisecond to ~200 ms range above.
 | IMPLEMENTS_MEMBER | 113 | 113 | 0 | 0 |
 | EXTENDS / OVERRIDES | 0 | — | — | — |
 
-Identical on both runs. 274 targets queried, 246 anchored.
+Identical on both runs. 274 `(target, relationship)` groups queried, **257 anchored**; the 17 groups that
+were not anchored are all dangling targets (no node with that id in the graph) — no anchor search failed
+on an existing node.
 
-- **Unmappable 28 = 28 dangling targets**, all of one shape: `<referencing file>::System.ValueTuple\`2`
-  (and \`3`). `RoslynSemantics.ToNodeId` takes the tuple *type's* first declaring syntax reference, which
-  for `(a, b)` is the tuple expression in the referencing file — an id no parser ever creates. A graph
-  defect, not an LSP finding (§7).
-- **Contradicted 5**, all REFERENCES_TYPE, all of one shape: the source file has **no textual occurrence
-  of the target's name**. `Shonkor.CLI.Program → AssemblyPluginLoadResult`, `FindUsagesTool/ReferencesTool/ReasonFilterTests → McpToolHelpers+ReasonFilter`,
+- **Unmappable 28 = 28 dangling targets** in three shapes (`bench/lsp-diff.json`, `pairs[].note = "dangling
+  target"`):
+  - **23** REFERENCES_TYPE → `<referencing file>::System.ValueTuple\`2` (also \`3, \`4).
+    `RoslynSemantics.ToNodeId` takes the tuple *type's* first declaring syntax reference, which for
+    `(a, b)` is the tuple expression in the referencing file — an id no parser ever creates. A graph
+    defect, not an LSP finding (§7 item 1).
+  - **4** CALLS → a **local function**: `src/Shonkor.CLI/Program.cs::…Program::Report#1`
+    (`static int Report(PluginOperationResult r)`, `Program.cs:772`), `ReadTools.cs::…OutlineTool::Render#2`
+    (`ReadTools.cs:202`), `SqliteGraphStorageProvider.cs::…::AddToMap#3` (`SqliteGraphStorageProvider.cs:1529`),
+    `McpToolsTests.cs::…McpToolsTests::Nid#1` (`McpToolsTests.cs:811`). The linker builds an id for the
+    local function as if it were a member; the parser creates no node for local functions. A second graph
+    defect of the same family (§7 item 6).
+  - **1** REFERENCES_TYPE → `tests/Shonkor.Tests/McpToolsTests.cs::` — an id with an **empty symbol
+    name**, source `McpToolsTests` (the class). Assumption, not verified: `var` resolved to an anonymous
+    type (`new { … }`), whose symbol has no name (§7 item 6).
+- **Contradicted 5**, all REFERENCES_TYPE, all of one shape: the source file has **no occurrence of the
+  target's name as an identifier** (the runner's annotation matches on identifier boundaries, not
+  substrings — a plain `Contains` saw `ReasonFilter` inside `ReadReasonFilter` and annotated 1 of the 5).
+  `Shonkor.CLI.Program → AssemblyPluginLoadResult`, `FindUsagesTool/ReferencesTool/ReasonFilterTests → McpToolHelpers+ReasonFilter`,
   `TypeScriptPluginTests → NodeState`. The linker walks every `TypeSyntax` and `var` is one; its
   `GetSymbolInfo` resolves to the inferred type, so `var x = ReadReasonFilter(args)` yields a
   REFERENCES_TYPE edge. Find-all-references does not count an inferred type as a reference. Semantic
@@ -197,7 +214,7 @@ What the buckets contain, checked against the graph DB:
 
 - **Implicit 194 (CALLS)** — 196 of the raw hits target `SqliteGraphStorageProvider.Dispose#0`: `using var
   provider = …` in tests. The call hierarchy counts the implicit disposal; the linker only walks
-  `InvocationExpressionSyntax` (`SemanticCsharpLinker.cs:278`). Same class: `foreach`, `await`, operators.
+  `InvocationExpressionSyntax` (`SemanticCsharpLinker.cs:274`). Same class: `foreach`, `await`, operators.
   Not a bug — a scope decision — but a consumer asking "who calls Dispose" gets two different answers.
 - **Unmappable 117 (REFERENCES_TYPE) + 6 (CALLS) + 11 (IMPLEMENTS)** — top-level statements
   (`src/Shonkor.Web/Program.cs` 11, `src/Shonkor.Bench/Program.cs` 11: no type or method node exists for
@@ -229,7 +246,7 @@ edges (5 of 254), which only the graph has.
 
 ## 7. Defects this spike surfaced (follow-up candidates, not fixed here)
 
-1. Dangling REFERENCES_TYPE targets `<file>::System.ValueTuple\`N` — 28 edges in the seed set alone;
+1. Dangling REFERENCES_TYPE targets `<file>::System.ValueTuple\`N` — 23 edges in the seed set alone;
    `RoslynSemantics.ToNodeId` should treat tuple types as external (metadata-only), not as declared in
    the referencing file.
 2. CALLS edges missing for resolvable invocations in the whole-repo compilation (191 in ten seed files'
@@ -241,6 +258,11 @@ edges (5 of 254), which only the graph has.
    producer left.
 5. `var`-inferred REFERENCES_TYPE: decide whether the graph should keep emitting them (they are
    compiler-true) or mark them so that consumers comparing against find-references are not surprised.
+6. Dangling targets the linker names but the parser never creates: CALLS to **local functions**
+   (`…::Report#1`, `…::Render#2`, `…::AddToMap#3`, `…::Nid#1` — 4 in the seed set) and one
+   REFERENCES_TYPE to an id with an empty symbol name (`McpToolsTests.cs::`, assumed anonymous type).
+   Either the parser creates nodes for local functions, or `ToNodeId` attributes the call to the
+   enclosing member / skips unnamed symbols — today the edge points at nothing.
 
 ## 8. Open questions for the decision ticket
 
@@ -262,7 +284,8 @@ edges (5 of 254), which only the graph has.
 
 ```
 dotnet tool install -g roslyn-language-server --prerelease           # 5.12.0-1.26426.8 at time of writing
-dotnet build Shonkor.slnx -c Release
+dotnet build Shonkor.slnx -c Release                                 # bench + CLI binaries
+dotnet build Shonkor.slnx -c Debug                                   # what the SERVER loads — see below
 dotnet run --project src/Shonkor.CLI -c Release --no-build -- index . # graph at HEAD, clean tree
 dotnet run --project src/Shonkor.Bench -c Release --no-build -- shonkor.db --lsp-diff \
   --lsp "<path-to>\roslyn-language-server.exe --stdio --logLevel Information --extensionLogDirectory <dir>"
@@ -272,5 +295,16 @@ dotnet run --project src/Shonkor.Bench -c Release --no-build -- shonkor.db --lsp
   --solution C:\Projects\sitecoreMuM\SitecoreMuM.sln --lsp "<same>"
 ```
 
-Unit tests for the pure mapping (`tests/Shonkor.Tests/LspDiffTests.cs`, 25 cases) run without a server.
+**Why the Debug build:** the language server evaluates the projects with MSBuild's default configuration,
+Debug. `Shonkor.Infrastructure.csproj:37-39` embeds
+`..\Shonkor.Plugin.TypeScript\bin\$(Configuration)\net10.0\Shonkor.Plugin.TypeScript.zip`; without a
+Debug build that file does not exist, the server logs `Error while loading …\Shonkor.Infrastructure.csproj:
+… Shonkor.Plugin.TypeScript.zip konnte nicht kopiert werden`, drops the project, and every Infrastructure
+file answers from the miscellaneous-files workspace. Measured with a Release-only build: REFERENCES_TYPE
+87 confirmed / 143 contradicted / 24 unmappable, CALLS 236/247/4, IMPLEMENTS_MEMBER 13/100/0 — exit 0, no
+hint. The runner now collects those `Error while loading` log lines (`LspClient.LoadErrors`) and writes a
+"results are not trustworthy" note into `lsp-diff.md`, `lsp-diff.json` (`projectLoadErrors`) and the
+console summary; the exit code stays 0 (lens mode).
+
+Unit tests for the pure mapping (`tests/Shonkor.Tests/LspDiffTests.cs`, 28 cases) run without a server.
 `LspClient` is untested by design — it is the spike's throwaway wire.

@@ -1,5 +1,6 @@
 // Licensed to Shonkor under the MIT License.
 
+using System.Text.RegularExpressions;
 using Shonkor.Core.Models;
 using Shonkor.Core.Services;
 
@@ -275,6 +276,35 @@ internal static class LspDiff
         var bare = cut >= 0 ? name[..cut] : name;
         var dot = bare.LastIndexOf('.');
         return (dot >= 0 ? bare[(dot + 1)..] : bare).Trim();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="text"/> contains <paramref name="identifier"/> as a whole identifier — not as a
+    /// substring. A plain <c>Contains</c> saw <c>ReasonFilter</c> inside <c>ReadReasonFilter</c> and
+    /// <c>NodeState</c> inside <c>NodeState_IsProbedOnce…</c>, so "no textual occurrence" fired on 1 of 5
+    /// contradicted pairs that all had the same cause.
+    /// </summary>
+    public static bool MentionsIdentifier(string text, string identifier) =>
+        identifier.Length > 0 && Regex.IsMatch(text, $@"(?<![\w]){Regex.Escape(identifier)}(?![\w])", RegexOptions.None, TimeSpan.FromSeconds(5));
+
+    /// <summary>
+    /// A <c>window/logMessage</c> that says a project failed to load. Roslyn's project system logs
+    /// <c>Error while loading &lt;csproj&gt;: …</c> (English, unlike its localised progress lines) and then carries
+    /// on: the project's files land in the miscellaneous-files workspace, every answer about them is wrong, and
+    /// the run still exits 0 — measured as REFERENCES_TYPE 87/143/24 instead of 225/5/24 when the TypeScript
+    /// plugin zip for the server's build configuration was missing.
+    /// </summary>
+    public static bool IsProjectLoadError(string? logMessage) =>
+        logMessage is not null && logMessage.Contains("Error while loading", StringComparison.Ordinal);
+
+    /// <summary>The report note for collected load errors, or null when there were none. Lens mode: a note, never an exit code.</summary>
+    public static string? ProjectLoadErrorNote(IReadOnlyList<string> loadErrors)
+    {
+        if (loadErrors.Count == 0) return null;
+        var first = loadErrors[0].Length > 300 ? loadErrors[0][..300] + "…" : loadErrors[0];
+        return $"{loadErrors.Count} project load error(s) — results are not trustworthy: files of a project the server could not load answer from the "
+               + $"miscellaneous-files workspace, so their pairs read as contradicted. First: `{first}`. Build the solution in the configuration "
+               + "the server loads (MSBuild default: Debug) and rerun; the full list is in lsp-diff.json (projectLoadErrors) and lsp-diff.log.";
     }
 
     /// <summary>The percentile of an ascending list (nearest-rank), as <c>Program.cs</c> reports search latency.</summary>
