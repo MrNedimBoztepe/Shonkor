@@ -29,11 +29,20 @@
 #
 #   class B (whole-program, expectation: graph wins)
 #     - 3..8 product .cs across >= 2 distinct src/<Project> directories.
-#     - seed        = basename (without .cs) of the LARGEST product .cs at M.
+#     - seed        = basename (without .cs) of the largest product .cs of M that
+#                       (i)   declares a top-level type of that name at M AND at HEAD (checked in the file itself,
+#                             not by grep over the repository — a file named after a type it does not declare
+#                             is not a seed),
+#                       (ii)  occurs textually (`git grep -lw`) in <= 50 % of the key files — otherwise grep
+#                             alone answers the task and it measures nothing,
+#                       (iii) is not already the seed of an accepted B task.
+#                     Candidates are walked by size descending (ties by path); the walk continues to the
+#                     next-largest file, and a merge without such a file is rejected. Seeds are therefore
+#                     pairwise distinct across class B (asserted after the walk, not hoped — #490). Because of
+#                     (iii) the seed of a merge depends on the newest-first state of the walk: deterministic,
+#                     but not local to the merge.
 #     - key.files   = every product + test .cs of the merge EXCEPT the seed's file;
 #       key.symbols = top-level types declared in those files at M.
-#     - plausibility: the seed occurs textually (`git grep -lw`) in <= 50 % of the key files — otherwise grep
-#                     alone answers the task and it measures nothing. Rejected otherwise.
 #     - query       = "Which other files and types must change together with `<seed>` when its contract changes?"
 #
 #   seedInKey is set (never silently) when the seed equals a key symbol or a key file stem, whole-word.
@@ -96,7 +105,10 @@ emit_task() { # id class query files-json symbols-json ref rule seedInKey expect
     "$(json_str "$1")" "$(json_str "$2")" "$(json_str "$3")" "$4" "$5" "$(json_str "$6")" "$(json_str "$7")" "$8" "$(json_str "$9")"
 }
 
+declares_type() { top_level_types "$1" | grep -qx -- "$2"; }   # <blob> <name>
+
 declare -a A_TASKS=() B_TASKS=()
+declare -A TAKEN=()   # seed stem -> id of the accepted B task that owns it (rule iii)
 nA=0; nB=0; seenA=0; seenB=0; rejA=0; rejB=0
 
 while read -r M; do
@@ -135,26 +147,47 @@ while read -r M; do
     seenB=$((seenB+1))
     gone=""; for f in "${PROD[@]}" "${TEST[@]}"; do exists_at_head "$f" || gone+=" $f"; done
     if [ -n "$gone" ]; then echo "B reject $short: gone at HEAD:$gone" >&2; rejB=$((rejB+1)); continue; fi
-    seedfile=""; seedsize=-1
-    for f in "${PROD[@]}"; do s=$(git cat-file -s "$M:$f"); if [ "$s" -gt "$seedsize" ]; then seedsize=$s; seedfile=$f; fi; done
-    seed=${seedfile##*/}; seed=${seed%.cs}
-    FILES=(); for f in "${PROD[@]}" "${TEST[@]}"; do [ "$f" != "$seedfile" ] && FILES+=("$f"); done
+    # Candidate seeds: product .cs by size descending, ties by path (LC_ALL=C: byte order, locale-independent).
+    mapfile -t CAND < <(for f in "${PROD[@]}"; do printf '%s\t%s\n' "$(git cat-file -s "$M:$f")" "$f"; done | LC_ALL=C sort -k1,1nr -k2,2)
+    nc=${#CAND[@]}; k=0; seedfile=""; seed=""; hits=0; rank=0; skipped=""
+    for c in "${CAND[@]}"; do
+      k=$((k+1)); size=${c%%$'\t'*}; f=${c#*$'\t'}
+      stem=${f##*/}; stem=${stem%.cs}
+      try="B try $short rank $k/$nc $stem ($size B):"
+      if [ -n "${TAKEN[$stem]:-}" ]; then
+        echo "$try taken by ${TAKEN[$stem]}" >&2; skipped+="${skipped:+, }$stem (taken by ${TAKEN[$stem]})"; continue
+      fi
+      if ! declares_type "$M:$f" "$stem"; then
+        echo "$try not a top-level type of $f at M" >&2; skipped+="${skipped:+, }$stem (not a type)"; continue
+      fi
+      if ! declares_type "HEAD:$f" "$stem"; then
+        echo "$try not a top-level type of $f at HEAD" >&2; skipped+="${skipped:+, }$stem (not a type at HEAD)"; continue
+      fi
+      FILES=(); for g in "${PROD[@]}" "${TEST[@]}"; do [ "$g" != "$f" ] && FILES+=("$g"); done
+      h=$(grep_files_at "$M" "$stem" "${FILES[@]}" | wc -l | tr -d ' ')
+      if [ $((h * 2)) -gt "${#FILES[@]}" ]; then
+        echo "$try textually in $h/${#FILES[@]} key files (> 50 %)" >&2; skipped+="${skipped:+, }$stem (textually in $h/${#FILES[@]} key files)"; continue
+      fi
+      seedfile=$f; seed=$stem; hits=$h; rank=$k
+      break
+    done
+    if [ -z "$seedfile" ]; then echo "B reject $short: no seed candidate among $nc product .cs (${skipped})" >&2; rejB=$((rejB+1)); continue; fi
     TYPES=(); for f in "${FILES[@]}"; do mapfile -t T < <(top_level_types "$M:$f"); TYPES+=("${T[@]}"); done
     mapfile -t TYPES < <(printf '%s\n' "${TYPES[@]}" | awk 'NF && !seen[$0]++')
     if [ "${#TYPES[@]}" -eq 0 ]; then echo "B reject $short: no top-level types in key files" >&2; rejB=$((rejB+1)); continue; fi
-    hits=$(grep_files_at "$M" "$seed" "${FILES[@]}" | wc -l | tr -d ' ')
-    if [ $((hits * 2)) -gt "${#FILES[@]}" ]; then echo "B reject $short: seed $seed textually in $hits/${#FILES[@]} key files (> 50 %)" >&2; rejB=$((rejB+1)); continue; fi
-    if [ "$(grep_files_at HEAD "$seed" '*.cs' | wc -l | tr -d ' ')" -eq 0 ]; then echo "B reject $short: seed $seed gone at HEAD" >&2; rejB=$((rejB+1)); continue; fi
     flag=false; seed_in_key "$seed" "${TYPES[@]}" -- "${FILES[@]}" && flag=true
-    nB=$((nB+1)); id=$(printf 'B-%02d' "$nB")
-    rule="${#PROD[@]} product .cs across $projects src projects; key = all .cs touched by the merge, seed file ($seedfile) removed; symbols = top-level types at the commit; seed = basename of the largest product .cs; seed occurs textually in $hits of ${#FILES[@]} key files (rule: <= 50 %)"
+    nB=$((nB+1)); id=$(printf 'B-%02d' "$nB"); TAKEN[$seed]=$id
+    echo "B try $short rank $rank/$nc $seed accept → $id" >&2
+    rule="${#PROD[@]} product .cs across $projects src projects; key = all .cs touched by the merge, seed file ($seedfile) removed; symbols = top-level types at the commit; seed = largest product .cs declaring a top-level type of that name, plausible, unused — rank $rank of $nc by size${skipped:+; skipped: $skipped}; seed occurs textually in $hits of ${#FILES[@]} key files (rule: <= 50 %)"
     B_TASKS+=("$(emit_task "$id" B "Which other files and types must change together with \`$seed\` when its contract changes?" "$(json_arr "${FILES[@]}")" "$(json_arr "${TYPES[@]}")" "$M" "$rule" "$flag" graph)")
-    echo "B accept $short → $id seed=$seed files=${#FILES[@]} symbols=${#TYPES[@]} grep=$hits/${#FILES[@]} seedInKey=$flag" >&2
+    echo "B accept $short → $id seed=$seed (${seedfile%/*}) files=${#FILES[@]} symbols=${#TYPES[@]} grep=$hits/${#FILES[@]} seedInKey=$flag" >&2
   fi
 done < <(git log --first-parent --merges --format=%H "$BRANCH")
 
-echo "A: $nA accepted of $seenA single-file candidates ($rejA rejected); B: $nB accepted of $seenB multi-project candidates ($rejB rejected)" >&2
+distinct=${#TAKEN[@]}
+echo "A: $nA accepted of $seenA single-file candidates ($rejA rejected); B: $nB accepted of $seenB multi-project candidates ($rejB rejected); seeds distinct: $distinct/$nB" >&2
 [ "$nA" -eq "$PER_CLASS" ] && [ "$nB" -eq "$PER_CLASS" ] || { echo "not enough candidates" >&2; exit 1; }
+[ "$distinct" -eq "$nB" ] || { echo "class B seeds are not pairwise distinct ($distinct of $nB)" >&2; exit 1; }
 
 printf '[\n'
 first=1
