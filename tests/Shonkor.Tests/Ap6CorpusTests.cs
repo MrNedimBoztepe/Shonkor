@@ -304,7 +304,7 @@ public class Ap6CorpusTests
     [InlineData("\"src/X/Foo.cs\"", "\"C:\\\\Projects\\\\Brain\\\\src\\\\x.cs\"", "absolute projects path")]
     [InlineData("\"src/X/Foo.cs\"", "\"src/{corpus}/x.yml\"", "corpus folder name")]
     [InlineData("\"rule\": \"r\"", "\"rule\": \"item /sitecore/layout/Renderings/X\"", "Sitecore item path")]
-    [InlineData("\"rule\": \"r\"", "\"rule\": \"template dfbb0822-f08f-4e1f-a4a7-20b5cde22893\"", "GUID")]
+    [InlineData("\"rule\": \"r\"", "\"rule\": \"template 00000000-0000-4000-8000-000000000466\"", "GUID")]
     [InlineData("declare `Compute`", "declare `AcmeCorp.Compute`", "deny-listed word")]
     [InlineData("[\"Controller-03\", \"View-012\"]", "[\"Controller-03\", \"src/Feature/X/Views/Index.cshtml\"]", "class C key file")]
     [InlineData("\"symbols\": [\"Controller-03\"]", "\"symbols\": [\"FooController\"]", "class C key symbol")]
