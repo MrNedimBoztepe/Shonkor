@@ -30,6 +30,11 @@
 //                                      prompt — needs a reachable Ollama. Writes bench/answers-report.md +
 //                                      bench/answers-metrics.json; with --baseline <answers-metrics.json>,
 //                                      a >5% relative drop in any headline metric exits 2.
+//   shonkor-bench <db> --lsp-diff --lsp "<cmd>" [--solution <path>] [--seed-files a;b;c] [--load-only]
+//                                      LSP spike (#467): load the solution into a headless language server
+//                                      and diff the graph's SemanticSymbol pairs against its answers. Writes
+//                                      bench/lsp-diff.md + bench/lsp-diff.json (+ lsp-diff.log). --load-only
+//                                      measures t_init/t_ready without diffing (MuM).
 
 using System.Text;
 using System.Text.Json;
@@ -206,6 +211,25 @@ if (args.Contains("--provenance"))
     }
     Console.WriteLine($"\nHeuristic-family edges wrongly Extracted: {offenders}");
     return offenders > 0 ? 2 : 0;
+}
+
+// --lsp-diff --lsp "<cmd>" [--solution <path>] [--seed-files a;b;c] [--load-only] [--ready-timeout <s>] (#467):
+// spike — load the solution into a headless language server and diff the graph's SemanticSymbol pairs
+// against its answers. Exclusive mode: the server is a multi-minute load, so it never piggybacks on a bench
+// run, and the CI never passes the flag. Mapping code stays here in Bench; promotion is a core-cut decision.
+if (args.Contains("--lsp-diff"))
+{
+    var lspCommand = ArgValue(args, "--lsp");
+    if (lspCommand is null) { Console.Error.WriteLine("[Error] --lsp-diff needs --lsp \"<server command line>\" (e.g. the roslyn-language-server exe with --stdio)."); return 1; }
+    var readyTimeout = ArgValue(args, "--ready-timeout") is { } rt && int.TryParse(rt, out var rts) ? TimeSpan.FromSeconds(rts) : TimeSpan.FromMinutes(10);
+    var lspOptions = new LspDiffRunner.Options(
+        LspCommand: lspCommand,
+        SolutionPath: ArgValue(args, "--solution") ?? Path.GetFullPath("Shonkor.slnx"),
+        SeedFiles: ArgValue(args, "--seed-files")?.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+        LoadOnly: args.Contains("--load-only"),
+        ReadyTimeout: readyTimeout,
+        OutputDir: "bench");
+    return await LspDiffRunner.RunAsync(provider, allNodes, lspOptions, Console.Out);
 }
 
 // --check-circularity <set>: validate a retrieval golden set for CIRCULARITY (TICKET-202). For each case,
