@@ -103,6 +103,10 @@ internal static class Ap6Corpus
         }
         foreach (var dup in tasks.Where(t => t.Id is not null).GroupBy(t => t.Id).Where(g => g.Count() > 1))
             problems.Add($"duplicate id '{dup.Key}'");
+        // Two tasks of one class with the same question grade the same arm answer twice (#490).
+        foreach (var dup in tasks.Where(t => t.Class is not null && t.Query is not null)
+                     .GroupBy(t => (t.Class, t.Query)).Where(g => g.Count() > 1))
+            problems.Add($"class {dup.Key.Class}: duplicate query shared by {string.Join(", ", dup.Select(t => t.Id))}: '{dup.Key.Query}'");
 
         for (var i = 0; i < tasks.Count; i++)
             ValidateTask(tasks[i], i, problems);

@@ -117,10 +117,12 @@ public class Ap6CorpusTests
 
     // ---------- the validator, on synthetic corpora ----------
 
-    private static Ap6Task Task(string id, string cls, string query = "Which file declares the thing?",
+    /// <summary>The default query carries the id, so a synthetic corpus has no duplicate query within a class (#490).</summary>
+    private static Ap6Task Task(string id, string cls, string? query = null,
         string[]? files = null, string[]? symbols = null, string? method = null, string? @ref = null,
         string? expectation = null, bool seedInKey = false, string? corpus = null)
     {
+        query ??= $"Which file declares the thing of {id}?";
         var (defCorpus, defExpectation, defMethod) = cls switch
         {
             "A" => ("Brain", "rg", "merge-commit"),
@@ -172,6 +174,21 @@ public class Ap6CorpusTests
         var tasks = Thirty(); tasks[1] = Task("A-01", "A");
 
         Assert.Contains(Ap6Corpus.Validate(tasks), p => p.Contains("duplicate id 'A-01'"));
+    }
+
+    [Fact]
+    public void DuplicateQueriesWithinAClass_AreAProblem_AcrossClassesNot()
+    {
+        const string q = "Which other files and types must change together with `GraphIndexScanner` when its contract changes?";
+        var tasks = Thirty();
+        tasks[10] = Task("B-01", "B", q);
+        tasks[12] = Task("B-03", "B", q);
+        tasks[0] = Task("A-01", "A", q);
+
+        var problems = Ap6Corpus.Validate(tasks);
+
+        Assert.Single(problems, p => p.Contains("duplicate query"));
+        Assert.Contains(problems, p => p.Contains("class B: duplicate query shared by B-01, B-03"));
     }
 
     [Fact]
