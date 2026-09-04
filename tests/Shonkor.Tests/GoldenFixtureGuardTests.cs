@@ -20,6 +20,8 @@ public class GoldenFixtureGuardTests
     // Golden fixtures — the acute, query-verbatim case (#110).
     [InlineData("C:\\Projects\\Brain\\bench\\golden\\agent-queries.json")]
     [InlineData("bench/golden/doc-sections.json")]
+    [InlineData("C:\\Projects\\Brain\\bench\\golden\\ap6\\tasks.json")]   // the AP6 answer keys (#466) — a subfolder
+    [InlineData("bench/golden/ap6/scripts/keys-ab.sh")]
     // Dev-process prose — the diffuse tail (#133).
     [InlineData("C:\\Projects\\Brain\\tickets\\TICKET-201-groundedness-eval.md")]
     [InlineData("review/shonkor-bug-report.md")]
