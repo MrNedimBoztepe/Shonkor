@@ -41,6 +41,16 @@ internal sealed record Ap6Mapping(
 /// </summary>
 internal static class Ap6Anonymiser
 {
+    /// <summary>
+    /// The mapping kinds an answer <b>symbol</b> can name: a controller or a model class. A rendering, view or
+    /// template is a file or an item, never a type name in an answer — so its <c>name</c> must not compete with
+    /// a class name when a symbol is read back. <see cref="Ap6Preconditions.CheckTokens"/> checks key-symbol
+    /// uniqueness over exactly this set, so the precondition and the scorer agree on what a name can mean.
+    /// </summary>
+    public static readonly string[] SymbolKinds = ["controller", "model"];
+
+    public static bool IsSymbolKind(string? kind) => kind is not null && SymbolKinds.Contains(kind, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>A class-C answer translated back into tokens, with the parts that could not be.</summary>
     /// <param name="Files">Tokens of the answer's files that map to an entry path.</param>
     /// <param name="Symbols">Tokens of the answer's type names that map to exactly one entry (after path disambiguation).</param>
@@ -92,6 +102,7 @@ internal static class Ap6Anonymiser
             else unmappedFiles++;
         }
 
+        var symbolEntries = entries.Where(kv => IsSymbolKind(kv.Value.Kind)).ToList();
         var symbolTokens = new List<string>();
         int unmappedSymbols = 0, ambiguous = 0;
         foreach (var s in symbols)
@@ -102,7 +113,7 @@ internal static class Ap6Anonymiser
             var hits = new List<string>();
             foreach (var candidate in segments.Reverse().Take(2))
             {
-                hits = entries.Where(kv => string.Equals(kv.Value.Name, candidate, StringComparison.Ordinal)).Select(kv => kv.Key).ToList();
+                hits = symbolEntries.Where(kv => string.Equals(kv.Value.Name, candidate, StringComparison.Ordinal)).Select(kv => kv.Key).ToList();
                 if (hits.Count > 0) break;
             }
             if (hits.Count == 0) { unmappedSymbols++; continue; }
@@ -126,11 +137,7 @@ internal static class Ap6Anonymiser
     /// </summary>
     public static string RedactArgument(string text, Ap6Mapping mapping)
     {
-        // Tool-call inputs are raw JSON: a Windows path arrives as `C:\\Corpora\\X` and would become `C://Corpora//X`;
-        // runs of '/' collapse so the corpus root and the entry paths match. A `://` in a URL collapses too — harmless here.
-        var result = Regex.Replace(text.Replace('\\', '/'), "/{2,}", "/");
-        if (!string.IsNullOrEmpty(mapping.CorpusRoot))
-            result = Regex.Replace(result, Regex.Escape(mapping.CorpusRoot.Replace('\\', '/').TrimEnd('/')), "<corpus>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var result = string.IsNullOrEmpty(mapping.CorpusRoot) ? CollapseSlashes(text) : ReplaceRoot(text, mapping.CorpusRoot, "<corpus>");
 
         var literals = new List<(string Literal, string Token)>();
         foreach (var (token, e) in mapping.Entries ?? [])
@@ -151,6 +158,34 @@ internal static class Ap6Anonymiser
         foreach (var w in (mapping.DenyWords ?? []).Where(w => !string.IsNullOrEmpty(w)).OrderByDescending(w => w.Length))
             result = Regex.Replace(result, $@"(?<![A-Za-z0-9_]){Regex.Escape(w)}(?![A-Za-z0-9_])", "<redacted>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         return result;
+    }
+
+    /// <summary>
+    /// Redacts a class-A/B tool-call argument for the results file: every path under <paramref name="root"/>
+    /// (the arm's cwd — the Brain checkout) becomes repository-relative. The rg arm reads files by absolute
+    /// path, and an absolute path under the projects root is a fixed leak pattern of
+    /// <see cref="Ap6Corpus.FindLeaks"/> — without this no <c>results-A/B.json</c> could ever be written.
+    /// Anything absolute that is not under the root goes through <see cref="RedactPaths"/>.
+    /// </summary>
+    public static string RelativiseArgument(string text, string root) =>
+        RedactPaths(string.IsNullOrEmpty(root) ? text : ReplaceRoot(text, root, string.Empty));
+
+    /// <summary>
+    /// Tool-call inputs are raw JSON: a Windows path arrives as <c>C:\\Corpora\\X</c> and would become
+    /// <c>C://Corpora//X</c>; runs of '/' collapse so a root and the entry paths match. A <c>://</c> in a URL
+    /// collapses too — harmless here.
+    /// </summary>
+    private static string CollapseSlashes(string text) => Regex.Replace(text.Replace('\\', '/'), "/{2,}", "/");
+
+    /// <summary>
+    /// Every occurrence of <paramref name="root"/> becomes <paramref name="replacement"/>, case-insensitively (a
+    /// drive letter is written both ways). With an empty replacement the separator after the root goes too, so
+    /// what remains is the relative path.
+    /// </summary>
+    private static string ReplaceRoot(string text, string root, string replacement)
+    {
+        var pattern = Regex.Escape(CollapseSlashes(root).TrimEnd('/')) + (replacement.Length == 0 ? "/" : string.Empty);
+        return Regex.Replace(CollapseSlashes(text), pattern, replacement, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     /// <summary>

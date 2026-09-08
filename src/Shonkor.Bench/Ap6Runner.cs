@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Shonkor.Core.Services;
 using Shonkor.Infrastructure.Services;
 using Shonkor.Infrastructure.Storage;
@@ -91,13 +92,19 @@ internal static class Ap6Runner
         var needCorpus = tasks.Any(t => t.Class == "C");
         if (needCorpus && corpus is null) { console.WriteLine($"[Error] projects.json has no project named '{CorpusProjectName}' — class C needs it (or run with --class A|B)."); return 1; }
 
+        // Before anything is written: the run directory must lie outside both checkouts (class-C prompts carry customer names).
+        var outDir = ResolveOutDir(o.OutDir);
+        if (OutDirProblem(outDir, workspace, corpus?.Path) is { } outProblem) { console.WriteLine($"[Error] {outProblem} Nothing written."); return 1; }
+
         var mappingPath = o.MappingPath ?? (corpus is null ? null : Path.Combine(corpus.Path, "bench", "ap6-mapping.json"));
         Ap6Mapping? mapping = null;
         if (needCorpus)
         {
             if (mappingPath is null || !File.Exists(mappingPath))
             {
-                console.WriteLine($"[Error] class C mapping not found at '{mappingPath ?? "(none)"}' — generate it with bench/golden/ap6/scripts/keys-c.sh <corpus-root>.");
+                // The mapping lives under the corpus root: print it relative to <corpus>, the root itself stays off stdout.
+                var shownMapping = mappingPath is null ? "(none)" : Ap6Anonymiser.RedactArgument(mappingPath, new Ap6Mapping(null, corpus?.Path, null, null, null));
+                console.WriteLine($"[Error] class C mapping not found at '{shownMapping}' — generate it with bench/golden/ap6/scripts/keys-c.sh <corpus-root>.");
                 if (!o.IgnorePreconditions) return 1;
                 console.WriteLine("[dry-run] class C tasks dropped from the plan — no mapping to resolve their prompts.");
                 tasks = tasks.Where(t => t.Class != "C").ToList();
@@ -123,7 +130,6 @@ internal static class Ap6Runner
             console.WriteLine("[dry-run] --ignore-preconditions: writing the plan anyway; a real run must not pass this flag.");
         }
 
-        var outDir = Path.GetFullPath(o.OutDir);
         Directory.CreateDirectory(Path.Combine(outDir, "prompts"));
         var template = File.ReadAllText(templatePath);
         var planTasks = new List<PlanTask>();
@@ -172,6 +178,40 @@ internal static class Ap6Runner
         return 0;
     }
 
+    /// <summary>
+    /// <c>--out</c> as an absolute path. An MSYS drive path (<c>/c/Projects/x</c>, what a Git-Bash caller may
+    /// pass through) is read as <c>C:/Projects/x</c> on Windows — <see cref="Path.GetFullPath(string)"/> would
+    /// otherwise root it on the current drive and the containment check below would look at the wrong place.
+    /// </summary>
+    internal static string ResolveOutDir(string outDir)
+    {
+        if (OperatingSystem.IsWindows() && Regex.Match(outDir, @"^/([A-Za-z])(/|$)") is { Success: true } m)
+            outDir = $"{char.ToUpperInvariant(m.Groups[1].Value[0])}:/{outDir[m.Length..]}";
+        return Path.GetFullPath(outDir);
+    }
+
+    /// <summary>
+    /// Why <paramref name="outDir"/> must not be the run directory, or <c>null</c> when it may: it is the Brain
+    /// checkout or the corpus checkout, or lies inside either. Same rule as <c>run.sh</c> — this is the copy
+    /// that holds when the bench is called directly.
+    /// </summary>
+    internal static string? OutDirProblem(string outDir, string brainRoot, string? corpusRoot)
+    {
+        var full = Path.GetFullPath(outDir);
+        if (IsInside(full, brainRoot)) return $"run directory '{full}' lies inside the Brain repository ('{Path.GetFullPath(brainRoot)}').";
+        // The corpus root is a customer path: the message shows the run directory relative to <corpus>, never the root itself.
+        if (!string.IsNullOrEmpty(corpusRoot) && IsInside(full, corpusRoot))
+            return $"run directory '<corpus>/{(FilePaths.TryGetRelative(full, corpusRoot, out var rel) ? rel.Replace('\\', '/') : string.Empty)}' lies inside the corpus repository.";
+        return null;
+
+        static bool IsInside(string path, string root)
+        {
+            var r = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var p = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return FilePaths.AreEqual(p, r) || FilePaths.TryGetRelative(p, r, out _);
+        }
+    }
+
     // ---------- --ap6-tally ----------
 
     /// <summary>Σ <c>total_cost_usd</c> over every stream so far, writing each run's <c>result.json</c> (its last result event) beside it. The driver reads the one line this prints.</summary>
@@ -205,12 +245,17 @@ internal static class Ap6Runner
         var runDir = Path.GetFullPath(o.RunDir);
         var planPath = Path.Combine(runDir, PlanFile);
         if (!File.Exists(planPath)) { console.WriteLine($"[Error] '{planPath}' not found — the run directory was not produced by --ap6-plan. Nothing scored."); return 0; }
-        var plan = JsonSerializer.Deserialize<Plan>(File.ReadAllText(planPath), JsonOptions);
-        if (plan is null || !File.Exists(plan.TasksPath)) { console.WriteLine($"[Error] plan.json unreadable or its tasks file is gone ('{plan?.TasksPath}'). Nothing scored."); return 0; }
+        // Corrupt JSON anywhere in the run directory is a finding about the run, not a crash: say so and exit 0 like every other "nothing scored".
+        Plan? plan;
+        try { plan = JsonSerializer.Deserialize<Plan>(File.ReadAllText(planPath), JsonOptions); }
+        catch (JsonException ex) { console.WriteLine($"[Error] '{planPath}' is not valid JSON ({ex.Message}). Nothing scored."); return 0; }
+        if (plan is null || plan.Tasks is null || !File.Exists(plan.TasksPath)) { console.WriteLine($"[Error] plan.json unreadable or its tasks file is gone ('{plan?.TasksPath}'). Nothing scored."); return 0; }
 
         var notes = new List<string>();
         var planned = plan.Tasks.Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
-        var tasks = Ap6Corpus.Load(plan.TasksPath).Where(t => t.Id is not null && planned.Contains(t.Id)).ToList();
+        List<Ap6Task> tasks;
+        try { tasks = Ap6Corpus.Load(plan.TasksPath).Where(t => t.Id is not null && planned.Contains(t.Id)).ToList(); }
+        catch (JsonException ex) { console.WriteLine($"[Error] tasks file '{plan.TasksPath}' is not valid JSON ({ex.Message}). Nothing scored."); return 0; }
 
         Ap6Mapping? mapping = null;
         if (tasks.Any(t => t.Class == "C"))
@@ -225,12 +270,25 @@ internal static class Ap6Runner
                 notes.Add("Class C skipped: the mapping file recorded in plan.json is not present — its answers cannot be read back into tokens.");
                 tasks = tasks.Where(t => t.Class != "C").ToList();
             }
-            else mapping = Ap6Mapping.Load(plan.MappingPath);
+            else
+            {
+                try { mapping = Ap6Mapping.Load(plan.MappingPath); }
+                catch (JsonException ex)
+                {
+                    notes.Add($"Class C skipped: the mapping file is not valid JSON ({ex.Message}) — its answers cannot be read back into tokens.");
+                    tasks = tasks.Where(t => t.Class != "C").ToList();
+                }
+            }
         }
 
         var envPath = Path.Combine(runDir, EnvFile);
-        var env = File.Exists(envPath) ? Ap6Env.Parse(File.ReadAllText(envPath)) : Ap6Env.Empty;
+        var env = Ap6Env.Empty;
         if (!File.Exists(envPath)) notes.Add("env.json missing from the run directory — versions, limits and plugin verify output are not recorded.");
+        else
+        {
+            try { env = Ap6Env.Parse(File.ReadAllText(envPath)); }
+            catch (JsonException ex) { notes.Add($"env.json is not valid JSON ({ex.Message}) — versions, limits and plugin verify output are not recorded."); }
+        }
         env = env with
         {
             PluginVerifyOutput = env.PluginVerifyOutput is null ? null : mapping is null ? Ap6Anonymiser.RedactPaths(env.PluginVerifyOutput) : Ap6Anonymiser.RedactArgument(env.PluginVerifyOutput, mapping),
@@ -254,9 +312,12 @@ internal static class Ap6Runner
                 var verdict = Ap6Scorer.Score(task, arm, run, record, o.Mode, cwd, mapping);
                 verdicts.Add(verdict);
                 if (arm == Ap6Scorer.McpArm) foreach (var t in record.InitTools.Where(t => t.StartsWith(Ap6Scorer.McpToolPrefix, StringComparison.Ordinal))) mcpTools.Add(t);
+                // Every class's inputs are redacted before they can reach a results file: class C through the mapping, A/B
+                // by making paths under the arm's cwd repository-relative (the rg arm reads by absolute path, which is a
+                // FindLeaks pattern — the results file would otherwise never be written).
                 toolCalls[(task.Id!, arm, run)] = task.Class == "C" && mapping is not null
                     ? record.ToolCalls.Select(c => new Ap6ToolCall(c.Name, Ap6Anonymiser.RedactArgument(c.Input, mapping))).ToList()
-                    : record.ToolCalls;
+                    : record.ToolCalls.Select(c => new Ap6ToolCall(c.Name, Ap6Anonymiser.RelativiseArgument(c.Input, cwd))).ToList();
                 File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(new { record, verdict }, JsonOptions));
             }
         }
@@ -272,6 +333,9 @@ internal static class Ap6Runner
                 graphs.Add(await GraphStateAsync(CorpusProjectName, corpusProvider).ConfigureAwait(false));
             }
         }
+        // The graph scored against is read now; the run happened at env.json's revisions. A difference means the
+        // numbers describe one graph and the runs another — said in the report, not silently averaged away.
+        foreach (var drift in GraphDriftNotes(graphs, env)) notes.Add(drift);
 
         var data = new Ap6ReportData
         {
@@ -314,6 +378,7 @@ internal static class Ap6Runner
                 console.WriteLine($"[Error] results-{cls}.json NOT written — {leaks.Count} leak pattern(s) matched: {string.Join("; ", leaks.Take(5))}");
                 continue;
             }
+            Directory.CreateDirectory(Path.GetDirectoryName(resultsPath)!);
             File.WriteAllText(resultsPath, json, new UTF8Encoding(false));
             console.WriteLine($"Wrote {resultsPath}");
         }
@@ -328,6 +393,18 @@ internal static class Ap6Runner
         }
         // A lens, not a gate: whatever the numbers say, reading them is the point.
         return 0;
+    }
+
+    /// <summary>One note per graph whose <c>indexedRevision</c> at scoring time is not the revision <c>env.json</c> recorded for the run.</summary>
+    internal static IEnumerable<string> GraphDriftNotes(IReadOnlyList<Ap6GraphState> graphs, Ap6Env env)
+    {
+        foreach (var g in graphs)
+        {
+            var (expected, source) = g.Name == CorpusProjectName ? (env.CorpusRevision, "env.corpusRevision") : (env.BrainHead, "env.brainHead");
+            if (string.IsNullOrEmpty(expected) || g.IndexedRevision is null) continue;
+            if (!expected.StartsWith(g.IndexedRevision, StringComparison.OrdinalIgnoreCase) && !g.IndexedRevision.StartsWith(expected, StringComparison.OrdinalIgnoreCase))
+                yield return $"Graph drift: {g.Name} graph scored at indexedRevision {Short(g.IndexedRevision)}, but the run was recorded at {source} {Short(expected)} — the graph changed between run and score; the graph-state table describes the scoring-time graph.";
+        }
     }
 
     private static async Task<Ap6GraphState> GraphStateAsync(string name, SqliteGraphStorageProvider provider)

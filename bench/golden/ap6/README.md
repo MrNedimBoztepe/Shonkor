@@ -49,6 +49,9 @@ clean working trees for the relevant file kinds, and that every class-C token ha
 - [ ] `--smoke` first (3 tasks × 2 arms × 1 run); read *Arm violations* in the report before the full set.
 - [ ] Never pass `--ignore-preconditions` to `--ap6-plan` for a run that is meant to be scored — the flag exists
       for `--dry-run` on a machine whose graphs are stale.
+- [ ] **Before committing a scored run**: read `git diff bench/golden/ap6/results-C.json` and
+      `bench/ap6-part1-report.md` by hand, tool-call inputs included. `Ap6Corpus.FindLeaks` is a net, not a
+      proof — a customer name in a shape it does not know passes it, and git history cannot be un-published.
 
 ## Running
 

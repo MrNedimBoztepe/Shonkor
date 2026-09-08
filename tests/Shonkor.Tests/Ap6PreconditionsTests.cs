@@ -145,7 +145,7 @@ public class Ap6PreconditionsTests
         var p = Assert.Single(problems);
         Assert.Contains("Controller-01", p);
         Assert.Contains("Controller-02", p);
-        Assert.Contains("ambiguous within its kind", p);
+        Assert.Contains("ambiguous among controller/model entries", p);
     }
 
     [Fact]
@@ -160,13 +160,26 @@ public class Ap6PreconditionsTests
     }
 
     [Fact]
-    public void ClassC_TheSameNameInAnotherKind_IsNotAmbiguous()
+    public void ClassC_AKeySymbolSharingItsNameWithATemplateOrView_IsNotAmbiguous()
     {
-        // A view and a model may share a name — the kind keeps them apart.
+        // A template item and a model class may share a name: the scorer reads answer symbols back over
+        // controller/model entries only (Ap6Anonymiser.SymbolKinds), so the precondition asks the same question.
         var mapping = Ap6Fixtures.Mapping();
+        mapping.Entries!["Template-01"] = new Ap6MappingEntry("template", "serialization/Templates/HeroModel.yml", "HeroModel", null);
         mapping.Entries!["Model-02"] = new Ap6MappingEntry("model", "src/Feature/Hero/Models/Index.cs", "Index.cshtml", null);
 
-        Assert.Empty(Ap6Preconditions.CheckTokens(C("View-01"), mapping));
+        Assert.Empty(Ap6Preconditions.CheckTokens(C("Model-01"), mapping));
+        Assert.Empty(Ap6Preconditions.CheckTokens(C("Model-02"), mapping));
+    }
+
+    [Fact]
+    public void ClassC_AKeySymbolOfANonSymbolKind_IsAProblem()
+    {
+        // A view token as a key symbol could never be matched by an answer symbol — better to hear it before the run.
+        var p = Assert.Single(Ap6Preconditions.CheckTokens(C("View-01"), Ap6Fixtures.Mapping()));
+
+        Assert.Contains("'View-01' is a view entry", p);
+        Assert.Contains("could never match", p);
     }
 
     [Fact]

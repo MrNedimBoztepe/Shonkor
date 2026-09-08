@@ -80,10 +80,12 @@ internal static class Ap6Preconditions
 
     /// <summary>
     /// Every token a class-C task uses (key files, key symbols, tokens in the query) must have an entry with a
-    /// name. A token used as a key <b>symbol</b> must moreover have a <c>name</c> that is unique within its
-    /// <c>kind</c> — an answer symbol is read back by name (<see cref="Ap6Anonymiser.ToTokens"/>), so a shared
-    /// name could not tell which entry the arm meant (#505). Key files are read back by path, which is unique by
-    /// construction; views sharing <c>Index.cshtml</c> are therefore no problem.
+    /// name. A token used as a key <b>symbol</b> must moreover be of a symbol kind
+    /// (<see cref="Ap6Anonymiser.SymbolKinds"/>) and have a <c>name</c> that is unique among the entries of
+    /// those kinds — an answer symbol is read back by name over exactly that set
+    /// (<see cref="Ap6Anonymiser.ToTokens"/>), so a shared name could not tell which entry the arm meant (#505).
+    /// A view or template with the same name is not a candidate there and therefore not a problem here. Key
+    /// files are read back by path, which is unique by construction; views sharing <c>Index.cshtml</c> are fine.
     /// </summary>
     public static IReadOnlyList<string> CheckTokens(IReadOnlyList<Ap6Task> classC, Ap6Mapping mapping)
     {
@@ -103,10 +105,15 @@ internal static class Ap6Preconditions
                 }
                 if (string.IsNullOrEmpty(e.Name)) problems.Add($"{t.Id}: token '{token}' has no name in the mapping");
                 if (!symbols.Contains(token, StringComparer.Ordinal) || !checkedForAmbiguity.Add(token)) continue;
-                var sameName = entries.Where(kv => kv.Key != token && kv.Value.Kind == e.Kind && string.Equals(kv.Value.Name, e.Name, StringComparison.Ordinal))
+                if (!Ap6Anonymiser.IsSymbolKind(e.Kind))
+                {
+                    problems.Add($"{t.Id}: key symbol '{token}' is a {e.Kind ?? "(no kind)"} entry — an answer symbol is read back over {string.Join("/", Ap6Anonymiser.SymbolKinds)} entries only, so it could never match");
+                    continue;
+                }
+                var sameName = entries.Where(kv => kv.Key != token && Ap6Anonymiser.IsSymbolKind(kv.Value.Kind) && string.Equals(kv.Value.Name, e.Name, StringComparison.Ordinal))
                     .Select(kv => kv.Key).ToList();
                 if (sameName.Count > 0)
-                    problems.Add($"{t.Id}: key symbol '{token}' ({e.Kind}) shares its name with {Sample(sameName)} — ambiguous within its kind (#505)");
+                    problems.Add($"{t.Id}: key symbol '{token}' ({e.Kind}) shares its name with {Sample(sameName)} — ambiguous among {string.Join("/", Ap6Anonymiser.SymbolKinds)} entries (#505)");
             }
         }
         return problems;

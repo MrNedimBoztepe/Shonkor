@@ -83,6 +83,21 @@ public class Ap6AnonymiserTests
     }
 
     [Fact]
+    public void ToTokens_ATemplateSharingAModelsName_DoesNotMakeTheModelAmbiguous()
+    {
+        // Precondition and scorer agree on what a name can mean (#505 follow-up): only controller/model entries
+        // are candidates for an answer symbol, so a same-named template item is not a second hit.
+        var mapping = Ap6Fixtures.Mapping();
+        mapping.Entries!["Template-01"] = new Ap6MappingEntry("template", "serialization/Templates/HeroModel.yml", "HeroModel", null);
+
+        var t = Ap6Anonymiser.ToTokens([], ["HeroModel"], mapping);
+
+        Assert.Equal(["Model-01"], t.Symbols);
+        Assert.Equal(0, t.AmbiguousSymbols);
+        Assert.Equal(0, t.UnmappedSymbols);
+    }
+
+    [Fact]
     public void ToTokens_ASharedSimpleName_IsAmbiguousWithoutAFile_AndResolvedByOne()
     {
         var alone = Ap6Anonymiser.ToTokens([], ["HeroController"], Mapping);
@@ -132,6 +147,26 @@ public class Ap6AnonymiserTests
         var redacted = Ap6Anonymiser.RedactArgument("Acme.Feature.Nav.NavController and NavController", Mapping);
 
         Assert.Equal("Controller-03 and Controller-03", redacted);
+    }
+
+    [Fact]
+    public void RelativiseArgument_MakesPathsUnderTheRootRelative_AndRedactsTheRest()
+    {
+        // The rg arm's Read input as it sits in stream.jsonl: JSON-escaped backslashes, drive letter in any case.
+        const string input = @"{""file_path"":""C:\\Projects\\Brain\\src\\X.cs"",""other"":""c:/projects/brain/docs/adr/1.md"",""stray"":""C:\\Projects\\Other\\y.cs""}";
+
+        var result = Ap6Anonymiser.RelativiseArgument(input, @"C:\Projects\Brain");
+
+        Assert.Contains(@"""file_path"":""src/X.cs""", result);
+        Assert.Contains(@"""other"":""docs/adr/1.md""", result);
+        Assert.Contains(@"""stray"":""<abs-path>""", result);
+        Assert.Empty(Ap6Corpus.FindLeaks(result, null));
+    }
+
+    [Fact]
+    public void RelativiseArgument_WithoutARoot_StillRedactsProjectPaths()
+    {
+        Assert.Equal(@"{""p"":""<abs-path>""}", Ap6Anonymiser.RelativiseArgument(@"{""p"":""C:\\Projects\\Brain\\src\\X.cs""}", string.Empty));
     }
 
     [Fact]

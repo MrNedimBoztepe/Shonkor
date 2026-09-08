@@ -72,9 +72,17 @@ RUN_DIR="${RUN_DIR//\\//}"
 [ "$SMOKE" -eq 1 ] && RUNS=1
 SMOKE_IDS=" A-01 B-01 C1-01 "
 
-# A run directory inside either repository would put customer names under version control's nose.
-case "$RUN_DIR" in "$BRAIN"/*) echo "run dir must be outside the Brain repository: $RUN_DIR" >&2; exit 2 ;; esac
+# A run directory inside either repository would put customer names under version control's nose. The path is
+# canonicalised first (a relative path, an MSYS /c/... form or a differently-cased drive letter would otherwise
+# slip past a literal prefix compare); the corpus root is checked the same way once plan.env names it.
 mkdir -p "$RUN_DIR"
+RUN_DIR="$(cd "$RUN_DIR" && (pwd -W 2>/dev/null || pwd))"; RUN_DIR="${RUN_DIR//\\//}"
+outside_repo() { # <dir> <root> <label> — exit 2 when <dir> is <root> or lies inside it (case-insensitive: Windows paths)
+  local dir="$1" root="$2" label="$3" hit=0
+  shopt -s nocasematch; case "$dir" in "$root"|"$root"/*) hit=1 ;; esac; shopt -u nocasematch
+  [ "$hit" -eq 0 ] || { rmdir "$dir" 2>/dev/null || true; echo "run dir must be outside the $label repository: $dir" >&2; exit 2; }
+}
+outside_repo "$RUN_DIR" "$BRAIN" "Brain"
 
 # ---------- helpers ----------
 FAILED=0
@@ -117,6 +125,8 @@ PLAN_ARGS=(--ap6-plan "$TASKS" --workspace "$BRAIN" --out "$RUN_DIR")
 # A dry run still wants the command lines on a machine whose graphs are stale: the plan prints the failures
 # and writes the files anyway. A real run never passes this flag.
 [ "$DRY" -eq 1 ] && PLAN_ARGS+=(--ignore-preconditions)
+# A plan that fails must not leave last time's plan.* behind for step 3 to pick up.
+rm -f "$RUN_DIR/plan.tsv" "$RUN_DIR/plan.env" "$RUN_DIR/plan.json"
 if [ -x "$BENCH" ]; then
   if ! "$BENCH" "${PLAN_ARGS[@]}"; then gate_fail "--ap6-plan reported precondition failures (above)"; fi
 else
@@ -127,6 +137,7 @@ if [ -f "$RUN_DIR/plan.env" ]; then
   # KEY=VALUE lines written by --ap6-plan; values are paths/names without quotes.
   while IFS='=' read -r k v; do case "$k" in BRAIN_PROJECT|BRAIN_DB|CORPUS_ROOT|CORPUS_PROJECT|CORPUS_DB|CORPUS_REVISION) printf -v "$k" '%s' "$v" ;; esac; done < "$RUN_DIR/plan.env"
 fi
+[ -z "$CORPUS_ROOT" ] || outside_repo "$RUN_DIR" "${CORPUS_ROOT%/}" "corpus"
 CORPUS_HEAD="$( [ -n "$CORPUS_ROOT" ] && git -C "$CORPUS_ROOT" rev-parse HEAD 2>/dev/null || echo "")"
 
 # ---------- MCP configs into the run dir (absolute forward-slash paths; the templates hold placeholders only) ----------
@@ -190,7 +201,8 @@ while IFS=$'\t' read -r id cls corpus prompt; do
            --tools "$tools" --allowedTools "$allowed" --mcp-config "$cfg" --strict-mcp-config
            --max-turns "$MAX_TURNS" --max-budget-usd "$MAX_USD" --no-session-persistence)
       if [ "$DRY" -eq 1 ]; then
-        printf '\n[DRY-RUN] %s/%s/%s  (cwd %s)\n  ' "$id" "$arm" "$n" "$cwd"
+        # The corpus root is a customer path: it goes into the command, never onto stdout.
+        printf '\n[DRY-RUN] %s/%s/%s  (cwd %s)\n  ' "$id" "$arm" "$n" "$([ "$cls" = "C" ] && echo "<corpus>" || echo "$cwd")"
         printf '%q ' "${cmd[@]}"; printf -- "--json-schema \"\$(cat %q)\" " "$SCHEMA"
         printf '< %q > %q 2> %q\n' "$RUN_DIR/$prompt" "$dir/stream.jsonl" "$dir/stderr.log"
       elif [ -s "$dir/stream.jsonl" ]; then
@@ -213,5 +225,8 @@ done < "$RUN_DIR/plan.tsv"
 # ---------- 4. score ----------
 SCORE=("$BENCH" "$BRAIN_DB" --ap6 "$RUN_DIR")
 [ -n "$CORPUS_DB" ] && SCORE+=(--db-c "$CORPUS_DB")
-if [ "$DRY" -eq 1 ]; then printf '\n[DRY-RUN] score: '; printf '%q ' "${SCORE[@]}"; echo; exit 0; fi
+if [ "$DRY" -eq 1 ]; then
+  # Printed with the corpus database path masked — it lies under the corpus root.
+  printf '\n[DRY-RUN] score: '; for a in "${SCORE[@]}"; do [ -n "$CORPUS_ROOT" ] && a="${a//${CORPUS_ROOT%/}/<corpus>}"; printf '%q ' "$a"; done; echo; exit 0
+fi
 "${SCORE[@]}"
