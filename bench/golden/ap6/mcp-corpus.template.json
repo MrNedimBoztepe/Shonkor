@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "shonkor": {
+      "type": "stdio",
+      "command": "__SHONKOR_EXE__",
+      "args": ["mcp"],
+      "env": { "SHONKOR_WORKSPACE": "__BRAIN_ROOT__", "SHONKOR_PROJECT": "__CORPUS_PROJECT__" }
+    }
+  }
+}
