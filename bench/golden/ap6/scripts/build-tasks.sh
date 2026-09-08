@@ -15,7 +15,7 @@ out="$here/../tasks.json"
 walk_ref=de44654380032c1766d089d859c7e3c86ac79a74
 ab=$(bash "$here/keys-ab.sh" "$walk_ref" 10)
 if [ $# -ge 1 ]; then
-  c=$(bash "$here/keys-c.sh" "$1" 4 3 3)
+  c=$(bash "$here/keys-c.sh" "$1" 5 0 5)
 else
   # The C block is the tail of the committed file from the first class C task to the closing bracket.
   # `|| true`: under `set -o pipefail` a grep without a hit would end the script silently (exit 1)
