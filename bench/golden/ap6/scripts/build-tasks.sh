@@ -10,8 +10,11 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 out="$here/../tasks.json"
-# corpus keyed at develop before #488 (de44654); the walk is pinned so that later merges cannot shift the
-# A/B rows — bump deliberately, with a corpus re-baseline.
+# Pin of the merge walk (develop before #488, de44654): keys-ab.sh visits the merges reachable from this ref,
+# so later merges into develop cannot shift the A/B rows. It does NOT freeze the HEAD-side checks
+# (exists_at_head, declares_type HEAD:) — those read the working checkout, so a rename/delete of a key
+# file or type at HEAD can still reject a row and shift the ones after it. Bump deliberately, with a
+# corpus re-baseline (README "Re-baseline").
 walk_ref=de44654380032c1766d089d859c7e3c86ac79a74
 ab=$(bash "$here/keys-ab.sh" "$walk_ref" 10)
 if [ $# -ge 1 ]; then
