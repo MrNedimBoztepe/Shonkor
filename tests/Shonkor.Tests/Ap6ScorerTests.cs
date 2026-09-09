@@ -33,11 +33,20 @@ public class Ap6ScorerTests
     [InlineData("@/src/A/B.cs::Ns.Type::Member", "src/A/B.cs")]
     [InlineData("src/A/B.cs:12", "src/A/B.cs")]
     [InlineData("src/A/B.cs:12-40", "src/A/B.cs")]
-    [InlineData("/src/A/B.cs", "src/A/B.cs")]
     [InlineData("  src/A/B.cs  ", "src/A/B.cs")]
     public void NormalizePath_StripsDecorationsAndUsesForwardSlashes(string raw, string expected)
     {
         Assert.Equal(expected, Ap6Scorer.NormalizePath(raw, Cwd));
+    }
+
+    [Fact]
+    public void NormalizePath_RootRelativeSlash_IsAnMsysArtifactOnWindows_AndAnAbsolutePathOnPosix()
+    {
+        // The same string means two different things: on Windows "/src/A/B.cs" cannot be a real absolute file
+        // path, so it is read as repository-relative; on POSIX it is a genuine absolute path outside cwd and
+        // must not be silently turned into a relative one (that is how the Linux leg first caught this).
+        var expected = OperatingSystem.IsWindows() ? "src/A/B.cs" : "/src/A/B.cs";
+        Assert.Equal(expected, Ap6Scorer.NormalizePath("/src/A/B.cs", Cwd));
     }
 
     [Fact]
