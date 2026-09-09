@@ -122,8 +122,10 @@ internal static class Ap6Scorer
         {
             if (FilePaths.TryGetRelative(p, cwd, out var rel)) p = rel.Replace('\\', '/');
         }
-        else if (p.StartsWith('/'))
+        else if (p.StartsWith('/') && OperatingSystem.IsWindows())
         {
+            // A root-relative "/src/X.cs" only occurs on Windows (MSYS-style answer); on POSIX a leading
+            // slash is a real absolute path outside the working directory and must stay untouched.
             p = p.TrimStart('/');
         }
         while (p.StartsWith("./", StringComparison.Ordinal)) p = p[2..];
