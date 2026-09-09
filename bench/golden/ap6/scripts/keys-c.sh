@@ -48,6 +48,10 @@
 #     C1 rendering → controller → view: controller resolvable, exactly one view that resolves.
 #        plausibility (graph-only): the rendering item name, verbatim and with spaces removed, does not occur
 #        in the controller .cs (case-insensitive) — grep on the seed cannot reach the key.
+#        Since #502 the same test is applied to the view .cshtml (the second half of the key), and the chain
+#        is also rejected when the view basename (without .cshtml, case-insensitive) equals the rendering
+#        name in either form — Sitecore convention often names the view after the rendering, so a filename
+#        search on the seed would reach half the key. Both are recorded as yes/no flags in the rule text.
 #        distinct keys: a controller + view pair that is already the key of an earlier C1 task is skipped.
 #        key.files = [Controller-nn, View-nn]; key.symbols = [Controller-nn].
 #     C2 controller → renderings (ledger only, no tasks — see above): controller resolvable, named by >= 2
@@ -196,8 +200,12 @@ emit() { # id query files-json symbols-json rule
 use() { local k; for k in "$@"; do USED[$k]=1; done; }
 
 # C1
-n=0; seen=0; rej=0; declare -A USED_C1_KEY
+n=0; seen=0; rej=0; rej_view=0; rej_base=0; declare -A USED_C1_KEY
 c1_reject() { echo "C1 reject ${R_TOKEN[$1]}: $2" >&2; rej=$((rej+1)); }
+view_basename_is() { # <item name> <view path>: 0 when the .cshtml basename equals the name (verbatim or without spaces), case-insensitively
+  local b=${2##*/}; b=$(lower "${b%.cshtml}")
+  [ "$b" = "$(lower "$1")" ] || [ "$b" = "$(lower "${1// /}")" ]
+}
 for p in "${R_PATHS[@]}"; do
   [ "$n" -ge "$N1" ] && break
   full=${R_CTRL[$p]%%,*}; full=${full// /}; simple=${full##*.}
@@ -209,15 +217,19 @@ for p in "${R_PATHS[@]}"; do
   vp=$(resolve_view "${views[0]}"); [ -n "$vp" ] || { c1_reject "$p" "view does not resolve to exactly one .cshtml"; continue; }
   [ -n "${USED_C1_KEY[$cp::$vp]:-}" ] && { c1_reject "$p" "controller + view already the key of an earlier C1 task"; continue; }
   name_in_file "${R_NAME[$p]}" "$cp" && { c1_reject "$p" "rendering name occurs in the controller .cs"; continue; }
+  # #502: the view is the other half of the key — the same test there, plus the view's own file name.
+  name_in_file "${R_NAME[$p]}" "$vp" && { c1_reject "$p" "rendering name occurs in the view .cshtml"; rej_view=$((rej_view+1)); continue; }
+  view_basename_is "${R_NAME[$p]}" "$vp" && { c1_reject "$p" "view basename equals the rendering name"; rej_base=$((rej_base+1)); continue; }
   USED_C1_KEY[$cp::$vp]=1
   n=$((n+1))
   emit "$(printf 'C1-%02d' "$n")" "Which C# class and which Razor view render \`${R_TOKEN[$p]}\`?" \
     "$(json_arr "${C_TOKEN[$simple]}" "${V_TOKEN[$vp]}")" "$(json_arr "${C_TOKEN[$simple]}")" \
-    "rendering item → Controller field type → its single .cs → its single View(\"~/Views/…\") → .cshtml; rendering item name (verbatim and without spaces) absent from the controller .cs: yes"
+    "rendering item → Controller field type → its single .cs → its single View(\"~/Views/…\") → .cshtml; rendering item name (verbatim and without spaces) absent from the controller .cs: yes; rendering item name absent from the view .cshtml: yes; view basename differs from rendering name: yes"
   use "${R_TOKEN[$p]}" "${C_TOKEN[$simple]}" "${V_TOKEN[$vp]}"
   echo "C1 accept ${R_TOKEN[$p]} → ${C_TOKEN[$simple]} + ${V_TOKEN[$vp]}" >&2
 done
 echo "C1: $n accepted of $seen renderings walked ($rej rejected)" >&2
+echo "C1 view rule (#502): rejected because the rendering name occurs in the view .cshtml: $rej_view, because the view basename equals the rendering name: $rej_base" >&2
 c1=$n
 
 # C2 — ledger only (#491): no task is emitted. A controller over-selects when more tracked .yml mention its
