@@ -35,6 +35,18 @@
 //                                      and diff the graph's SemanticSymbol pairs against its answers. Writes
 //                                      bench/lsp-diff.md + bench/lsp-diff.json (+ lsp-diff.log). --load-only
 //                                      measures t_init/t_ready without diffing (MuM).
+//   shonkor-bench --ap6-plan <tasks.json> --workspace <brain-root> --out <run-dir> [--mapping <f>] [--class A|B|C] [--ignore-preconditions]
+//                                      AP6 two-arm harness (#473), step 1: check the preconditions (revisions,
+//                                      dirty trees, class-C mapping) and write plan.tsv/plan.env/plan.json +
+//                                      the resolved prompts into <run-dir>. Needs no database argument (the
+//                                      graphs are found through projects.json). Exits 1 when a precondition fails.
+//   shonkor-bench --ap6-tally <run-dir>
+//                                      Σ total_cost_usd over the streams recorded so far (+ result.json per run);
+//                                      run.sh reads it to enforce the run-set cost cap.
+//   shonkor-bench <brain.db> --ap6 <run-dir> [--db-c <corpus.db>] [--ap6-match recall|exact]
+//                                      AP6 step 3: score every stream in <run-dir> against tasks.json, write
+//                                      bench/ap6-part1-report.md + bench/golden/ap6/results-<class>.json.
+//                                      A LENS — always exits 0. Without --db-c, class C is skipped with a note.
 
 using System.Text;
 using System.Text.Json;
@@ -50,6 +62,26 @@ using Shonkor.Infrastructure.Storage;
 var dbPath = args.FirstOrDefault(a => !a.StartsWith("--"))
              ?? Environment.GetEnvironmentVariable("SHONKOR_BENCH_DB")
              ?? "shonkor.db";
+
+// --ap6-plan / --ap6-tally (#473): before the database gate — the plan resolves the graphs by name through
+// projects.json and the tally only reads streams; neither has a <db> argument to give.
+if (ArgValue(args, "--ap6-plan") is { } ap6Tasks)
+{
+    var outDir = ArgValue(args, "--out");
+    if (outDir is null) { Console.Error.WriteLine("[Error] --ap6-plan needs --out <run-dir> (outside both repositories)."); return 2; }
+    var planOptions = new Ap6Runner.PlanOptions(
+        TasksPath: ap6Tasks,
+        Workspace: ArgValue(args, "--workspace") ?? Directory.GetCurrentDirectory(),
+        OutDir: outDir,
+        MappingPath: ArgValue(args, "--mapping"),
+        ClassFilter: ArgValue(args, "--class"),
+        IgnorePreconditions: args.Contains("--ignore-preconditions"));
+    return await Ap6Runner.PlanAsync(planOptions, Console.Out);
+}
+if (ArgValue(args, "--ap6-tally") is { } ap6TallyDir)
+{
+    return Ap6Runner.Tally(ap6TallyDir, Console.Out);
+}
 
 if (!File.Exists(dbPath))
 {
@@ -211,6 +243,18 @@ if (args.Contains("--provenance"))
     }
     Console.WriteLine($"\nHeuristic-family edges wrongly Extracted: {offenders}");
     return offenders > 0 ? 2 : 0;
+}
+
+// --ap6 <run-dir> [--db-c <corpus.db>] [--ap6-match recall|exact] (#473): score a recorded two-arm run.
+// <db> is the Brain graph (class A/B); the corpus graph comes via --db-c because it lives in another
+// workspace. Exclusive mode and a lens: it always exits 0 — the report is what the gate reads.
+if (ArgValue(args, "--ap6") is { } ap6RunDir)
+{
+    var matchArg = ArgValue(args, "--ap6-match");
+    Ap6MatchMode matchMode;
+    if (matchArg is null) matchMode = Ap6Scorer.DefaultMatchMode;
+    else if (!Enum.TryParse(matchArg, ignoreCase: true, out matchMode)) { Console.Error.WriteLine($"[Error] --ap6-match must be recall or exact, was '{matchArg}'."); return 2; }
+    return await Ap6Runner.ScoreAsync(provider, new Ap6Runner.ScoreOptions(ap6RunDir, ArgValue(args, "--db-c"), matchMode), Console.Out);
 }
 
 // --lsp-diff --lsp "<cmd>" [--solution <path>] [--seed-files a;b;c] [--load-only] [--ready-timeout <s>] (#467):

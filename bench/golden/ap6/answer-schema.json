@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "files": { "type": "array", "items": { "type": "string" } },
+    "symbols": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["schemaVersion", "files", "symbols"],
+  "additionalProperties": false
+}

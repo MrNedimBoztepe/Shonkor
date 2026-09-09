@@ -1,0 +1,3 @@
+{query}
+
+Answer only via the structured output. files: repository-relative paths with '/' from the repository root (your working directory). symbols: type names as `Type` or `Type.Member`, without namespace. Do not modify any file.
