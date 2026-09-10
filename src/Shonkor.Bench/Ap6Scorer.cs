@@ -47,16 +47,31 @@ internal sealed class Ap6RunVerdict
     public int UnmappedFiles { get; init; }
     public int UnmappedSymbols { get; init; }
 
+    /// <summary>Research steps only: the <see cref="Ap6Scorer.AnswerTool"/> emission is not one and is not counted, in either arm (#512).</summary>
     public int ToolCalls { get; init; }
     public long TokensApprox { get; init; }
     public long UsageExact { get; init; }
     public double CostUsd { get; init; }
     public long DurationMs { get; init; }
     public int Turns { get; init; }
+
+    /// <summary>Non-rg Bash commands that ran — any of them is an <see cref="ArmViolation"/> (#513).</summary>
     public int BashNonRg { get; init; }
+
+    /// <summary>Non-rg Bash commands the hook refused — reported as evidence that it refused, never counted against the run (#513).</summary>
+    public int BashNonRgDenied { get; init; }
     public int McpOverflow { get; init; }
     public int PermissionDenials { get; init; }
     public bool IsError { get; init; }
+
+    /// <summary>
+    /// Class C only: how many strings of this row the anonymiser replaced because they were not a token, a
+    /// placeholder or allow-listed vocabulary (#511). Filled in two places — the scorer for the texts it
+    /// produces (<see cref="NotRunReason"/>, <see cref="ArmViolation"/>), the runner for the tool inputs it
+    /// redacts — so it is settable, unlike the rest of the row. A high number means the row is hard to read;
+    /// a zero on a class-C row that did real work is the number to be suspicious of.
+    /// </summary>
+    public int RedactedStrings { get; set; }
 
     /// <summary>The answer as compared: normalised paths and symbols (class A/B) or tokens (class C). Never raw customer text.</summary>
     public List<string> AnswerFiles { get; init; } = [];
@@ -96,9 +111,20 @@ internal static class Ap6Scorer
     public static readonly string[] RgArmTools = ["Bash", "Read"];
 
     /// <summary>
-    /// Tools an arm's <c>init.tools</c> may list besides its own without being a violation — empty until a
-    /// smoke run shows Claude Code adding a harness-neutral tool (a structured-output helper, say). Anything
-    /// that reads files or the graph never belongs here.
+    /// The answer channel, not a tool either arm chose: Claude Code registers it because the driver passes
+    /// <c>--json-schema</c> (#512). It is named in both arms' <c>init.tools</c> and must not be an
+    /// <see cref="ArmViolation"/> — the harness put it there itself. It is deliberately <b>not</b> in
+    /// <see cref="RgArmTools"/> (which is what the rg arm may <i>research</i> with) and not in
+    /// <see cref="ToleratedTools"/> (a collecting bucket would be the very softening #512 forbids);
+    /// it is excluded by name in each arm's filter, once, so nothing else rides in with it.
+    /// <see cref="Ap6RunReader"/> keeps its emission out of <see cref="Ap6RunRecord.ToolCalls"/>.
+    /// </summary>
+    public const string AnswerTool = "StructuredOutput";
+
+    /// <summary>
+    /// Tools an arm's <c>init.tools</c> may list besides its own without being a violation — empty, and it
+    /// stays empty: the one tool a smoke run turned up (<see cref="AnswerTool"/>) is the answer channel and
+    /// is excluded by name, not by a general tolerance. Anything that reads files or the graph never belongs here.
     /// </summary>
     public static readonly string[] ToleratedTools = [];
 
@@ -181,7 +207,15 @@ internal static class Ap6Scorer
 
     // ---------- the arm ----------
 
-    /// <summary>Why the run is not the arm it was started as, or <c>null</c>. Read from <c>system/init</c>, never from the flags we passed.</summary>
+    /// <summary>
+    /// Why the run is not the arm it was started as, or <c>null</c>. Two levels, both read from the stream and
+    /// never from the flags we passed: what was <b>offered</b> (<c>system/init</c>) and what was <b>done</b>
+    /// (the tool calls the arm actually got executed). Offering alone is not enough — #513 measured an rg arm
+    /// that ran <c>grep</c> because <c>--allowedTools</c> pre-approves and denies nothing, so a run that reached
+    /// outside its arm is voided here even when <c>init.tools</c> was clean. Calls a permission rule or hook
+    /// <i>refused</i> are not violations (<see cref="Ap6RunRecord.BashNonRgDenied"/>) — that is the protection
+    /// working, and voiding those runs would throw away exactly the evidence that it works.
+    /// </summary>
     public static string? ArmViolation(Ap6RunRecord r, string arm)
     {
         if (!r.SawInit) return "no system/init event in the stream";
@@ -191,22 +225,26 @@ internal static class Ap6Scorer
         {
             case McpArm:
             {
-                var foreign = r.InitTools.Where(t => !t.StartsWith(McpToolPrefix, StringComparison.Ordinal) && !tolerated.Contains(t)).ToList();
+                var foreign = r.InitTools.Where(t => t != AnswerTool && !t.StartsWith(McpToolPrefix, StringComparison.Ordinal) && !tolerated.Contains(t)).ToList();
                 if (foreign.Count > 0) return $"init.tools has non-shonkor tool(s): {string.Join(", ", foreign)}";
                 if (!r.InitTools.Any(t => t.StartsWith(McpToolPrefix, StringComparison.Ordinal))) return "init.tools lists no mcp__shonkor__ tool";
                 if (!r.McpServers.TryGetValue("shonkor", out var status)) return "init.mcp_servers has no 'shonkor' entry";
                 if (status != "connected") return $"shonkor MCP server status '{status}'";
                 var others = connected.Where(n => n != "shonkor").ToList();
-                return others.Count > 0 ? $"other MCP server(s) connected: {string.Join(", ", others)}" : null;
+                if (others.Count > 0) return $"other MCP server(s) connected: {string.Join(", ", others)}";
+                var offArm = r.ToolCalls.Where(c => !c.Name.StartsWith(McpToolPrefix, StringComparison.Ordinal))
+                    .Select(c => c.Name).Distinct(StringComparer.Ordinal).ToList();
+                return offArm.Count > 0 ? $"mcp arm called non-shonkor tool(s): {string.Join(", ", offArm)}" : null;
             }
             case RgArm:
             {
                 if (connected.Count > 0) return $"MCP server(s) connected in the rg arm: {string.Join(", ", connected)}";
                 var allowed = new HashSet<string>(RgArmTools.Concat(tolerated), StringComparer.Ordinal);
-                var foreign = r.InitTools.Where(t => !allowed.Contains(t)).ToList();
+                var foreign = r.InitTools.Where(t => t != AnswerTool && !allowed.Contains(t)).ToList();
                 if (foreign.Count > 0) return $"init.tools has tool(s) outside Bash/Read: {string.Join(", ", foreign)}";
                 var missing = RgArmTools.Where(t => !r.InitTools.Contains(t, StringComparer.Ordinal)).ToList();
-                return missing.Count > 0 ? $"init.tools lacks {string.Join(", ", missing)}" : null;
+                if (missing.Count > 0) return $"init.tools lacks {string.Join(", ", missing)}";
+                return r.BashNonRg > 0 ? $"rg arm executed {r.BashNonRg} non-rg Bash command(s)" : null;
             }
             default:
                 return $"unknown arm '{arm}'";
@@ -263,8 +301,16 @@ internal static class Ap6Scorer
         var symbols = (r.Answer?.Symbols ?? []).Select(NormalizeSymbol).Where(s => s.Length > 0).Distinct(StringComparer.Ordinal).ToList();
         var noAnswer = notRun is null && (r.Answer is null || r.Answer.SchemaVersion != 1);
 
-        int unmappedFiles = 0, unmappedSymbols = 0, ambiguous = 0;
+        int unmappedFiles = 0, unmappedSymbols = 0, ambiguous = 0, redacted = 0;
         var isC = task.Class == "C";
+        // Both texts are free-form and both are written into results-C.json and the report: notRunReason
+        // carries the API's own error string, armViolation the tool names a run offered. Redacted here,
+        // where the mapping is in hand — the report renders what the verdict already says (#511).
+        if (isC && mapping is not null)
+        {
+            if (notRun is not null) { notRun = Ap6Anonymiser.RedactText(notRun, mapping, out var c); if (c) redacted++; }
+            if (violation is not null) { violation = Ap6Anonymiser.RedactText(violation, mapping, out var c); if (c) redacted++; }
+        }
         if (isC && mapping is not null && !noAnswer)
         {
             var t = Ap6Anonymiser.ToTokens(files, symbols, mapping);
@@ -299,8 +345,9 @@ internal static class Ap6Scorer
             AmbiguousSymbols = ambiguous, UnmappedFiles = unmappedFiles, UnmappedSymbols = unmappedSymbols,
             ToolCalls = r.ToolCalls.Count, TokensApprox = r.TokensApprox, UsageExact = r.UsageExact,
             CostUsd = r.CostUsd, DurationMs = r.DurationMs, Turns = r.Turns,
-            BashNonRg = r.BashNonRg, McpOverflow = r.McpOverflow, PermissionDenials = r.PermissionDenials, IsError = r.IsError,
-            AnswerFiles = files, AnswerSymbols = symbols,
+            BashNonRg = r.BashNonRg, BashNonRgDenied = r.BashNonRgDenied,
+            McpOverflow = r.McpOverflow, PermissionDenials = r.PermissionDenials, IsError = r.IsError,
+            AnswerFiles = files, AnswerSymbols = symbols, RedactedStrings = redacted,
         };
     }
 

@@ -325,12 +325,27 @@ internal static class Ap6Runner
                 var verdict = Ap6Scorer.Score(task, arm, run, record, o.Mode, cwd, mapping);
                 verdicts.Add(verdict);
                 if (arm == Ap6Scorer.McpArm) foreach (var t in record.InitTools.Where(t => t.StartsWith(Ap6Scorer.McpToolPrefix, StringComparison.Ordinal))) mcpTools.Add(t);
-                // Every class's inputs are redacted before they can reach a results file: class C through the mapping, A/B
-                // by making paths under the arm's cwd repository-relative (the rg arm reads by absolute path, which is a
-                // FindLeaks pattern — the results file would otherwise never be written).
-                toolCalls[(task.Id!, arm, run)] = task.Class == "C" && mapping is not null
-                    ? record.ToolCalls.Select(c => new Ap6ToolCall(c.Name, Ap6Anonymiser.RedactArgument(c.Input, mapping))).ToList()
-                    : record.ToolCalls.Select(c => new Ap6ToolCall(c.Name, Ap6Anonymiser.RelativiseArgument(c.Input, cwd))).ToList();
+                // Every class's inputs are redacted before they can reach a results file. Class C is rebuilt
+                // string by string (#511): a class-C input is customer text unless it proves otherwise, so the
+                // default is <redacted> and only tokens, placeholders and allow-listed vocabulary survive.
+                // Class A/B is Brain — our own code — and only needs paths under the arm's cwd made relative
+                // (the rg arm reads by absolute path, which is a FindLeaks pattern; without this no results
+                // file could ever be written).
+                if (task.Class == "C" && mapping is not null)
+                {
+                    var redactedCalls = new List<Ap6ToolCall>(record.ToolCalls.Count);
+                    foreach (var c in record.ToolCalls)
+                    {
+                        var (input, n) = Ap6Anonymiser.RedactToolInput(c.Input, c.Name, mapping);
+                        redactedCalls.Add(new Ap6ToolCall(c.Name, input));
+                        verdict.RedactedStrings += n;
+                    }
+                    toolCalls[(task.Id!, arm, run)] = redactedCalls;
+                }
+                else
+                {
+                    toolCalls[(task.Id!, arm, run)] = record.ToolCalls.Select(c => new Ap6ToolCall(c.Name, Ap6Anonymiser.RelativiseArgument(c.Input, cwd))).ToList();
+                }
                 File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(new { record, verdict }, JsonOptions));
             }
         }
@@ -385,7 +400,7 @@ internal static class Ap6Runner
         {
             var json = Ap6Report.ResultsJson(data, cls);
             var resultsPath = Path.Combine(plan.BrainRoot, ResultsRelativeDir.Replace('/', Path.DirectorySeparatorChar), $"results-{cls}.json");
-            var leaks = Ap6Corpus.FindLeaks(json, denyHashes);
+            var leaks = Ap6Corpus.FindResultsLeaks(json, cls, denyHashes);
             if (leaks.Count > 0)
             {
                 console.WriteLine($"[Error] results-{cls}.json NOT written — {leaks.Count} leak pattern(s) matched: {string.Join("; ", leaks.Take(5))}");

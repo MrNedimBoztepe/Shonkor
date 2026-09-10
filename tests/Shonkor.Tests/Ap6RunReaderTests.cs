@@ -157,15 +157,26 @@ public class Ap6RunReaderTests
         Assert.Null(r.Answer);
     }
 
+    /// <summary>
+    /// The reader's idea of "an rg command" must be the hook's idea of it
+    /// (<c>bench/golden/ap6/rg-only-hook.sh</c>, #513): the hook decides what runs, this decides what the run
+    /// counts as, and a gap between the two is how a grep gets executed and scored as clean. First word names
+    /// rg (bare or as a path), and no shell separator anywhere — so <c>rg … | head</c> is NOT an rg command
+    /// here, because the hook cannot let a pipeline through without vetting the far side of the pipe.
+    /// </summary>
     [Theory]
     [InlineData("rg -n Foo src", true)]
-    [InlineData("  rg --files | head", true)]
+    [InlineData("rg", true)]
     [InlineData("C:/tools/rg.exe -n Foo", true)]
     [InlineData("/usr/bin/rg Foo", true)]
+    [InlineData("  rg --files | head", false)]
+    [InlineData("rg -n \"a|b\" src", false)]
+    [InlineData("rg -n Foo src > out.txt", false)]
+    [InlineData("rg -n $(cat pattern.txt) src", false)]
     [InlineData("grep -rn Foo src", false)]
     [InlineData("ls src && rg Foo", false)]
     [InlineData("cat src/A.cs", false)]
-    public void IsRgCommand_LooksAtTheFirstWordOnly(string command, bool expected)
+    public void IsRgCommand_IsExactlyWhatTheHookLetsThrough(string command, bool expected)
     {
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(new { command }));
         Assert.Equal(expected, Ap6RunReader.IsRgCommand(doc.RootElement));

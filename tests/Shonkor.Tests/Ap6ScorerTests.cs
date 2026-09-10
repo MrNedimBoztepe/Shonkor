@@ -166,6 +166,174 @@ public class Ap6ScorerTests
         Assert.Contains("Read", Ap6Scorer.ArmViolation(missing, Ap6Scorer.RgArm)!);
     }
 
+    // ---------- #512: the answer channel is not a foreign tool ----------
+
+    /// <summary>
+    /// The harness passes <c>--json-schema</c>, so the CLI registers <c>StructuredOutput</c> in every run's
+    /// <c>init.tools</c>. The first smoke run voided all six runs over it — a tool the harness put there
+    /// itself. Both arms must accept exactly it, and nothing else must ride in with it.
+    /// </summary>
+    [Fact]
+    public void BothArms_AcceptTheAnswerTool_InInitTools()
+    {
+        var mcp = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.McpTools.Append(Ap6Scorer.AnswerTool), ("shonkor", "connected"))));
+        Assert.Null(Ap6Scorer.ArmViolation(mcp, Ap6Scorer.McpArm));
+
+        var rg = Ap6RunReader.Read(Ap6Fixtures.Stream(Ap6Fixtures.Init(Ap6Fixtures.RgTools.Append(Ap6Scorer.AnswerTool))));
+        Assert.Null(Ap6Scorer.ArmViolation(rg, Ap6Scorer.RgArm));
+    }
+
+    /// <summary>The tolerance is for that one name only — it is not a door held open for the next tool that turns up.</summary>
+    [Theory]
+    [InlineData("WebFetch")]
+    [InlineData("WebSearch")]
+    [InlineData("Task")]
+    public void BothArms_AreStillViolated_ByAnyOtherForeignTool_BesideTheAnswerTool(string tool)
+    {
+        var mcp = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.McpTools.Append(Ap6Scorer.AnswerTool).Append(tool), ("shonkor", "connected"))));
+        var vm = Ap6Scorer.ArmViolation(mcp, Ap6Scorer.McpArm);
+        Assert.NotNull(vm);
+        Assert.Contains(tool, vm);
+        Assert.DoesNotContain(Ap6Scorer.AnswerTool, vm, StringComparison.Ordinal);
+
+        var rg = Ap6RunReader.Read(Ap6Fixtures.Stream(Ap6Fixtures.Init(Ap6Fixtures.RgTools.Append(Ap6Scorer.AnswerTool).Append(tool))));
+        var vr = Ap6Scorer.ArmViolation(rg, Ap6Scorer.RgArm);
+        Assert.NotNull(vr);
+        Assert.Contains(tool, vr);
+        Assert.DoesNotContain(Ap6Scorer.AnswerTool, vr, StringComparison.Ordinal);
+    }
+
+    /// <summary>Empty, and the fix for #512 did not fill it: a general tolerance bucket is what that issue rules out.</summary>
+    [Fact]
+    public void ToleratedTools_StaysEmpty()
+    {
+        Assert.Empty(Ap6Scorer.ToleratedTools);
+        Assert.DoesNotContain(Ap6Scorer.AnswerTool, Ap6Scorer.RgArmTools);
+    }
+
+    /// <summary>A run in the exact shape a real one has — the arm's tools plus the answer channel — is scored.</summary>
+    [Fact]
+    public void ARunWithTheArmsToolsPlusTheAnswerTool_IsScored_AndTheEmissionIsNoResearchStep()
+    {
+        var task = Ap6Fixtures.Task("A-01", "A", files: ["src/X/Foo.cs"], symbols: ["Foo"]);
+        var stream = Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.RgTools.Append(Ap6Scorer.AnswerTool)),
+            Ap6Fixtures.ToolUse("Bash", new { command = "rg -n Foo src" }, "m1"),
+            Ap6Fixtures.ToolResultString("src/X/Foo.cs:1:class Foo"),
+            Ap6Fixtures.AnswerEmission(["src/X/Foo.cs"], ["Foo"]),
+            Ap6Fixtures.ToolResultString("answer recorded", toolUseId: "t_m_ans"),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer(["src/X/Foo.cs"], ["Foo"])));
+
+        var record = Ap6RunReader.Read(stream);
+        var v = Ap6Scorer.Score(task, Ap6Scorer.RgArm, 1, record, Ap6MatchMode.Recall, Cwd, null);
+
+        Assert.Null(v.ArmViolation);
+        Assert.True(v.Scored);
+        Assert.True(v.Correct);
+        // One research step, not two: the emission is counted apart and its echo is not context the arm read.
+        Assert.Equal(1, v.ToolCalls);
+        Assert.Single(record.AnswerEmissions);
+        Assert.Equal("src/X/Foo.cs:1:class Foo".Length, record.ToolResultChars);
+    }
+
+    // ---------- #513: what the arm did, not only what it was offered ----------
+
+    /// <summary>
+    /// #513: the rg arm ran <c>grep</c> and would have been scored, because the check only ever looked at
+    /// <c>init.tools</c>. A command that executed outside the arm voids the run, whatever init said.
+    /// </summary>
+    [Fact]
+    public void RgArm_IsViolated_ByANonRgBashCommandThatRan()
+    {
+        var r = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.RgTools),
+            Ap6Fixtures.ToolUse("Bash", new { command = "grep -rn Foo src" }, "m1"),
+            Ap6Fixtures.ToolResultString("src/X/Foo.cs:1:class Foo"),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer(["src/X/Foo.cs"], ["Foo"]))));
+
+        Assert.Equal(1, r.BashNonRg);
+        Assert.Contains("executed 1 non-rg Bash", Ap6Scorer.ArmViolation(r, Ap6Scorer.RgArm)!);
+
+        var v = Ap6Scorer.Score(Ap6Fixtures.Task("A-01", "A"), Ap6Scorer.RgArm, 1, r, Ap6MatchMode.Recall, Cwd, null);
+        Assert.False(v.Scored);
+        Assert.False(v.Correct);
+    }
+
+    /// <summary>
+    /// The other half, and the one that is easy to get wrong: a call the hook refused is the guard working.
+    /// Voiding those runs would discard exactly the evidence that the rg arm was held to ripgrep, and with
+    /// fewer than three scored runs the whole task falls out of the majority.
+    /// </summary>
+    [Fact]
+    public void RgArm_IsNotViolated_ByANonRgBashCommandTheHookRefused()
+    {
+        var r = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.RgTools),
+            Ap6Fixtures.ToolUse("Bash", new { command = "grep -rn Foo src" }, "m1"),
+            Ap6Fixtures.ToolResultString("PreToolUse:Bash hook error: rg-only arm: 'grep' is not ripgrep."),
+            Ap6Fixtures.ToolUse("Bash", new { command = "rg -n Foo src" }, "m2"),
+            Ap6Fixtures.ToolResultString("src/X/Foo.cs:1:class Foo", toolUseId: "t_m2"),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer(["src/X/Foo.cs"], ["Foo"]), deniedToolUseIds: "t_m1")));
+
+        Assert.Equal(0, r.BashNonRg);
+        Assert.Equal(1, r.BashNonRgDenied);
+        Assert.Null(Ap6Scorer.ArmViolation(r, Ap6Scorer.RgArm));
+
+        var v = Ap6Scorer.Score(Ap6Fixtures.Task("A-01", "A"), Ap6Scorer.RgArm, 1, r, Ap6MatchMode.Recall, Cwd, null);
+        Assert.True(v.Scored);
+        Assert.True(v.Correct);
+        Assert.Equal(1, v.BashNonRgDenied);
+    }
+
+    /// <summary>A denial we cannot attribute to a call leaves the call counted as executed — the run is voided rather than trusted.</summary>
+    [Fact]
+    public void ADenialWithoutAToolUseId_DoesNotExcuseTheCall()
+    {
+        var r = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.RgTools),
+            Ap6Fixtures.ToolUse("Bash", new { command = "grep -rn Foo src" }, "m1"),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer([], []), denials: 1)));
+
+        Assert.Equal(1, r.BashNonRg);
+        Assert.Equal(0, r.BashNonRgDenied);
+        Assert.NotNull(Ap6Scorer.ArmViolation(r, Ap6Scorer.RgArm));
+    }
+
+    /// <summary>The mirror image: the mcp arm calling anything that is not a shonkor tool.</summary>
+    [Fact]
+    public void McpArm_IsViolated_ByACallToANonShonkorTool()
+    {
+        var r = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.McpTools.Append("Read"), ("shonkor", "connected")),
+            Ap6Fixtures.ToolUse("Read", new { file_path = "src/X/Foo.cs" }, "m1"),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer([], []))));
+
+        // init.tools already gives it away here; the call-level check is what catches a tool that was never offered.
+        var offered = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.McpTools, ("shonkor", "connected")),
+            Ap6Fixtures.ToolUse("Read", new { file_path = "src/X/Foo.cs" }, "m1"),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer([], []))));
+
+        Assert.NotNull(Ap6Scorer.ArmViolation(r, Ap6Scorer.McpArm));
+        Assert.Contains("called non-shonkor tool(s): Read", Ap6Scorer.ArmViolation(offered, Ap6Scorer.McpArm)!);
+    }
+
+    /// <summary>The answer emission is not a call the mcp arm made outside its arm — it is how it answered.</summary>
+    [Fact]
+    public void McpArm_IsNotViolated_ByItsOwnAnswerEmission()
+    {
+        var r = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.McpTools.Append(Ap6Scorer.AnswerTool), ("shonkor", "connected")),
+            Ap6Fixtures.ToolUse("mcp__shonkor__locate", new { query = "Foo" }, "m1"),
+            Ap6Fixtures.AnswerEmission(["src/X/Foo.cs"], ["Foo"]),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer(["src/X/Foo.cs"], ["Foo"]))));
+
+        Assert.Null(Ap6Scorer.ArmViolation(r, Ap6Scorer.McpArm));
+        Assert.Single(r.ToolCalls);
+    }
+
     [Fact]
     public void BothArms_AreViolated_WithoutAnInitEvent()
     {

@@ -29,11 +29,15 @@ internal sealed record Ap6Env(
     string? PluginVerifyOutput,
     Dictionary<string, string>? EnvFlags,
     string? AuthMode,
-    string? IsolationFlags)
+    string? IsolationFlags,
+    /// <summary>The <c>--tools</c> / <c>--allowedTools</c> / <c>--disallowedTools</c> of both arms (#513) — what each arm was allowed to reach for.</summary>
+    string? PermissionRules,
+    /// <summary>The PreToolUse hooks each arm ran under (#513) — what actually refused a call, as opposed to what merely failed to pre-approve it.</summary>
+    string? Hooks)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     public static Ap6Env Parse(string json) => JsonSerializer.Deserialize<Ap6Env>(json, JsonOptions) ?? Empty;
-    public static readonly Ap6Env Empty = new(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+    public static readonly Ap6Env Empty = new(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 }
 
 /// <summary>One graph's identity at scoring time — the Meta stamps and the edge census per <c>ProvenanceReason</c>.</summary>
@@ -119,6 +123,8 @@ internal static class Ap6Report
         sb.AppendLine($"| effort | `{e.Effort ?? "?"}` |");
         sb.AppendLine($"| auth mode | `{e.AuthMode ?? "?"}` |");
         sb.AppendLine($"| isolation flags | `{e.IsolationFlags ?? "?"}` |");
+        sb.AppendLine($"| permission rules | `{e.PermissionRules ?? "?"}` |");
+        sb.AppendLine($"| hooks | `{e.Hooks ?? "?"}` |");
         sb.AppendLine($"| shonkor.dll SHA-256 | `{e.ShonkorDllSha256 ?? "?"}` |");
         sb.AppendLine($"| Brain HEAD | `{e.BrainHead ?? "?"}` |");
         sb.AppendLine($"| corpus HEAD | `{e.CorpusHead ?? "?"}` |");
@@ -236,8 +242,15 @@ internal static class Ap6Report
         }
     }
 
+    /// <summary>
+    /// The limits and the arm-purity measures, printed beside every class table: a reader must not have to
+    /// take on trust that the rg arm was ripgrep-only (#513), so the rules and the hook stand next to the
+    /// numbers they bound. <c>toolCalls</c> is said out loud too, because #512 changed what it counts.
+    /// </summary>
     public static string LimitsLine(Ap6Env e, Ap6MatchMode mode) =>
-        $"Model `{e.Model ?? "?"}`, effort `{e.Effort ?? "?"}`, max turns {(e.MaxTurns?.ToString(Inv) ?? "?")}, max USD per run {(e.MaxUsdPerRun?.ToString("0.00", Inv) ?? "?")}, run-set USD cap {(e.RunSetUsdCap?.ToString("0.00", Inv) ?? "?")}, runs per arm {(e.RunsPerArm?.ToString(Inv) ?? "?")}, match mode `{mode}`.";
+        $"Model `{e.Model ?? "?"}`, effort `{e.Effort ?? "?"}`, max turns {(e.MaxTurns?.ToString(Inv) ?? "?")}, max USD per run {(e.MaxUsdPerRun?.ToString("0.00", Inv) ?? "?")}, run-set USD cap {(e.RunSetUsdCap?.ToString("0.00", Inv) ?? "?")}, runs per arm {(e.RunsPerArm?.ToString(Inv) ?? "?")}, match mode `{mode}`."
+        + $" Permission rules: {e.PermissionRules ?? "?"}. Hooks: {e.Hooks ?? "?"}."
+        + $" `toolCalls` counts research steps only — the `{Ap6Scorer.AnswerTool}` emission is the answer channel, not a step, and is excluded in both arms.";
 
     private static string Majority(Ap6ArmOutcome o) =>
         $"{o.Majority.ToString().ToLowerInvariant()} ({o.CorrectRuns}/{o.ScoredRuns})";
@@ -254,6 +267,8 @@ internal static class Ap6Report
         if (v.AmbiguousSymbols > 0) flags.Add($"ambiguous {v.AmbiguousSymbols}");
         if (v.UnmappedFiles > 0) flags.Add($"unmappedFiles {v.UnmappedFiles}");
         if (v.UnmappedSymbols > 0) flags.Add($"unmappedSymbols {v.UnmappedSymbols}");
+        if (v.RedactedStrings > 0) flags.Add($"redactedStrings {v.RedactedStrings}");
+        if (v.BashNonRgDenied > 0) flags.Add($"bashNonRgDenied {v.BashNonRgDenied}");
         if (v.PermissionDenials > 0) flags.Add($"permissionDenials {v.PermissionDenials}");
         return string.Join(", ", flags);
     }
@@ -266,7 +281,12 @@ internal static class Ap6Report
         var e = d.Env;
         var payload = new
         {
-            schemaVersion = 1,
+            // 2 (#511/#512/#513): the added fields are additive, but `toolCallCount` changed MEANING — it no
+            // longer counts the StructuredOutput answer emission, so a v1 and a v2 number are not comparable
+            // even though the field name and type are the same. That is what the version bump is for; a
+            // silently-additive change would have left every pinned v1 figure one too high and readable as if
+            // it were not. `bashNonRg` narrowed the same way: denied attempts moved to `bashNonRgDenied`.
+            schemaVersion = 2,
             @class = cls,
             matchMode = d.MatchMode.ToString(),
             runDir = d.RunDirName,
@@ -274,6 +294,8 @@ internal static class Ap6Report
             limits = new { model = e.Model, effort = e.Effort, maxTurns = e.MaxTurns, maxUsdPerRun = e.MaxUsdPerRun, runSetUsdCap = e.RunSetUsdCap, runsPerArm = e.RunsPerArm },
             authMode = e.AuthMode,
             isolationFlags = e.IsolationFlags,
+            permissionRules = e.PermissionRules,
+            hooks = e.Hooks,
             versions = new { claude = e.ClaudeVersion, rg = e.RgVersion, shonkorDllSha256 = e.ShonkorDllSha256, brainHead = e.BrainHead, corpusHead = e.CorpusHead, corpusRevision = e.CorpusRevision },
             graph = d.Graphs.FirstOrDefault(g => g.Name == (cls == "C" ? "Corpus-A" : "Brain")),
             mcpToolsOffered = d.McpToolsOffered,
@@ -284,10 +306,12 @@ internal static class Ap6Report
                     scored = v.Scored, armViolation = v.ArmViolation, notRun = v.NotRun, notRunReason = v.NotRunReason,
                     correct = v.Correct, noAnswer = v.NoAnswer, overSelect = v.OverSelect,
                     missingFiles = v.MissingFiles, missingSymbols = v.MissingSymbols, ambiguousSymbols = v.AmbiguousSymbols,
-                    unmappedFiles = v.UnmappedFiles, unmappedSymbols = v.UnmappedSymbols,
+                    unmappedFiles = v.UnmappedFiles, unmappedSymbols = v.UnmappedSymbols, redactedStrings = v.RedactedStrings,
+                    // Research steps only — the answer emission is not one (#512, see schemaVersion).
                     toolCallCount = v.ToolCalls, tokensApprox = v.TokensApprox, usageExact = v.UsageExact,
                     costUsd = v.CostUsd, durationMs = v.DurationMs, turns = v.Turns,
-                    bashNonRg = v.BashNonRg, mcpOverflow = v.McpOverflow, permissionDenials = v.PermissionDenials, isError = v.IsError,
+                    bashNonRg = v.BashNonRg, bashNonRgDenied = v.BashNonRgDenied,
+                    mcpOverflow = v.McpOverflow, permissionDenials = v.PermissionDenials, isError = v.IsError,
                     answerFiles = v.AnswerFiles, answerSymbols = v.AnswerSymbols,
                     toolCalls = d.ToolCalls.TryGetValue((v.TaskId, v.Arm, v.Run), out var calls) ? calls.Select(c => new { name = c.Name, input = c.Input }).ToList() : [],
                 }).ToList(),

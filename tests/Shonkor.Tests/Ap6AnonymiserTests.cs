@@ -15,6 +15,31 @@ public class Ap6AnonymiserTests
 {
     private static readonly Ap6Mapping Mapping = Ap6Fixtures.Mapping();
 
+    /// <summary>
+    /// The string <b>values</b> of a JSON document, keys excluded — what the redaction judges and what
+    /// <see cref="Ap6Corpus.FindResultsLeaks"/> checks. A key is the tool's schema, written by us; asserting
+    /// over the raw text would judge "query" and "command" as if a corpus had named them.
+    /// </summary>
+    private static IEnumerable<string> StringValues(string json)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        return Walk(doc.RootElement).ToList();
+
+        static IEnumerable<string> Walk(System.Text.Json.JsonElement e)
+        {
+            switch (e.ValueKind)
+            {
+                case System.Text.Json.JsonValueKind.String: yield return e.GetString()!; break;
+                case System.Text.Json.JsonValueKind.Object:
+                    foreach (var p in e.EnumerateObject()) foreach (var s in Walk(p.Value)) yield return s;
+                    break;
+                case System.Text.Json.JsonValueKind.Array:
+                    foreach (var item in e.EnumerateArray()) foreach (var s in Walk(item)) yield return s;
+                    break;
+            }
+        }
+    }
+
     // ---------- query → prompt ----------
 
     [Fact]
@@ -178,4 +203,165 @@ public class Ap6AnonymiserTests
 
         Assert.Equal("<item-path> <guid> <abs-path>", redacted);
     }
+
+    // ---------- #511: redact by default ----------
+
+    /// <summary>
+    /// The case #511 was opened for. "Kestrelbrook" is in no mapping entry, is no deny word, is no GUID, is
+    /// under no corpus root and is not a Sitecore item path — every subtractive rule the old redaction had
+    /// says "nothing to do here", and the first smoke run wrote three such names into <c>results-C.json</c>.
+    /// Default deny means it does not need to be recognised to be removed.
+    /// </summary>
+    [Fact]
+    public void RedactToolInput_RemovesAnIdentifierThatIsInNeitherTheMappingNorTheDenyWords()
+    {
+        const string identifier = "Kestrelbrook";
+        var input = $$"""{"query":"which controller renders the {{identifier}} teaser"}""";
+
+        var (json, redacted) = Ap6Anonymiser.RedactToolInput(input, "mcp__shonkor__locate", Mapping);
+
+        Assert.DoesNotContain(identifier, json, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, redacted);
+        Assert.All(StringValues(json), v => Assert.Empty(Ap6Anonymiser.DisallowedWords(v)));
+    }
+
+    /// <summary>Every free-text field of every tool the arms actually call goes through it — not a list of the ones we thought of.</summary>
+    [Theory]
+    [InlineData("mcp__shonkor__locate", """{"query":"Kestrelbrook teaser"}""")]
+    [InlineData("mcp__shonkor__search_graph", """{"query":"Kestrelbrook"}""")]
+    [InlineData("mcp__shonkor__generate_capsule", """{"query":"the Kestrelbrook rendering"}""")]
+    [InlineData("mcp__shonkor__get_source", """{"symbol":"KestrelbrookController"}""")]
+    [InlineData("mcp__shonkor__find_usages", """{"symbol":"Kestrelbrook"}""")]
+    [InlineData("mcp__shonkor__outline", """{"path":"src/Feature/Kestrelbrook/Thing.cs"}""")]
+    [InlineData("mcp__shonkor__get_subgraph", """{"seeds":["@/src/Feature/Kestrelbrook/Thing.cs::Kestrelbrook"],"hops":2}""")]
+    [InlineData("Bash", """{"command":"rg -rn Kestrelbrook src","description":"find Kestrelbrook"}""")]
+    [InlineData("StructuredOutput", """{"schemaVersion":1,"files":["src/Feature/Kestrelbrook/Thing.cs"],"symbols":["Kestrelbrook"]}""")]
+    public void RedactToolInput_CoversEveryFreeTextField(string tool, string input)
+    {
+        var (json, redacted) = Ap6Anonymiser.RedactToolInput(input, tool, Mapping);
+
+        Assert.DoesNotContain("Kestrelbrook", json, StringComparison.OrdinalIgnoreCase);
+        Assert.True(redacted > 0);
+        Assert.All(StringValues(json), v => Assert.Empty(Ap6Anonymiser.DisallowedWords(v)));
+    }
+
+    /// <summary>
+    /// A relative corpus path carries the customer's folder names just as an absolute one does, and
+    /// <see cref="Ap6Anonymiser.RedactPaths"/> only ever caught the absolute form — so
+    /// <c>src/Feature/Kestrelbrook/Thing.cs</c> used to walk straight through. Structure survives, names do not.
+    /// </summary>
+    [Fact]
+    public void RedactToolInput_RedactsRelativeCorpusPaths_KeepingTheirShape()
+    {
+        var (json, _) = Ap6Anonymiser.RedactToolInput("""{"path":"src/Feature/Kestrelbrook/Thing.cs"}""", "mcp__shonkor__outline", Mapping);
+
+        Assert.Equal("""{"path":"src/<redacted>/<redacted>/<redacted>.cs"}""", json);
+    }
+
+    /// <summary>Numbers, booleans, nulls and the schema keys around them name nobody, so they are not touched — a row with every value blanked would be unreadable for nothing.</summary>
+    [Fact]
+    public void RedactToolInput_LeavesNonStringsAndKeysAlone()
+    {
+        var (json, redacted) = Ap6Anonymiser.RedactToolInput("""{"hops":3,"verbose":true,"note":null,"limit":25}""", "mcp__shonkor__get_subgraph", Mapping);
+
+        Assert.Equal("""{"hops":3,"verbose":true,"note":null,"limit":25}""", json);
+        Assert.Equal(0, redacted);
+    }
+
+    /// <summary>What the mapping does know still becomes its token: redaction by default does not throw away the reading the tokens exist for.</summary>
+    [Fact]
+    public void RedactToolInput_KeepsMappedEntriesAsTokens_AndPlaceholders()
+    {
+        var input = """{"seeds":["@/src/Feature/Hero/HeroController.cs","{1A2B3C4D-1111-2222-3333-444455556666}"],"query":"NavController"}""";
+
+        var (json, _) = Ap6Anonymiser.RedactToolInput(input, "mcp__shonkor__get_subgraph", Mapping);
+
+        Assert.Contains("Controller-01", json, StringComparison.Ordinal);
+        Assert.Contains("Controller-03", json, StringComparison.Ordinal);
+        Assert.Contains("guid", json, StringComparison.Ordinal);
+        Assert.All(StringValues(json), v => Assert.Empty(Ap6Anonymiser.DisallowedWords(v)));
+    }
+
+    /// <summary>Input that is not JSON is the case a subtractive redaction would have had to guess at; it is replaced whole.</summary>
+    [Fact]
+    public void RedactToolInput_ReplacesUnparseableInputWholesale()
+    {
+        var (json, redacted) = Ap6Anonymiser.RedactToolInput("{not json at all", "Bash", Mapping);
+
+        Assert.Equal("\"<redacted>\"", json);
+        Assert.Equal(1, redacted);
+    }
+
+    /// <summary>
+    /// <see cref="Ap6Anonymiser.RedactArgument"/> is also applied to Brain's own prose (the plugin verify
+    /// output, the mapping path in an error message), where exact equality is pinned. #511 adds a layer on
+    /// top of it and must not have changed it.
+    /// </summary>
+    [Fact]
+    public void RedactArgument_IsUnchangedByTheNewLayer()
+    {
+        Assert.Equal("Controller-03 and Controller-03", Ap6Anonymiser.RedactArgument("Acme.Feature.Nav.NavController and NavController", Mapping));
+    }
+
+    // ---------- the allow-list, and the invariant it is kept under ----------
+
+    [Fact]
+    public void AllowedWords_AreSortedWithinTheirGroups_AndDistinct()
+    {
+        Assert.Equal(Ap6Anonymiser.AllowedWords.Length, Ap6Anonymiser.AllowedWords.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.All(Ap6Anonymiser.AllowedWords, w => Assert.Matches("^[A-Za-z][A-Za-z0-9]*$", w));
+    }
+
+    /// <summary>
+    /// The list may never contain a customer word. The deny words are the ones we know of, and they are held
+    /// as hashes so they are never written down here — the same digests <see cref="Ap6CorpusTests"/> embeds.
+    /// </summary>
+    [Fact]
+    public void NoAllowedWord_HashesToADenyWord()
+    {
+        var deny = Ap6CorpusTests.DenyWordHashes;
+
+        Assert.All(Ap6Anonymiser.AllowedWords, w => Assert.DoesNotContain(Ap6Corpus.Sha256Hex(w.ToLowerInvariant()), deny));
+    }
+
+    /// <summary>
+    /// Nor may it contain a class-C key: a key is an anonymised token, and a token that is also allow-listed
+    /// vocabulary would make the redaction unable to tell the two apart.
+    /// </summary>
+    [Fact]
+    public void NoAllowedWord_IsAClassCKey()
+    {
+        var keys = Ap6Corpus.Load(RepoPaths.File("bench", "golden", "ap6", "tasks.json"))
+            .Where(t => t.Class == "C")
+            .SelectMany(t => (t.Key?.Files ?? []).Concat(t.Key?.Symbols ?? []))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.NotEmpty(keys);
+        Assert.All(Ap6Anonymiser.AllowedWords, w => Assert.DoesNotContain(w, keys));
+    }
+
+    /// <summary>
+    /// The answer schema is the one vocabulary a value may legitimately echo, and it is a file that can
+    /// change. Rather than reading it at run time, the list is checked against it here: change the schema
+    /// and this fails, which is where a missing word should surface.
+    /// </summary>
+    [Fact]
+    public void AllowedWords_CoverTheAnswerSchema()
+    {
+        var schema = File.ReadAllText(RepoPaths.File("bench", "golden", "ap6", "answer-schema.json"));
+        var words = System.Text.RegularExpressions.Regex.Matches(schema, "[A-Za-z_][A-Za-z0-9_]*").Select(m => m.Value).Distinct(StringComparer.Ordinal);
+
+        Assert.All(words, w => Assert.Empty(Ap6Anonymiser.DisallowedWords(w)));
+    }
+
+    /// <summary>Tokens and placeholders are recognised whole, not read as the words they are spelled with.</summary>
+    [Theory]
+    [InlineData("Controller-003")]
+    [InlineData("Rendering-01")]
+    [InlineData("<corpus>")]
+    [InlineData("<guid>")]
+    [InlineData("<item-path>")]
+    [InlineData("<abs-path>")]
+    [InlineData("<redacted>")]
+    public void TokensAndPlaceholders_AreAllowedWhole(string text) => Assert.True(Ap6Anonymiser.IsAllowedString(text));
 }

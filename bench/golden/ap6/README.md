@@ -12,6 +12,7 @@ no aggregate across classes) and `results-<class>.json` beside this file (pinned
 | `answer-schema.json` | the structured output both arms must emit: `{schemaVersion: 1, files: string[], symbols: string[]}` |
 | `prompt-template.txt` | the prompt both arms receive (`{query}` + the same instruction) |
 | `mcp-brain.template.json`, `mcp-corpus.template.json`, `mcp-none.json` | MCP config templates; `run.sh` fills the paths and writes them into the run directory |
+| `rg-only-hook.sh` | the rg arm's `PreToolUse(Bash)` hook: exit 2 for anything that is not one plain `rg` command (#513). Its definition of "an rg command" and `Ap6RunReader.IsRgCommand` are one rule with two implementations — change both or neither. |
 | `results-<class>.json` | the pinned numbers of the last scored run (written by `--ap6`; absent until a run exists) |
 | `scripts/` | the corpus generators of #466 |
 
@@ -58,7 +59,10 @@ with its own documented switch:
 |---|---|---|
 | `--restricted` | user/project/local settings (hooks, plugins, permission rules): "loads only managed settings and `--settings`"; built "when an evaluation harness drives `claude`" | cli-reference (≥ 2.1.248) |
 | `--strict-mcp-config` | every MCP server except the one in `--mcp-config` | mcp doc |
-| `--settings '{"disableAllHooks":true}'` | hooks, including any a managed layer could add | permissions doc, "Before you run `claude -p` in a repository you didn't write" |
+| `--settings <run-dir>/arm-<arm>.settings.json` | nothing — it **adds** the arm's own PreToolUse hook. It used to be `'{"disableAllHooks":true}'`; #513 removed that, because under `--restricted` no user/project/local hook is loaded anyway and the switch would also disable the harness's own hook. Do not put it back. | cli-reference |
+| `--permission-mode dontAsk` | anything that would wait for an answer no one can give in `-p` | cli-reference |
+| `--permission-prompts none` | "anything that would prompt is denied automatically" | cli-reference |
+| `--disallowedTools <the other arm's tools>` | the opposite arm's tools, by bare name — a bare name removes the tool from the model's context rather than refusing it later | permissions doc |
 | `--disable-slash-commands` | skills and custom commands | cli-reference |
 | `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` | "any CLAUDE.md memory files … including user, project, and auto memory files" — the untracked `CLAUDE.md` in the Brain root and `~/.claude/CLAUDE.md` included | env-vars doc |
 | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` | auto memory, read and write | env-vars doc |
@@ -66,7 +70,47 @@ with its own documented switch:
 The gate refuses a subscription set while `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set: in `-p` "the
 key is always used when present" and both outrank the login ([authentication](https://code.claude.com/docs/en/authentication),
 credential order) — the set would be billed to the key. `env.json` records `authMode`, `claudeAuthMethod`
-(from `claude auth status`) and `isolationFlags`; the report prints them in *Environment*.
+(from `claude auth status`), `isolationFlags`, `permissionRules` and `hooks`; the report prints them in
+*Environment* and beside every class table.
+
+### Arm purity: what keeps each arm inside itself (#513)
+
+The first smoke run's "rg arm" never used ripgrep — it ran `grep`, twice in class A and fourteen times in
+class B, all with `permissionDenials: 0`. `--allowedTools "Bash(rg *)"` **pre-approves** rg; it denies
+nothing, and Claude Code runs a built-in set of read-only Bash commands (`ls`, `cat`, `grep`, `find`, `wc`,
+`cd`, …) without a prompt in every mode. The set is not configurable, and rule precedence is deny → ask →
+allow, so a `Bash` deny/ask rule would catch rg too: *"Bash: only rg"* cannot be written as a permission
+rule. Deny rules are also documented as not being a security boundary.
+
+So the rg arm runs under a **PreToolUse hook** (`rg-only-hook.sh`), which sees the full command text and, on
+exit 2, blocks the call before the permission rules are consulted. Verified empirically, not from the docs:
+hooks passed via `--settings` **do** run under `--restricted`, and a blocked call appears in the result
+event's `permission_denials` with its `tool_use_id`.
+
+| Arm | Offered | Denied | Hook |
+|---|---|---|---|
+| `mcp` | `--tools ""`, `--allowedTools "mcp__shonkor__*"` | `Bash Read Grep Glob Edit Write WebFetch WebSearch` | none |
+| `rg` | `--tools "Bash,Read"`, `--allowedTools "Bash(rg *)"` | `mcp__*` | `PreToolUse(Bash)` → `rg-only-hook.sh` |
+
+What the hook lets through is **one plain rg command**: first word names `rg` (bare or as a path), and no
+shell separator anywhere (`|`, `&`, `;`, `<`, `>`, backtick, `$(`, newline). That is deliberately strict —
+a pattern with alternation (`rg "a|b"`) is refused too, and the denial message says so, so the arm can
+re-issue it as separate calls. Blocking too much costs a denial; blocking too little costs the measurement.
+
+`Ap6RunReader.IsRgCommand` carries **exactly** that definition. One idea of "an rg command", two
+implementations that must agree: if the hook let something through that the reader counted as rg, a grep
+would execute and be scored as clean.
+
+Counting and refusing are then kept apart:
+
+- **`bashNonRg`** — non-rg Bash commands that **ran**. Any of them is an `armViolation`: the run is listed,
+  never counted. Counting alone is what #513 was: the first smoke run counted the greps correctly and scored
+  the run anyway.
+- **`bashNonRgDenied`** — attempts the hook refused. Reported, never held against the run. Voiding those
+  would discard exactly the runs that prove the guard worked — and below three scored runs a task drops out
+  of the majority entirely.
+- A denial that cannot be attributed to a call (no `tool_use_id`) leaves the call counted as executed: the
+  run is voided rather than trusted.
 
 **Session limits.** The subscription has rolling usage windows ("You've hit your session limit · resets 4pm",
 HTTP 429 — [errors doc](https://code.claude.com/docs/en/errors)). A run that ends on one comes back as a
@@ -98,8 +142,11 @@ limits of #505 doing their job, and stay scored as `noAnswer`.
 - [ ] Never pass `--ignore-preconditions` to `--ap6-plan` for a run that is meant to be scored — the flag exists
       for `--dry-run` on a machine whose graphs are stale.
 - [ ] **Before committing a scored run**: read `git diff bench/golden/ap6/results-C.json` and
-      `bench/ap6-part1-report.md` by hand, tool-call inputs included. `Ap6Corpus.FindLeaks` is a net, not a
-      proof — a customer name in a shape it does not know passes it, and git history cannot be un-published.
+      `bench/ap6-part1-report.md` by hand, tool-call inputs included. `Ap6Corpus.FindResultsLeaks` now asks
+      the question that has no list to be incomplete — is every string a token, a placeholder or vocabulary
+      we wrote ourselves — but it is still a check, not a proof, and git history cannot be un-published.
+- [ ] A smoke run's report and results files are **not** pinned results: move them out of the Brain checkout
+      to `$AP6_RUNS_ROOT/ap6/` after reading them, do not commit them.
 
 ## Running
 
@@ -125,7 +172,8 @@ tool in `system/init.tools` that belongs to neither arm (a harness-neutral helpe
 ## Run directory layout
 
 ```
-env.json                     versions, model, limits, auth mode, isolation flags, shonkor.dll SHA-256, git HEADs, plugin verify output
+env.json                     versions, model, limits, auth mode, isolation flags, permission rules, hooks, shonkor.dll SHA-256, git HEADs, plugin verify output
+arm-rg.settings.json         the rg arm's PreToolUse hook (#513); arm-mcp.settings.json is its empty mirror
 resume.log                   one line per --resume invocation (versions, HEADs at that time); env.json is never rewritten
 plan.tsv / plan.env / plan.json   the tasks to run, the roots and databases (paths — stays out of the repo)
 prompts/<task>.txt           the resolved prompt (class C: real names)
@@ -145,17 +193,41 @@ mcp-brain.json / mcp-corpus.json / mcp-none.json
   the answer; extras are counted as `overSelect`. `Exact` — set equality. The report names the mode used.
 - **tokensApprox** (the gate's column, identical for both arms): Σ characters of all `tool_result` text
   blocks in the main conversation / 4. **usageExact**: Σ `message.usage` over assistant messages.
-- **Connection gate**: a run counts only if `system/init` shows the arm's tool set and, for `mcp`,
-  `shonkor` connected (for `rg`, no server connected). Otherwise `armViolation` — listed, not counted.
+- **Arm gate**, two levels, both read from the stream: what was **offered** (`system/init` shows the arm's
+  tool set and, for `mcp`, `shonkor` connected; for `rg`, no server connected) and what was **done** (no
+  non-rg Bash command executed in the rg arm; no non-shonkor tool called in the mcp arm). Either one fails →
+  `armViolation`, listed, not counted. `StructuredOutput` is accepted in both arms' `init.tools`: it is the
+  answer channel the CLI registers because the driver passes `--json-schema`, i.e. the harness put it there
+  itself (#512). It is excluded **by name**, not through a general tolerance list — `Ap6Scorer.ToleratedTools`
+  is empty and stays empty.
+- **`toolCalls` counts research steps only**: the `StructuredOutput` emission is how an arm answered, not how
+  it searched, and it is excluded in both arms — so the tool-economy comparison is unaffected (both lose
+  exactly one), but a `toolCallCount` from before #512 is one higher than the same run's is now. That is why
+  `results-<class>.json` is at `schemaVersion: 2`.
 - **noAnswer**: no parseable `structured_output` or `schemaVersion ≠ 1` → incorrect.
 - **notRun**: the run ended on the API's or the loop's side — `is_error` with a subtype other than the
   pinned-limit ones (`error_max_turns`, `error_max_budget_usd`, `error_max_structured_output_retries`), i.e. a
   failed final request (usage/rate limit, HTTP 429, other API errors), `error_during_execution`, or no
   `result` event at all → listed with its reason, not counted, never `noAnswer`; `--resume` runs it again.
 - **Majority**: correct in ≥ 2 of 3 scored runs; fewer than 3 scored → `incomplete`, never correct.
-- **Class C**: answers are translated back into tokens through the mapping; unmapped items are counted
-  (`unmappedFiles/Symbols`), ambiguous type names flagged; `results-C.json` passes `Ap6Corpus.FindLeaks`
-  (fixed patterns + the mapping's deny words) before it is written.
+- **Class C — redact by default (#511)**: answers are translated back into tokens through the mapping;
+  unmapped items are counted (`unmappedFiles/Symbols`), ambiguous type names flagged. Everything else a
+  class-C run produced is **rebuilt, not filtered**: `Ap6Anonymiser.RedactToolInput` walks each tool input's
+  JSON and emits a new one — numbers, booleans and schema keys pass, and every string *value* must come out
+  as a mapping token, a placeholder (`<corpus>`, `<guid>`, `<item-path>`, `<abs-path>`, `<redacted>`) or
+  allow-listed vocabulary. `notRunReason` (raw API error text) and `armViolation` go through the same
+  predicate. `redactedStrings` per row says how many strings were blanked, so over-redaction stays visible.
+
+  The list this rests on is `Ap6Anonymiser.AllowedWords`, and the invariant it is kept under matters more
+  than its contents: **over-redaction costs readability, under-redaction is a customer-data leak into a
+  history that cannot be un-published**. It may be incomplete — that is the safe direction — and it must
+  never be extended in reaction to a concrete string that came out `<redacted>` and looked harmless. Every
+  entry is a word this repository writes itself.
+
+  `results-C.json` then passes `Ap6Corpus.FindResultsLeaks` before it is written: the old fixed patterns and
+  deny-word hashes **plus** the structural rule that every string in a free-text position satisfies that same
+  predicate. `FindLeaks` alone is a net, and #511 is the run that went through it — three customer
+  identifiers that were no corpus path, no item path, no GUID and no deny word.
 - **Gate** (class C, verbatim in the report): *MCP arm correct on at least 3 more class-C tasks than the
   rg arm (majority of 3 runs) AND fewer file-content tokens read at equal correctness* —
   `C_mcp − C_rg ≥ 3` and Σ tokensApprox(mcp) < Σ tokensApprox(rg) over the tasks both arms got right.

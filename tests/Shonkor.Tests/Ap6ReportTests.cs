@@ -20,7 +20,9 @@ public class Ap6ReportTests
         "2026-09-08T00:00:00Z", "2.1.263", "2.1.263", "ripgrep 14.1.0", "claude-test", "high", 25, 2.00, 250, 3, false,
         "<abs-path>", "abc123", "de44654380032c1766d089d859c7e3c86ac79a74", "9d7f9ce", "9d7f9ce", 0, "OK 4 plugins",
         new Dictionary<string, string> { ["ENABLE_TOOL_SEARCH"] = "false" },
-        "subscription", "--restricted --strict-mcp-config --disable-slash-commands");
+        "subscription", "--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --permission-prompts none",
+        "mcp arm: --tools '' --allowedTools 'mcp__shonkor__*' --disallowedTools 'Bash Read Grep Glob Edit Write WebFetch WebSearch'; rg arm: --tools 'Bash,Read' --allowedTools 'Bash(rg *)' --disallowedTools 'mcp__*'",
+        "rg arm: PreToolUse(Bash) -> rg-only-hook.sh (exit 2 unless the command is one plain rg call, no shell separators); mcp arm: none");
 
     private static Ap6GraphState Graph(string name) =>
         new(name, "de44654380032c1766d089d859c7e3c86ac79a74", "fp", 5, 1000, 2000,
@@ -154,7 +156,90 @@ public class Ap6ReportTests
         var limits = Ap6Report.LimitsLine(Env, Ap6MatchMode.Recall);
 
         Assert.Contains("Model `claude-test`, effort `high`, max turns 25, max USD per run 2.00, run-set USD cap 250.00, runs per arm 3, match mode `Recall`.", limits);
+        // #513: a reader must be able to see what held each arm inside itself without leaving the table.
+        Assert.Contains("Permission rules: mcp arm: --tools '' --allowedTools 'mcp__shonkor__*' --disallowedTools 'Bash Read Grep Glob Edit Write WebFetch WebSearch'; rg arm: --tools 'Bash,Read' --allowedTools 'Bash(rg *)' --disallowedTools 'mcp__*'.", limits);
+        Assert.Contains("Hooks: rg arm: PreToolUse(Bash) -> rg-only-hook.sh", limits);
+        // #512: the same column name now counts something else, so the table says so.
+        Assert.Contains("`toolCalls` counts research steps only", limits);
         foreach (var cls in new[] { "A", "B", "C" }) Assert.Contains(limits, Section(md, $"## Class {cls}"));
+
+        Assert.Contains("| permission rules | `mcp arm: --tools ''", md);
+        Assert.Contains("| hooks | `rg arm: PreToolUse(Bash)", md);
+    }
+
+    /// <summary>
+    /// #511 end to end: a class-C run whose tool inputs and answer carry an identifier that is in no mapping
+    /// entry and on no deny list. The row must reach <c>results-C.json</c> with no verbatim occurrence of it —
+    /// and the file must pass the check that guards the checked-in one.
+    /// </summary>
+    [Fact]
+    public void ClassC_ResultsJson_CarriesNoIdentifierThatTheMappingDoesNotKnow()
+    {
+        const string identifier = "Kestrelbrook";
+        var task = Ap6Fixtures.Task("C1-01", "C", files: ["Controller-03"], symbols: ["Controller-03"]);
+        var mapping = Ap6Fixtures.Mapping();
+        var stream = Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.McpTools.Append(Ap6Scorer.AnswerTool), ("shonkor", "connected")),
+            Ap6Fixtures.ToolUse("mcp__shonkor__locate", new { query = $"{identifier} teaser controller" }, "m1"),
+            Ap6Fixtures.ToolResultBlocks($"src/Feature/{identifier}/Thing.cs:1"),
+            Ap6Fixtures.ToolUse("mcp__shonkor__get_source", new { symbol = $"{identifier}Controller" }, "m2"),
+            Ap6Fixtures.ToolResultBlocks("class"),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer([$"src/Feature/{identifier}/Thing.cs", "src/Feature/Nav/NavController.cs"], [$"{identifier}Controller", "NavController"])));
+
+        var record = Ap6RunReader.Read(stream);
+        var verdict = Ap6Scorer.Score(task, "mcp", 1, record, Ap6MatchMode.Recall, Cwd, mapping);
+        var calls = new List<Ap6ToolCall>();
+        foreach (var c in record.ToolCalls)
+        {
+            var (input, n) = Ap6Anonymiser.RedactToolInput(c.Input, c.Name, mapping);
+            calls.Add(new Ap6ToolCall(c.Name, input));
+            verdict.RedactedStrings += n;
+        }
+        var data = new Ap6ReportData
+        {
+            RunDirName = "smoke", GeneratedAt = "now", MatchMode = Ap6MatchMode.Recall, Env = Env,
+            Tasks = [task], Verdicts = [verdict], Outcomes = Ap6Scorer.Outcomes([task], [verdict]),
+            Graphs = [Graph("Corpus-A")], ToolCalls = { [("C1-01", "mcp", 1)] = calls },
+        };
+
+        var json = Ap6Report.ResultsJson(data, "C");
+
+        Assert.DoesNotContain(identifier, json, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Ap6Corpus.FindResultsLeaks(json, "C", Ap6CorpusTests.DenyWordHashes));
+        Assert.DoesNotContain(identifier, Ap6Report.Markdown(data), StringComparison.OrdinalIgnoreCase);
+
+        using var doc = JsonDocument.Parse(json);
+        var run = doc.RootElement.GetProperty("runs").EnumerateArray().Single();
+        // Over-redaction stays visible rather than being hidden: the counters still count, and the row says
+        // how many strings were blanked. A class-C row that did work and reports 0 is the suspicious one.
+        Assert.Equal(1, run.GetProperty("unmappedFiles").GetInt32());
+        Assert.Equal(1, run.GetProperty("unmappedSymbols").GetInt32());
+        Assert.True(run.GetProperty("redactedStrings").GetInt32() > 0);
+        Assert.Equal(["Controller-03"], run.GetProperty("answerFiles").EnumerateArray().Select(x => x.GetString()));
+        Assert.Contains($"redactedStrings {run.GetProperty("redactedStrings").GetInt32()}", Section(Ap6Report.Markdown(data), "## Class C"));
+    }
+
+    /// <summary>
+    /// Class A and B are Brain — our own code, nothing to protect — and #511 must not have started redacting
+    /// them: an unreadable class-A row would cost the comparison its diagnostics for no gain.
+    /// </summary>
+    [Fact]
+    public void ClassAandB_ToolInputs_AreNotRedacted()
+    {
+        var json = Ap6Report.ResultsJson(Data(), "A");
+
+        Assert.Contains("rg -n Foo src", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("<redacted>", json, StringComparison.Ordinal);
+        foreach (var run in JsonDocument.Parse(json).RootElement.GetProperty("runs").EnumerateArray())
+            Assert.Equal(0, run.GetProperty("redactedStrings").GetInt32());
+    }
+
+    /// <summary>The pinned artefact says which contract it is written to; #512 changed what `toolCallCount` means, which a reader cannot see from the field alone.</summary>
+    [Fact]
+    public void ResultsJson_DeclaresSchemaVersionTwo()
+    {
+        foreach (var cls in Ap6Report.Classes)
+            Assert.Equal(2, JsonDocument.Parse(Ap6Report.ResultsJson(Data(), cls)).RootElement.GetProperty("schemaVersion").GetInt32());
     }
 
     [Fact]
@@ -211,7 +296,7 @@ public class Ap6ReportTests
         Assert.DoesNotContain("noAnswer", a);
         Assert.Contains("| A-01 | correct (3/3) | incomplete (1/1) |", a);
         Assert.Contains("| auth mode | `subscription` |", md);
-        Assert.Contains("| isolation flags | `--restricted --strict-mcp-config --disable-slash-commands` |", md);
+        Assert.Contains("| isolation flags | `--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --permission-prompts none` |", md);
 
         using var json = JsonDocument.Parse(Ap6Report.ResultsJson(data, "A"));
         var root = json.RootElement;
