@@ -8,7 +8,7 @@ no aggregate across classes) and `results-<class>.json` beside this file (pinned
 
 | File | Role |
 |---|---|
-| `run.sh` | the driver: env gate → `shonkor-bench --ap6-plan` → runs → `shonkor-bench --ap6`. Limits at its top (#505). |
+| `run.sh` | the driver: env gate → `shonkor-bench --ap6-plan` → runs → `shonkor-bench --ap6`. Limits and `AUTH_MODE` at its top (#505; auth mode `subscription` ratified 2026-09-10). |
 | `answer-schema.json` | the structured output both arms must emit: `{schemaVersion: 1, files: string[], symbols: string[]}` |
 | `prompt-template.txt` | the prompt both arms receive (`{query}` + the same instruction) |
 | `mcp-brain.template.json`, `mcp-corpus.template.json`, `mcp-none.json` | MCP config templates; `run.sh` fills the paths and writes them into the run directory |
@@ -32,21 +32,69 @@ no aggregate across classes) and `results-<class>.json` beside this file (pinned
    patterns apply — the report should say so.
 5. **Re-index Brain** the same way at the HEAD the class A/B keys were checked against.
 6. `shonkor-bench <db> --provenance` per graph before and after, so the edge census is on record.
-7. `export ANTHROPIC_API_KEY=…` in the shell that runs `run.sh`; `claude -p --bare` never uses the OAuth login.
+7. `claude auth status` reports `loggedIn: true` with the subscription account, and **no** `ANTHROPIC_API_KEY` /
+   `ANTHROPIC_AUTH_TOKEN` is set in the shell that runs `run.sh` (see *Auth mode* below).
 
-The env gate of `run.sh` verifies (2), `claude --version` ≥ the pin, a real `rg` binary, the API key, and
-— through `--ap6-plan` — the revision equalities (mapping ↔ tasks, checkout ↔ mapping, graph ↔ checkout),
-clean working trees for the relevant file kinds, and that every class-C token has an unambiguous entry.
+The env gate of `run.sh` verifies (2), `claude --version` ≥ the pin, a real `rg` binary, the sign-in (and the
+absence of an API key), and — through `--ap6-plan` — the revision equalities (mapping ↔ tasks, checkout ↔
+mapping, graph ↔ checkout), clean working trees for the relevant file kinds, and that every class-C token has
+an unambiguous entry.
 
-## Checklist before spending money (stakeholder)
+## Auth mode and isolation (ratified 2026-09-10: subscription, no API cost)
+
+`AUTH_MODE=subscription` at the top of `run.sh` (override per run with `--auth api`). The runs go through the
+claude.ai subscription login, so **no bill is produced**; `total_cost_usd` and `--max-budget-usd` keep working
+because both are client-side estimates at list price ([headless](https://code.claude.com/docs/en/headless):
+"Both figures are client-side estimates"; [costs](https://code.claude.com/docs/en/costs): "Claude Max and Pro
+subscribers have usage included in their subscription, so the session cost figure isn't relevant for
+billing"). The USD columns and the `TOTAL_USD` stop therefore stay as an **effort measure**, not as money.
+
+Why no `--bare`: bare mode "never reads OAuth credentials" — its auth "is strictly `ANTHROPIC_API_KEY`"
+([cli-reference](https://code.claude.com/docs/en/cli-reference), `claude --help`). Without `--bare`, `-p`
+"loads the same context an interactive session would" (headless), so the driver switches every piece off
+with its own documented switch:
+
+| Switch | What it removes | Source |
+|---|---|---|
+| `--restricted` | user/project/local settings (hooks, plugins, permission rules): "loads only managed settings and `--settings`"; built "when an evaluation harness drives `claude`" | cli-reference (≥ 2.1.248) |
+| `--strict-mcp-config` | every MCP server except the one in `--mcp-config` | mcp doc |
+| `--settings '{"disableAllHooks":true}'` | hooks, including any a managed layer could add | permissions doc, "Before you run `claude -p` in a repository you didn't write" |
+| `--disable-slash-commands` | skills and custom commands | cli-reference |
+| `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` | "any CLAUDE.md memory files … including user, project, and auto memory files" — the untracked `CLAUDE.md` in the Brain root and `~/.claude/CLAUDE.md` included | env-vars doc |
+| `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` | auto memory, read and write | env-vars doc |
+
+The gate refuses a subscription set while `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set: in `-p` "the
+key is always used when present" and both outrank the login ([authentication](https://code.claude.com/docs/en/authentication),
+credential order) — the set would be billed to the key. `env.json` records `authMode`, `claudeAuthMethod`
+(from `claude auth status`) and `isolationFlags`; the report prints them in *Environment*.
+
+**Session limits.** The subscription has rolling usage windows ("You've hit your session limit · resets 4pm",
+HTTP 429 — [errors doc](https://code.claude.com/docs/en/errors)). A run that ends on one comes back as a
+`result` with `is_error: true`, subtype `success`, `api_error_status` and the message in `result` (SDK
+reference). The driver reads that through `--ap6-tally` after every run and **stops the set at once** —
+`abort: <task/arm/n> hit a usage/rate limit … resume after the reset with: run.sh <run-dir> --resume` — so no
+further task is burned as `noAnswer`. `--resume` keeps `env.json`/`plan.*`, skips every run whose result is a
+measurement, moves the failed attempt to `stream.notrun-<ts>.jsonl` and runs it again. The scorer lists such
+a run as `notRun` (not counted, never `noAnswer`); until it is re-run the task's arm is `incomplete`. The same
+holds for any other API error and for a stream without a `result` event; `error_max_turns`,
+`error_max_budget_usd` and `error_max_structured_output_retries` are **not** re-run — they are the pinned
+limits of #505 doing their job, and stay scored as `noAnswer`.
+
+`--auth api` restores the previous mode: `claude -p --bare` with `ANTHROPIC_API_KEY`, billed per token.
+
+## Checklist before a scored run (stakeholder)
 
 - [ ] `claude update` — the driver pins `MIN_CLAUDE` (`run.sh`); older `-p` starts before the stdio MCP server is up.
-- [ ] `rg --version` prints a real ripgrep (the gate refuses a shell fallback to `grep`).
-- [ ] `export ANTHROPIC_API_KEY=…` in the shell that runs `run.sh` (never the OAuth login; `--bare` ignores it).
+- [ ] `rg --version` prints a real ripgrep (the gate refuses a shell fallback to `grep`); on Windows:
+      `winget install BurntSushi.ripgrep.MSVC`, then a new shell.
+- [ ] `claude auth status` → `"loggedIn": true` with the subscription account; `ANTHROPIC_API_KEY` and
+      `ANTHROPIC_AUTH_TOKEN` **unset** in the shell that runs `run.sh` (the gate refuses otherwise).
 - [ ] Limits at the top of `run.sh` read and confirmed: `MODEL`, `EFFORT`, `MAX_TURNS`, `MAX_USD` per run,
-      `TOTAL_USD` per run set (#505). They are recorded in `env.json` and printed beside every table.
-- [ ] Steps 1-6 above done; `run.sh --dry-run` shows **no** "would abort" line.
+      `TOTAL_USD` per run set (#505), `AUTH_MODE`. They are recorded in `env.json` and printed beside every table.
+- [ ] Steps 1-7 above done; `run.sh --dry-run` shows **no** "would abort" line.
 - [ ] `--smoke` first (3 tasks × 2 arms × 1 run); read *Arm violations* in the report before the full set.
+- [ ] On `abort: … hit a usage/rate limit`: wait for the reset named in `<task>/<arm>/<n>/result.json`, then
+      `run.sh <run-dir> --resume`.
 - [ ] Never pass `--ignore-preconditions` to `--ap6-plan` for a run that is meant to be scored — the flag exists
       for `--dry-run` on a machine whose graphs are stale.
 - [ ] **Before committing a scored run**: read `git diff bench/golden/ap6/results-C.json` and
@@ -60,11 +108,15 @@ bench/golden/ap6/run.sh --dry-run                      # prints the command line
 bench/golden/ap6/run.sh <run-dir> --smoke              # A-01, B-01, C1-01 × 2 arms × 1 run
 bench/golden/ap6/run.sh <run-dir>                      # the full set: 30 × 2 × 3
 bench/golden/ap6/run.sh <run-dir> --class A            # one class only
+bench/golden/ap6/run.sh <run-dir> --resume             # continue after a session limit / API error (keeps env.json, plan.*)
+bench/golden/ap6/run.sh <run-dir> --auth api           # the billed mode: --bare + ANTHROPIC_API_KEY
 ```
 
 `<run-dir>` must lie outside both repositories (default `C:/Projects/shonkor-bench-runs/ap6/<timestamp>`):
-class-C prompts and streams contain customer names. Re-running with the same directory resumes. The
-run-set cost cap (`TOTAL_USD`) is enforced after every run via `shonkor-bench --ap6-tally`.
+class-C prompts and streams contain customer names. Re-running with the same directory skips runs that are
+a measurement; `--resume` additionally keeps the first invocation's `env.json` and `plan.*` and re-runs the
+attempts that were none (limit, API error, no result). The run-set cost cap (`TOTAL_USD`), the limit stop and
+the redo list all come from `shonkor-bench --ap6-tally` after every run.
 
 After a **smoke** run, read the report's *Arm violations* line before the full set: if Claude Code lists a
 tool in `system/init.tools` that belongs to neither arm (a harness-neutral helper), add its name to
@@ -73,7 +125,8 @@ tool in `system/init.tools` that belongs to neither arm (a harness-neutral helpe
 ## Run directory layout
 
 ```
-env.json                     versions, model, limits, shonkor.dll SHA-256, git HEADs, plugin verify output
+env.json                     versions, model, limits, auth mode, isolation flags, shonkor.dll SHA-256, git HEADs, plugin verify output
+resume.log                   one line per --resume invocation (versions, HEADs at that time); env.json is never rewritten
 plan.tsv / plan.env / plan.json   the tasks to run, the roots and databases (paths — stays out of the repo)
 prompts/<task>.txt           the resolved prompt (class C: real names)
 mcp-brain.json / mcp-corpus.json / mcp-none.json
@@ -81,6 +134,7 @@ mcp-brain.json / mcp-corpus.json / mcp-none.json
 <task>/<arm>/<n>/stderr.log
 <task>/<arm>/<n>/result.json     the last result event (written by --ap6-tally)
 <task>/<arm>/<n>/meta.json       the parsed record + verdict (written by --ap6)
+<task>/<arm>/<n>/*.notrun-<ts>.* an attempt that was no measurement (limit, API error), moved aside by --resume
 ```
 
 ## Scoring
@@ -94,6 +148,10 @@ mcp-brain.json / mcp-corpus.json / mcp-none.json
 - **Connection gate**: a run counts only if `system/init` shows the arm's tool set and, for `mcp`,
   `shonkor` connected (for `rg`, no server connected). Otherwise `armViolation` — listed, not counted.
 - **noAnswer**: no parseable `structured_output` or `schemaVersion ≠ 1` → incorrect.
+- **notRun**: the run ended on the API's or the loop's side — `is_error` with a subtype other than the
+  pinned-limit ones (`error_max_turns`, `error_max_budget_usd`, `error_max_structured_output_retries`), i.e. a
+  failed final request (usage/rate limit, HTTP 429, other API errors), `error_during_execution`, or no
+  `result` event at all → listed with its reason, not counted, never `noAnswer`; `--resume` runs it again.
 - **Majority**: correct in ≥ 2 of 3 scored runs; fewer than 3 scored → `incomplete`, never correct.
 - **Class C**: answers are translated back into tokens through the mapping; unmapped items are counted
   (`unmappedFiles/Symbols`), ambiguous type names flagged; `results-C.json` passes `Ap6Corpus.FindLeaks`
