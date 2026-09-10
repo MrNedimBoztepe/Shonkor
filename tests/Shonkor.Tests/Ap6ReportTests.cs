@@ -19,7 +19,8 @@ public class Ap6ReportTests
     private static readonly Ap6Env Env = new(
         "2026-09-08T00:00:00Z", "2.1.263", "2.1.263", "ripgrep 14.1.0", "claude-test", "high", 25, 2.00, 250, 3, false,
         "<abs-path>", "abc123", "de44654380032c1766d089d859c7e3c86ac79a74", "9d7f9ce", "9d7f9ce", 0, "OK 4 plugins",
-        new Dictionary<string, string> { ["ENABLE_TOOL_SEARCH"] = "false" });
+        new Dictionary<string, string> { ["ENABLE_TOOL_SEARCH"] = "false" },
+        "subscription", "--restricted --strict-mcp-config --disable-slash-commands");
 
     private static Ap6GraphState Graph(string name) =>
         new(name, "de44654380032c1766d089d859c7e3c86ac79a74", "fp", 5, 1000, 2000,
@@ -184,6 +185,43 @@ public class Ap6ReportTests
         var tools = Section(md, "## MCP tools offered");
         foreach (var t in Ap6Fixtures.McpTools) Assert.Contains($"- `{t}`", tools);
         Assert.Contains("> a note", md);
+    }
+
+    [Fact]
+    public void NotRunRuns_AreListedWithTheirReason_NotAsViolations_AndCarriedIntoResultsJson()
+    {
+        var task = Ap6Fixtures.Task("A-01", "A", files: ["src/X/Foo.cs"], symbols: ["Foo"]);
+        var verdicts = new List<Ap6RunVerdict>();
+        for (var run = 1; run <= 3; run++)
+            verdicts.Add(Ap6Scorer.Score(task, "mcp", run, Ap6RunReader.Read(Ap6Fixtures.McpStream(["src/X/Foo.cs"], ["Foo"])), Ap6MatchMode.Recall, Cwd, null));
+        verdicts.Add(Ap6Scorer.Score(task, "rg", 1, Ap6RunReader.Read(Ap6Fixtures.RgStream(["src/X/Foo.cs"], ["Foo"])), Ap6MatchMode.Recall, Cwd, null));
+        verdicts.Add(Ap6Scorer.Score(task, "rg", 2, Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.RgTools), Ap6Fixtures.ResultApiError(429, "You've hit your session limit · resets 4pm"))), Ap6MatchMode.Recall, Cwd, null));
+        var data = new Ap6ReportData
+        {
+            Env = Env, Tasks = [task], Verdicts = verdicts, Outcomes = Ap6Scorer.Outcomes([task], verdicts), Graphs = [Graph("Brain")],
+        };
+
+        var md = Ap6Report.Markdown(data);
+        var a = Section(md, "## Class A");
+        Assert.Contains("Arm violations: none.", a);
+        Assert.Contains("Not run (usage/rate limit or API error — listed, not counted, re-run with `run.sh <run-dir> --resume`): A-01/rg/2: usage/rate limit (HTTP 429): You've hit your session limit · resets 4pm", a);
+        Assert.Contains("| A-01 | rg | 2 | — |", a);
+        Assert.Contains("notRun: usage/rate limit (HTTP 429)", a);
+        Assert.DoesNotContain("noAnswer", a);
+        Assert.Contains("| A-01 | correct (3/3) | incomplete (1/1) |", a);
+        Assert.Contains("| auth mode | `subscription` |", md);
+        Assert.Contains("| isolation flags | `--restricted --strict-mcp-config --disable-slash-commands` |", md);
+
+        using var json = JsonDocument.Parse(Ap6Report.ResultsJson(data, "A"));
+        var root = json.RootElement;
+        Assert.Equal("subscription", root.GetProperty("authMode").GetString());
+        var limited = root.GetProperty("runs").EnumerateArray().Single(r => r.GetProperty("arm").GetString() == "rg" && r.GetProperty("run").GetInt32() == 2);
+        Assert.True(limited.GetProperty("notRun").GetBoolean());
+        Assert.False(limited.GetProperty("scored").GetBoolean());
+        Assert.False(limited.GetProperty("noAnswer").GetBoolean());
+        Assert.False(limited.TryGetProperty("armViolation", out var av) && av.ValueKind != JsonValueKind.Null);
+        Assert.StartsWith("usage/rate limit", limited.GetProperty("notRunReason").GetString());
     }
 
     [Fact]

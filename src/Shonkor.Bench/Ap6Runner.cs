@@ -214,17 +214,30 @@ internal static class Ap6Runner
 
     // ---------- --ap6-tally ----------
 
-    /// <summary>Σ <c>total_cost_usd</c> over every stream so far, writing each run's <c>result.json</c> (its last result event) beside it. The driver reads the one line this prints.</summary>
+    /// <summary>
+    /// Σ <c>total_cost_usd</c> over every stream so far, writing each run's <c>result.json</c> (its last result event)
+    /// beside it. The driver reads the one line this prints: <c>redo=[…]</c> names the runs (<c>task/arm/n</c>) that
+    /// are no measurement (<see cref="Ap6Scorer.NotRunReason"/>: limit hit, API error, no result event) and are run
+    /// again on <c>--resume</c>; <c>limit=[…]</c> is the subset that hit a usage/rate limit — the driver stops the set on it.
+    /// </summary>
     public static int Tally(string runDir, TextWriter console)
     {
         var dir = Path.GetFullPath(runDir);
         if (!Directory.Exists(dir)) { console.WriteLine($"[Error] run directory not found at '{dir}'."); return 1; }
         double cost = 0; int runs = 0, withoutResult = 0;
-        foreach (var stream in Directory.EnumerateFiles(dir, "stream.jsonl", SearchOption.AllDirectories))
+        var redo = new List<string>(); var limit = new List<string>();
+        foreach (var stream in Directory.EnumerateFiles(dir, "stream.jsonl", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
         {
             runs++;
             var text = File.ReadAllText(stream);
             var record = Ap6RunReader.Read(text);
+            var reason = Ap6Scorer.NotRunReason(record);
+            if (reason is not null)
+            {
+                var key = Fwd(Path.GetRelativePath(dir, Path.GetDirectoryName(stream)!));
+                redo.Add(key);
+                if (Ap6Scorer.IsLimitReason(reason)) limit.Add(key);
+            }
             if (!record.SawResult) { withoutResult++; continue; }
             cost += record.CostUsd;
             var resultPath = Path.Combine(Path.GetDirectoryName(stream)!, "result.json");
@@ -234,7 +247,7 @@ internal static class Ap6Runner
                 if (last is not null) File.WriteAllText(resultPath, last + "\n");
             }
         }
-        console.WriteLine($"runs={runs} cost_usd={cost.ToString("0.0000", CultureInfo.InvariantCulture)} without_result={withoutResult}");
+        console.WriteLine($"runs={runs} cost_usd={cost.ToString("0.0000", CultureInfo.InvariantCulture)} without_result={withoutResult} redo=[{string.Join(",", redo)}] limit=[{string.Join(",", limit)}]");
         return 0;
     }
 

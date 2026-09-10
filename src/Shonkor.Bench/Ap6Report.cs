@@ -27,11 +27,13 @@ internal sealed record Ap6Env(
     string? CorpusRevision,
     int? PluginVerifyExit,
     string? PluginVerifyOutput,
-    Dictionary<string, string>? EnvFlags)
+    Dictionary<string, string>? EnvFlags,
+    string? AuthMode,
+    string? IsolationFlags)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     public static Ap6Env Parse(string json) => JsonSerializer.Deserialize<Ap6Env>(json, JsonOptions) ?? Empty;
-    public static readonly Ap6Env Empty = new(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+    public static readonly Ap6Env Empty = new(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 }
 
 /// <summary>One graph's identity at scoring time — the Meta stamps and the edge census per <c>ProvenanceReason</c>.</summary>
@@ -115,6 +117,8 @@ internal static class Ap6Report
         sb.AppendLine($"| rg | `{e.RgVersion ?? "?"}` |");
         sb.AppendLine($"| model | `{e.Model ?? "?"}` |");
         sb.AppendLine($"| effort | `{e.Effort ?? "?"}` |");
+        sb.AppendLine($"| auth mode | `{e.AuthMode ?? "?"}` |");
+        sb.AppendLine($"| isolation flags | `{e.IsolationFlags ?? "?"}` |");
         sb.AppendLine($"| shonkor.dll SHA-256 | `{e.ShonkorDllSha256 ?? "?"}` |");
         sb.AppendLine($"| Brain HEAD | `{e.BrainHead ?? "?"}` |");
         sb.AppendLine($"| corpus HEAD | `{e.CorpusHead ?? "?"}` |");
@@ -196,10 +200,13 @@ internal static class Ap6Report
             sb.AppendLine($"| {o.TaskId} | {Majority(o.Mcp)} | {Majority(o.Rg)} |");
         sb.AppendLine();
 
-        var violations = d.Verdicts.Where(v => v.Class == cls && !v.Scored).ToList();
+        var violations = d.Verdicts.Where(v => v.Class == cls && v.ArmViolation is not null).ToList();
         sb.AppendLine(violations.Count == 0
             ? "Arm violations: none."
             : "Arm violations (listed, not counted): " + string.Join("; ", violations.Select(v => $"{v.TaskId}/{v.Arm}/{v.Run}: {v.ArmViolation}")));
+        var notRun = d.Verdicts.Where(v => v.Class == cls && v.NotRun).ToList();
+        if (notRun.Count > 0)
+            sb.AppendLine("Not run (usage/rate limit or API error — listed, not counted, re-run with `run.sh <run-dir> --resume`): " + string.Join("; ", notRun.Select(v => $"{v.TaskId}/{v.Arm}/{v.Run}: {v.NotRunReason}")));
         var missing = d.MissingRuns.Where(m => tasks.Any(t => t.Id == m.Split('/')[0])).ToList();
         if (missing.Count > 0) sb.AppendLine($"Missing runs (no stream.jsonl): {string.Join(", ", missing)}.");
         sb.AppendLine();
@@ -238,7 +245,8 @@ internal static class Ap6Report
     private static string Flags(Ap6RunVerdict v)
     {
         var flags = new List<string>();
-        if (!v.Scored) flags.Add($"armViolation: {v.ArmViolation}");
+        if (v.ArmViolation is not null) flags.Add($"armViolation: {v.ArmViolation}");
+        if (v.NotRun) flags.Add($"notRun: {v.NotRunReason}");
         if (v.NoAnswer) flags.Add("noAnswer");
         if (v.IsError) flags.Add("isError");
         if (v.MissingFiles > 0) flags.Add($"missingFiles {v.MissingFiles}");
@@ -264,6 +272,8 @@ internal static class Ap6Report
             runDir = d.RunDirName,
             generatedAt = d.GeneratedAt,
             limits = new { model = e.Model, effort = e.Effort, maxTurns = e.MaxTurns, maxUsdPerRun = e.MaxUsdPerRun, runSetUsdCap = e.RunSetUsdCap, runsPerArm = e.RunsPerArm },
+            authMode = e.AuthMode,
+            isolationFlags = e.IsolationFlags,
             versions = new { claude = e.ClaudeVersion, rg = e.RgVersion, shonkorDllSha256 = e.ShonkorDllSha256, brainHead = e.BrainHead, corpusHead = e.CorpusHead, corpusRevision = e.CorpusRevision },
             graph = d.Graphs.FirstOrDefault(g => g.Name == (cls == "C" ? "Corpus-A" : "Brain")),
             mcpToolsOffered = d.McpToolsOffered,
@@ -271,7 +281,7 @@ internal static class Ap6Report
                 .Select(v => new
                 {
                     task = v.TaskId, arm = v.Arm, run = v.Run,
-                    scored = v.Scored, armViolation = v.ArmViolation,
+                    scored = v.Scored, armViolation = v.ArmViolation, notRun = v.NotRun, notRunReason = v.NotRunReason,
                     correct = v.Correct, noAnswer = v.NoAnswer, overSelect = v.OverSelect,
                     missingFiles = v.MissingFiles, missingSymbols = v.MissingSymbols, ambiguousSymbols = v.AmbiguousSymbols,
                     unmappedFiles = v.UnmappedFiles, unmappedSymbols = v.UnmappedSymbols,

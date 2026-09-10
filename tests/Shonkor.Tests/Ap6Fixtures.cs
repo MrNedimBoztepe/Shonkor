@@ -76,6 +76,24 @@ internal static class Ap6Fixtures
             permission_denials = Enumerable.Range(0, denials).Select(_ => new { tool_name = "Bash" }).ToArray(),
         });
 
+    /// <summary>
+    /// The result of a run whose final API request failed (SDK reference: subtype <c>success</c>, <c>is_error</c> true,
+    /// <c>api_error_status</c> set, <c>result</c> holding the API error string, <c>terminal_reason</c> <c>api_error</c>).
+    /// </summary>
+    public static string ResultApiError(int status, string text, double cost = 0.01, int turns = 2) =>
+        JsonSerializer.Serialize(new
+        {
+            type = "result", subtype = "success", is_error = true, api_error_status = status, result = text, terminal_reason = "api_error",
+            total_cost_usd = cost, duration_ms = 500, num_turns = turns, permission_denials = Array.Empty<object>(),
+        });
+
+    /// <summary>The result of a run the loop ended itself: an <c>error_*</c> subtype with its <c>errors[]</c> (no <c>result</c> text).</summary>
+    public static string ResultLoopError(string subtype, params string[] errors) =>
+        JsonSerializer.Serialize(new
+        {
+            type = "result", subtype, is_error = true, errors, total_cost_usd = 0.02, duration_ms = 700, num_turns = 4, permission_denials = Array.Empty<object>(),
+        });
+
     public static object Answer(string[] files, string[] symbols, int version = 1) => new { schemaVersion = version, files, symbols };
 
     public static string Stream(params string[] events) => string.Join("\n", events) + "\n";

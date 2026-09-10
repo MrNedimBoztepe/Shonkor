@@ -41,8 +41,10 @@
 //                                      the resolved prompts into <run-dir>. Needs no database argument (the
 //                                      graphs are found through projects.json). Exits 1 when a precondition fails.
 //   shonkor-bench --ap6-tally <run-dir>
-//                                      Σ total_cost_usd over the streams recorded so far (+ result.json per run);
-//                                      run.sh reads it to enforce the run-set cost cap.
+//                                      Σ total_cost_usd over the streams recorded so far (+ result.json per run),
+//                                      plus redo=[…] (runs that are no measurement: limit hit, API error, no
+//                                      result) and limit=[…]; run.sh reads it for the cost cap, the limit stop
+//                                      and --resume.
 //   shonkor-bench <brain.db> --ap6 <run-dir> [--db-c <corpus.db>] [--ap6-match recall|exact]
 //                                      AP6 step 3: score every stream in <run-dir> against tasks.json, write
 //                                      bench/ap6-part1-report.md + bench/golden/ap6/results-<class>.json.
