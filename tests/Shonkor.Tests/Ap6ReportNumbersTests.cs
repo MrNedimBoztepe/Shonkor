@@ -79,6 +79,10 @@ public class Ap6ReportNumbersTests
         var root = doc.RootElement;
         var section = Section(File.ReadAllText(ReportPath), $"## Class {cls} —");
 
+        // The one-way door is only shut if a reader checks it (#514): `toolCallCount` and `bashNonRg` are
+        // read below under names that mean something different in v1, so a v1 file must fail here rather
+        // than be compared as if the numbers were the same measurement.
+        Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
         Assert.Contains($"match mode `{root.GetProperty("matchMode").GetString()}`", section);
         foreach (var run in root.GetProperty("runs").EnumerateArray())
         {

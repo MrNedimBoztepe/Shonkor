@@ -217,10 +217,21 @@ internal static class Ap6Anonymiser
     /// harness's own <c>armViolation</c> / <c>notRunReason</c> texts are built from. A word first seen in a
     /// corpus does not belong here no matter how generic it looks.</para>
     ///
-    /// <para>Most of the surface is derived rather than listed: schema keys never reach the classifier (only
-    /// JSON <i>values</i> do), tokens and placeholders are recognised structurally
-    /// (<see cref="TokenKinds"/>, <see cref="Placeholders"/>), and the tool name of the call is allowed by
-    /// <see cref="RedactToolInput"/> itself. What is left is this handful.</para>
+    /// <para>Most of the surface is derived rather than listed: tokens and placeholders are recognised
+    /// structurally (<see cref="TokenKinds"/>, <see cref="Placeholders"/>) and tool <i>names</i> are judged
+    /// by <see cref="IsOwnToolName"/> rather than word by word. What is left is this handful.</para>
+    ///
+    /// <para><b>Not</b> derived from the call: #514 removed a per-call extension by which every word of the
+    /// tool's own name was allowed inside that call's string values. It let a model-supplied name widen the
+    /// allow-list, and — worse — it was an extension layer 1 had and layer 2 did not, so a value containing
+    /// e.g. "locate" passed the transform and was then reported as a leak by the check, after the runs were
+    /// paid for. One predicate, no per-call parameters; a value that echoes a tool name is over-redacted,
+    /// which is the direction this list is allowed to fail in.</para>
+    ///
+    /// <para><b>Known limit:</b> a string with no ASCII letters (a bare number, an IP address) carries no
+    /// word for the classifier to judge and is written as it stands. It names nobody in a code-search
+    /// corpus, and making digits a word would blank the harness's own counts; see the follow-up issue
+    /// linked from #511 rather than widening this list to compensate.</para>
     /// </summary>
     public static readonly string[] AllowedWords =
     [
@@ -259,7 +270,12 @@ internal static class Ap6Anonymiser
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-    /// <summary>The predicate both layers share: layer 1 (<see cref="RedactToolInput"/>) makes it true, layer 2 (<see cref="Ap6Corpus.FindResultsLeaks"/>) checks that it is.</summary>
+    /// <summary>
+    /// The predicate both layers share, with no per-call variation of any kind: layer 1
+    /// (<see cref="RedactToolInput"/>, <see cref="RedactText"/>) makes it true, layer 2
+    /// (<see cref="Ap6Corpus.FindResultsLeaks"/>) checks that it is. Anything one layer allows and the other
+    /// does not is a run-set thrown away after it was paid for, which is what #514 found here.
+    /// </summary>
     public static bool IsAllowedString(string text) => DisallowedWords(text).Count == 0;
 
     /// <summary>
@@ -268,8 +284,7 @@ internal static class Ap6Anonymiser
     /// word that survived and is not allow-listed becomes <see cref="Redacted"/>. <paramref name="changed"/>
     /// says whether anything was blanked in the second step, which is what the row's <c>redactedStrings</c> counts.
     /// </summary>
-    /// <param name="alsoAllowed">Words allowed on top of <see cref="AllowedWords"/> for this call only — the tool's own name, nothing that came out of a corpus.</param>
-    public static string RedactText(string text, Ap6Mapping mapping, out bool changed, IReadOnlyCollection<string>? alsoAllowed = null)
+    public static string RedactText(string text, Ap6Mapping mapping, out bool changed)
     {
         var mapped = RedactArgument(text, mapping);
         var blanked = false;
@@ -277,7 +292,7 @@ internal static class Ap6Anonymiser
         {
             if (m.Groups["keep"].Success) return m.Value;
             var word = m.Groups["word"].Value;
-            if (AllowedWordSet.Contains(word) || (alsoAllowed is not null && alsoAllowed.Contains(word, StringComparer.OrdinalIgnoreCase))) return word;
+            if (AllowedWordSet.Contains(word)) return word;
             blanked = true;
             return Redacted;
         });
@@ -295,11 +310,16 @@ internal static class Ap6Anonymiser
     /// subtractions — corpus root, mapping entries, GUIDs, deny words — and therefore only ever as good as
     /// its list of things to remove; the first smoke run wrote three customer identifiers into
     /// <c>results-C.json</c> because none of them was on any of those lists. This walks the JSON and emits a
-    /// new document: numbers, booleans and nulls pass (they name nobody), object keys pass (they are the
-    /// tool's schema, written by us), and every string <i>value</i> must earn its way out through
-    /// <see cref="RedactText"/>. A JSON kind it does not know becomes <see cref="Redacted"/>, and input that
-    /// does not parse becomes <see cref="Redacted"/> whole — an unparseable input is exactly the case where
-    /// a subtractive redaction would have guessed.
+    /// new document: numbers, booleans and nulls pass (they name nobody), and every string — value
+    /// <b>and object key</b> — must earn its way out through <see cref="RedactText"/>. A JSON kind it does
+    /// not know becomes <see cref="Redacted"/>, and input that does not parse becomes <see cref="Redacted"/>
+    /// whole — an unparseable input is exactly the case where a subtractive redaction would have guessed.
+    ///
+    /// <para>Keys used to pass untouched as "the tool's schema, written by us". They are not: the model
+    /// writes the input object, so it can put a name in a key as easily as in a value, and a key was
+    /// visited by neither layer (#514). Judging them costs readability where a schema key is not
+    /// allow-listed vocabulary — the row still shows the shape and the values — and it keeps one predicate
+    /// for every string in the file.</para>
     /// </summary>
     /// <remarks>
     /// The result is a JSON string <i>inside</i> the results document, so the outer serialiser escapes it a
@@ -309,11 +329,9 @@ internal static class Ap6Anonymiser
     /// have to know about. Relaxed here means "not escaped twice", not "not escaped".
     /// </remarks>
     /// <param name="inputJson">The raw <c>tool_use.input</c> JSON as the stream carried it.</param>
-    /// <param name="toolName">The call's tool name; its own words are allowed, since we chose them.</param>
-    /// <returns>The rebuilt JSON text and how many string values were blanked.</returns>
-    public static (string Json, int Redacted) RedactToolInput(string inputJson, string toolName, Ap6Mapping mapping)
+    /// <returns>The rebuilt JSON text and how many strings were blanked.</returns>
+    public static (string Json, int Redacted) RedactToolInput(string inputJson, Ap6Mapping mapping)
     {
-        var toolWords = AllowedWord.Matches(toolName).Where(m => m.Groups["word"].Success).Select(m => m.Groups["word"].Value).ToList();
         var count = 0;
         JsonDocument doc;
         try { doc = JsonDocument.Parse(inputJson); }
@@ -331,7 +349,13 @@ internal static class Ap6Anonymiser
             {
                 case JsonValueKind.Object:
                     w.WriteStartObject();
-                    foreach (var p in e.EnumerateObject()) { w.WritePropertyName(p.Name); Write(p.Value, w); }
+                    foreach (var p in e.EnumerateObject())
+                    {
+                        var key = RedactText(p.Name, mapping, out var keyChanged);
+                        if (keyChanged) count++;
+                        w.WritePropertyName(key);
+                        Write(p.Value, w);
+                    }
                     w.WriteEndObject();
                     break;
                 case JsonValueKind.Array:
@@ -340,8 +364,7 @@ internal static class Ap6Anonymiser
                     w.WriteEndArray();
                     break;
                 case JsonValueKind.String:
-                    // The tool's own name is ours; a value echoing it is not a customer word.
-                    var text = RedactText(e.GetString() ?? string.Empty, mapping, out var changed, toolWords);
+                    var text = RedactText(e.GetString() ?? string.Empty, mapping, out var changed);
                     if (changed) count++;
                     w.WriteStringValue(text);
                     break;
@@ -360,6 +383,59 @@ internal static class Ap6Anonymiser
             }
         }
     }
+
+    /// <summary>
+    /// Layer 1 for a whole run's calls: every name through <see cref="RedactToolName"/>, every input through
+    /// <see cref="RedactToolInput"/>. One place, because the runner and the report tests both need it and a
+    /// second copy of the loop is a second chance to forget one of the two halves.
+    /// </summary>
+    /// <returns>The redacted calls and how many strings were blanked, for the row's <c>redactedStrings</c>.</returns>
+    public static (List<Ap6ToolCall> Calls, int Redacted) RedactCalls(
+        IEnumerable<Ap6ToolCall> calls, IReadOnlyCollection<string> offeredTools, Ap6Mapping mapping)
+    {
+        var result = new List<Ap6ToolCall>();
+        var redacted = 0;
+        foreach (var c in calls)
+        {
+            var (input, n) = RedactToolInput(c.Input, mapping);
+            var name = RedactToolName(c.Name, offeredTools);
+            if (name != c.Name) redacted++;
+            redacted += n;
+            result.Add(new Ap6ToolCall(name, input));
+        }
+        return (result, redacted);
+    }
+
+    /// <summary>
+    /// The shape of a tool name this harness itself offered: a built-in of the two arms
+    /// (<see cref="Ap6Scorer.RgArmTools"/>, <see cref="Ap6Scorer.AnswerTool"/>) or one of Shonkor's own MCP
+    /// tools. Names are judged as names, not word by word: <c>mcp__shonkor__find_usages</c> is our spelling
+    /// of our tool, and allow-listing "usages" as a word would let it through in every customer string too.
+    /// </summary>
+    public static bool IsOwnToolName(string name) =>
+        Ap6Scorer.RgArmTools.Contains(name, StringComparer.Ordinal)
+        || name == Ap6Scorer.AnswerTool
+        || OwnMcpToolName.IsMatch(name);
+
+    private static readonly Regex OwnMcpToolName =
+        new($@"^{Regex.Escape(Ap6Scorer.McpToolPrefix)}[a-z][a-z0-9_]*$", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A class-C tool-call <b>name</b>, safe to write (#514). The name came out of the stream and was
+    /// written into <c>results-C.json</c> raw: neither redacted nor checked, so a name the model invented
+    /// would have been published verbatim.
+    ///
+    /// <para>Two conditions, because the two layers can verify different things. Here the name must also
+    /// have been <paramref name="offeredTools"/> — <c>system/init.tools</c>, which is our configuration and
+    /// not the model's text — so nothing invented can survive. <see cref="Ap6Corpus.FindResultsLeaks"/>
+    /// cannot see that list in the finished file and therefore checks the part that is written down, the
+    /// shape. Layer 1 is the tight one; layer 2 is the net under it, as everywhere else here.</para>
+    ///
+    /// <para>A foreign tool the arm was somehow offered (which voids the run anyway) comes out
+    /// <see cref="Redacted"/>: the run's own <c>meta.json</c>, outside both repositories, keeps the name.</para>
+    /// </summary>
+    public static string RedactToolName(string name, IReadOnlyCollection<string> offeredTools) =>
+        IsOwnToolName(name) && offeredTools.Contains(name, StringComparer.Ordinal) ? name : Redacted;
 
     /// <summary>
     /// The mapping-free part of the redaction: Sitecore item paths, GUIDs and any absolute path under the

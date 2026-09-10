@@ -250,7 +250,8 @@ internal static class Ap6Report
     public static string LimitsLine(Ap6Env e, Ap6MatchMode mode) =>
         $"Model `{e.Model ?? "?"}`, effort `{e.Effort ?? "?"}`, max turns {(e.MaxTurns?.ToString(Inv) ?? "?")}, max USD per run {(e.MaxUsdPerRun?.ToString("0.00", Inv) ?? "?")}, run-set USD cap {(e.RunSetUsdCap?.ToString("0.00", Inv) ?? "?")}, runs per arm {(e.RunsPerArm?.ToString(Inv) ?? "?")}, match mode `{mode}`."
         + $" Permission rules: {e.PermissionRules ?? "?"}. Hooks: {e.Hooks ?? "?"}."
-        + $" `toolCalls` counts research steps only — the `{Ap6Scorer.AnswerTool}` emission is the answer channel, not a step, and is excluded in both arms.";
+        + $" `toolCalls` counts research steps only — the `{Ap6Scorer.AnswerTool}` emission is the answer channel, not a step, and is excluded in both arms."
+        + " It does include calls the hook REFUSED (`bashNonRgDenied`): the arm spent the turn either way, so the tool-economy figure of the rg arm carries the cost of its own guard.";
 
     private static string Majority(Ap6ArmOutcome o) =>
         $"{o.Majority.ToString().ToLowerInvariant()} ({o.CorrectRuns}/{o.ScoredRuns})";

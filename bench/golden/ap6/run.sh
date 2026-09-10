@@ -200,10 +200,23 @@ ISOLATION_TEXT="${ISOLATION[*]}"
 # beside every class table, because a purity claim nobody can read back is not evidence.
 RG_HOOK="$HERE/rg-only-hook.sh"
 [ -f "$RG_HOOK" ] || gate_fail "rg-only-hook.sh missing next to run.sh — the rg arm has nothing keeping it inside ripgrep"
+# Hooks are fail-OPEN by documentation: a path that does not resolve, a script that is not executable, an
+# exit code other than 2 — the call runs. Existence therefore proves nothing; the hook is run here, on a
+# payload it must refuse, and the run set does not start unless it does (#514). Three lines against a lost
+# set of paid runs, and against the silent version of the #513 defect: a hook that never fires looks exactly
+# like an arm that behaved.
+HOOK_SELFTEST_EXIT=0
+printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"grep -rn x ."}}' \
+  | bash "$RG_HOOK" >/dev/null 2>&1 || HOOK_SELFTEST_EXIT=$?
+[ "$HOOK_SELFTEST_EXIT" -eq 2 ] || gate_fail "the rg-only hook did not block a grep command (exit $HOOK_SELFTEST_EXIT, expected 2) — hooks fail open, so the rg arm would run unguarded. Check that node is on PATH and run bash $HERE/rg-only-hook.test.sh"
+# ripgrep reads a config file from RIPGREP_CONFIG_PATH, and that file may contain --pre (a preprocessor
+# command). The hook vets the command text, not the environment, so the variable is taken out of the runs'
+# environment rather than trusted to be unset (#514).
+unset RIPGREP_CONFIG_PATH
 MCP_DENY="Bash Read Grep Glob Edit Write WebFetch WebSearch"
 RG_DENY="mcp__*"
 PERMISSION_RULES="mcp arm: --tools '' --allowedTools 'mcp__shonkor__*' --disallowedTools '$MCP_DENY'; rg arm: --tools 'Bash,Read' --allowedTools 'Bash(rg *)' --disallowedTools '$RG_DENY'"
-HOOKS_TEXT="rg arm: PreToolUse(Bash) -> rg-only-hook.sh (exit 2 unless the command is one plain rg call, no shell separators); mcp arm: none"
+HOOKS_TEXT="rg arm: PreToolUse(Bash) -> rg-only-hook.sh (exit 2 unless the command is one plain rg call: no UNQUOTED shell separator or expansion, no --pre/-z/--hostname-bin; verified against a grep payload before the set starts); mcp arm: none"
 # Written on every invocation, --resume included: these are inputs to the runs, not the set's record (that is
 # env.json, which --resume keeps). A resume whose settings file was missing would run an rg arm with no hook.
 # A settings FILE, not inline JSON: the hook command carries a path with slashes and quoting it inline is

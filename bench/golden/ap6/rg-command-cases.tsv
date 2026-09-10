@@ -1,0 +1,81 @@
+# rg-command-cases.tsv — the ONE case table for "is this one plain ripgrep command?" (#513, #511/#514).
+#
+# Two implementations enforce that rule: the PreToolUse hook (rg-only-hook.sh) decides what the rg arm may
+# EXECUTE, and Ap6RunReader.IsRgCommand decides what a run is JUDGED as. Where the two disagree, a command
+# either runs and is then scored as clean, or is refused and still counted against the arm — three such
+# divergences were measured before this file existed. Prose cannot hold them together, so both read this
+# table: rg-only-hook.test.sh replays every row through the real hook, Ap6RunReaderTests through
+# IsRgCommand. Add a case here, in one place, and both sides are held to it.
+#
+# Format: <command><TAB>allow|deny. Lines starting with '#' and empty lines are ignored. Fields are split on
+# the FIRST tab, so an empty command (first field empty) is a legal row.
+# Escapes, decoded identically on both sides — and ONLY these, so that an unknown escape is a test failure
+# rather than two different readings:  \\  \t  \n  \r  \v  \f  \uXXXX
+#
+# Payload-level cases (a hook payload that is not JSON, or that carries no command at all) have no command
+# text and cannot live in this table; rg-only-hook.test.sh asserts them separately, and the JsonElement
+# overload of IsRgCommand is tested for the same shapes.
+
+# ---------- allowed: one plain rg call, however it names rg ----------
+rg -n Foo src	allow
+rg	allow
+/usr/bin/rg Foo	allow
+C:/tools/rg.exe -n Foo	allow
+./rg Foo	allow
+"rg" -n Foo src	allow
+rg --files	allow
+rg -n Foo --glob *.cs	allow
+
+# ---------- allowed: shell metacharacters that are QUOTED are pattern text, not shell (#514) ----------
+# The quote-blind rule this replaces refused these and cost the arm turns for its own alternations, which
+# inflated toolCallCount in the arm the measurement compares against.
+rg -n "a|b" src	allow
+rg -n 'a|b' src	allow
+rg -n "Foo\\.(A|B|C)" src	allow
+rg -n foo\\|bar src	allow
+rg -n "class Foo$" src	allow
+rg -n "say \\"hi\\"" src	allow
+rg -n 'a>b' src	allow
+# PARSE-ERROR is ordinary text; the old hook refused it because it scanned for its own sentinel (#514).
+rg -n PARSE-ERROR src	allow
+# 0x0B/0x0C separate words for `[[:space:]]`, which is the word boundary both sides now use.
+rg\vfoo	allow
+rg\ffoo	allow
+
+# ---------- denied: not ripgrep ----------
+grep -rn Foo src	deny
+cat src/A.cs	deny
+sh -c "rg Foo src"	deny
+bash -c "rg Foo src"	deny
+xargs rg Foo	deny
+PATH=/x rg Foo	deny
+RG=rg $RG Foo	deny
+RG -n Foo src	deny
+# U+00A0 is not a space, so the command word is literally "<nbsp>rg" — which is not ripgrep.
+\u00a0rg Foo	deny
+
+# ---------- denied: a second, unvetted command behind the rg one ----------
+	deny
+rg --files | head	deny
+rg -n "a|b" src | wc -l	deny
+ls src && rg Foo	deny
+rg -n Foo src > out.txt	deny
+rg -n "Foo" 2>/dev/null	deny
+rg -n Foo src &	deny
+rg -n Foo src ; ls	deny
+rg -n $(cat pattern.txt) src	deny
+rg -n `cat pattern.txt` src	deny
+rg -n "$PATTERN" src	deny
+rg -n "${PATTERN}" src	deny
+rg -n Foo\nls	deny
+rg -n "unterminated src	deny
+rg -n Foo src\\	deny
+
+# ---------- denied: rg flags that run a program (#514, blocker 3) ----------
+rg --pre /bin/sh --pre-glob '*' Foo	deny
+rg --pre=/bin/sh Foo	deny
+rg --pre-glob *.gz Foo	deny
+rg -z Foo src	deny
+rg -nz Foo src	deny
+rg --search-zip Foo src	deny
+rg --hostname-bin /bin/sh Foo	deny

@@ -244,6 +244,17 @@ internal static class Ap6Scorer
                 if (foreign.Count > 0) return $"init.tools has tool(s) outside Bash/Read: {string.Join(", ", foreign)}";
                 var missing = RgArmTools.Where(t => !r.InitTools.Contains(t, StringComparer.Ordinal)).ToList();
                 if (missing.Count > 0) return $"init.tools lacks {string.Join(", ", missing)}";
+                // The call level, symmetric to the mcp arm's: a tool that was offered but is not this arm's
+                // is caught above only if init.tools carried it. A call to anything else is caught here.
+                var offArm = r.ToolCalls.Where(c => !RgArmTools.Contains(c.Name, StringComparer.Ordinal))
+                    .Select(c => c.Name).Distinct(StringComparer.Ordinal).ToList();
+                if (offArm.Count > 0) return $"rg arm called tool(s) outside Bash/Read: {string.Join(", ", offArm)}";
+                // The denial bookkeeping rests on permission_denials[].tool_use_id, which MIN_CLAUDE only
+                // sets a lower bound on. If a later CLI stops emitting the id, every refused call looks
+                // executed and every guarded run would be voided with "executed N non-rg Bash command(s)" —
+                // a true-sounding sentence about something that did not happen. Say what was actually seen.
+                if (r.PermissionDenials > 0 && r.BashNonRgDenied == 0 && r.BashNonRg > 0)
+                    return $"rg arm: {r.PermissionDenials} permission denial(s) could not be attributed to any of its {r.BashNonRg} non-rg Bash call(s) — whether they ran is unknown, so the run is not counted";
                 return r.BashNonRg > 0 ? $"rg arm executed {r.BashNonRg} non-rg Bash command(s)" : null;
             }
             default:

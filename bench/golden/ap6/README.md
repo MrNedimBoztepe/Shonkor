@@ -12,7 +12,9 @@ no aggregate across classes) and `results-<class>.json` beside this file (pinned
 | `answer-schema.json` | the structured output both arms must emit: `{schemaVersion: 1, files: string[], symbols: string[]}` |
 | `prompt-template.txt` | the prompt both arms receive (`{query}` + the same instruction) |
 | `mcp-brain.template.json`, `mcp-corpus.template.json`, `mcp-none.json` | MCP config templates; `run.sh` fills the paths and writes them into the run directory |
-| `rg-only-hook.sh` | the rg arm's `PreToolUse(Bash)` hook: exit 2 for anything that is not one plain `rg` command (#513). Its definition of "an rg command" and `Ap6RunReader.IsRgCommand` are one rule with two implementations — change both or neither. |
+| `rg-only-hook.sh` | the rg arm's `PreToolUse(Bash)` hook: exit 2 for anything that is not one plain `rg` command (#513). Its definition of "an rg command" and `Ap6RunReader.IsRgCommand` are one rule with two implementations — held together by the case table below, not by good intentions. |
+| `rg-command-cases.tsv` | that case table: `<command><TAB>allow|deny`. Read by `rg-only-hook.test.sh` (the real hook) and by `Ap6RunReaderTests` (`IsRgCommand`). A new rule belongs here first. |
+| `rg-only-hook.test.sh` | replays the table through the hook; also run from the suite (`Ap6RgOnlyHookTests`, needs bash + node). |
 | `results-<class>.json` | the pinned numbers of the last scored run (written by `--ap6`; absent until a run exists) |
 | `scripts/` | the corpus generators of #466 |
 
@@ -92,14 +94,31 @@ event's `permission_denials` with its `tool_use_id`.
 | `mcp` | `--tools ""`, `--allowedTools "mcp__shonkor__*"` | `Bash Read Grep Glob Edit Write WebFetch WebSearch` | none |
 | `rg` | `--tools "Bash,Read"`, `--allowedTools "Bash(rg *)"` | `mcp__*` | `PreToolUse(Bash)` → `rg-only-hook.sh` |
 
-What the hook lets through is **one plain rg command**: first word names `rg` (bare or as a path), and no
-shell separator anywhere (`|`, `&`, `;`, `<`, `>`, backtick, `$(`, newline). That is deliberately strict —
-a pattern with alternation (`rg "a|b"`) is refused too, and the denial message says so, so the arm can
-re-issue it as separate calls. Blocking too much costs a denial; blocking too little costs the measurement.
+What the hook lets through is **one plain rg command**, in three parts:
 
-`Ap6RunReader.IsRgCommand` carries **exactly** that definition. One idea of "an rg command", two
-implementations that must agree: if the hook let something through that the reader counted as rg, a grep
-would execute and be scored as clean.
+1. **no second command.** The text is scanned quote-aware: an **unquoted** `|`, `&`, `;`, `<`, `>`, a
+   backtick or an expansion (`$(`, `${`, `$VAR` — those two also inside double quotes, where they still act),
+   a newline, unbalanced quoting or a trailing backslash blocks the call. A metacharacter **inside quotes**
+   is pattern text: `rg -n "a|b" src` runs, `rg --files | head` does not.
+2. **it is ripgrep.** The first word, quotes stripped, must have the basename `rg` (or `rg.exe`).
+3. **it may not run a program itself.** `--pre`, `--pre-glob`, `-z`/`--search-zip` (also bundled, `-nz`) and
+   `--hostname-bin` make ripgrep spawn another process — `rg --pre /bin/sh --pre-glob '*' x` is a shell in
+   one plain rg command (#514). `RIPGREP_CONFIG_PATH`, which could smuggle the same flags in through a file,
+   is unset by `run.sh` before the arms start.
+
+Part 1 used to be quote-blind, and that was not a cosmetic strictness: a refused call still counts in
+`toolCallCount`, so refusing the rg arm's own alternations inflated the tool-economy figure of the arm the
+measurement compares — in the direction that flatters the hypothesis (#514). Blocking too much is not free.
+
+`Ap6RunReader.IsRgCommand` carries **exactly** that definition — and no longer only because a comment says
+so: `rg-command-cases.tsv` is the single case table, replayed against the real hook by `rg-only-hook.test.sh`
+and against `IsRgCommand` by `Ap6RunReaderTests`. Three cases had already drifted apart when it was written.
+Change the rule in one place only and a test fails; before, a grep would simply have executed and been
+scored as clean.
+
+Hooks are **fail-open** — a path that does not resolve, a script that is not executable, an exit code other
+than 2, and the call runs. So `run.sh`'s env gate does not check that the hook exists; it feeds it a `grep`
+payload and refuses to start the set unless the hook answers with exit 2.
 
 Counting and refusing are then kept apart:
 
@@ -110,7 +129,13 @@ Counting and refusing are then kept apart:
   would discard exactly the runs that prove the guard worked — and below three scored runs a task drops out
   of the majority entirely.
 - A denial that cannot be attributed to a call (no `tool_use_id`) leaves the call counted as executed: the
-  run is voided rather than trusted.
+  run is voided rather than trusted — but with its **own** reason (#514). The whole mechanism rests on
+  `permission_denials[].tool_use_id`, and `MIN_CLAUDE` is only a lower bound: if a later CLI stopped emitting
+  the id, every guarded run would be voided as "executed N non-rg Bash command(s)", a true-sounding sentence
+  about something that did not happen.
+- A **refused** call still counts in `toolCallCount`: the arm spent the turn on it either way. The rg arm's
+  tool-economy figure therefore carries the cost of its own guard, which is why the rule is no stricter than
+  it has to be (#514) and why the limits line beside every class table says so.
 
 **Session limits.** The subscription has rolling usage windows ("You've hit your session limit · resets 4pm",
 HTTP 429 — [errors doc](https://code.claude.com/docs/en/errors)). A run that ends on one comes back as a
@@ -213,10 +238,22 @@ mcp-brain.json / mcp-corpus.json / mcp-none.json
 - **Class C — redact by default (#511)**: answers are translated back into tokens through the mapping;
   unmapped items are counted (`unmappedFiles/Symbols`), ambiguous type names flagged. Everything else a
   class-C run produced is **rebuilt, not filtered**: `Ap6Anonymiser.RedactToolInput` walks each tool input's
-  JSON and emits a new one — numbers, booleans and schema keys pass, and every string *value* must come out
-  as a mapping token, a placeholder (`<corpus>`, `<guid>`, `<item-path>`, `<abs-path>`, `<redacted>`) or
-  allow-listed vocabulary. `notRunReason` (raw API error text) and `armViolation` go through the same
-  predicate. `redactedStrings` per row says how many strings were blanked, so over-redaction stays visible.
+  JSON and emits a new one — numbers, booleans and nulls pass, and every string must come out as a mapping
+  token, a placeholder (`<corpus>`, `<guid>`, `<item-path>`, `<abs-path>`, `<redacted>`) or allow-listed
+  vocabulary. **Object keys are strings too** (#514): the model writes the input object, so a key can carry a
+  name as easily as a value can, and a key used to be visited by neither the transform nor the check. A
+  call's **name** is judged as a name — one of the arms' own tools or one of Shonkor's MCP tools, and only
+  if that run's `init.tools` actually offered it; anything else becomes `<redacted>`. `notRunReason` (raw API
+  error text) and `armViolation` go through the same predicate. `redactedStrings` per row says how many
+  strings were blanked, so over-redaction stays visible.
+
+  The predicate has **no per-call variation**. It used to allow the words of the call's own tool name inside
+  that call's values — an allowance the transform had and the check did not, so a value containing "locate"
+  or "usages" would have passed layer 1 and been reported as a leak by layer 2, with `results-C.json` refused
+  after the whole set had been paid for (#514). A value echoing a tool name is over-redacted instead.
+
+  Known limit: a string with **no ASCII letters** (a bare number, an IP address) carries no word to judge and
+  is written as it stands.
 
   The list this rests on is `Ap6Anonymiser.AllowedWords`, and the invariant it is kept under matters more
   than its contents: **over-redaction costs readability, under-redaction is a customer-data leak into a
@@ -228,6 +265,13 @@ mcp-brain.json / mcp-corpus.json / mcp-none.json
   deny-word hashes **plus** the structural rule that every string in a free-text position satisfies that same
   predicate. `FindLeaks` alone is a net, and #511 is the run that went through it — three customer
   identifiers that were no corpus path, no item path, no GUID and no deny word.
+
+  Publication is **all-or-nothing** (#514): the report and every `results-<class>.json` are rendered and
+  checked first, and written only if none of them reports a leak. The report echoes the same class-C strings
+  the results file carries, so writing it before the results file had been checked meant a leak could land in
+  `bench/ap6-part1-report.md` — in the repository, in the history — while the file it came from was refused.
+  Nothing is written on a leak; the run directory keeps every number and `--ap6` re-scores without repeating
+  a single run.
 - **Gate** (class C, verbatim in the report): *MCP arm correct on at least 3 more class-C tasks than the
   rg arm (majority of 3 runs) AND fewer file-content tokens read at equal correctness* —
   `C_mcp − C_rg ≥ 3` and Σ tokensApprox(mcp) < Σ tokensApprox(rg) over the tasks both arms got right.

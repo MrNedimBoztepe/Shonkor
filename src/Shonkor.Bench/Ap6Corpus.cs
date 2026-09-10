@@ -240,8 +240,9 @@ internal static class Ap6Corpus
     /// position that can hold arbitrary text must be a mapping token, a redaction placeholder, or built from
     /// allow-listed vocabulary (<see cref="Ap6Anonymiser.IsAllowedString"/>). Default deny, not default pass.
     ///
-    /// <para>The positions are the ones an arm's own words can reach: <c>runs[].toolCalls[].input</c> (itself
-    /// JSON text, so it is parsed and every string value inside it is checked), <c>answerFiles</c>,
+    /// <para>The positions are the ones an arm's own words can reach: <c>runs[].toolCalls[].name</c>,
+    /// <c>runs[].toolCalls[].input</c> (itself JSON text, so it is parsed and every string inside it is
+    /// checked — object keys included, since the model writes those too), <c>answerFiles</c>,
     /// <c>answerSymbols</c>, <c>notRunReason</c> (raw API error text) and <c>armViolation</c>. Class A and B
     /// are Brain — our own code — and are checked with the fixed patterns only, exactly as before.</para>
     /// </summary>
@@ -268,8 +269,13 @@ internal static class Ap6Corpus
                 if (!run.TryGetProperty("toolCalls", out var calls) || calls.ValueKind != JsonValueKind.Array) continue;
                 foreach (var call in calls.EnumerateArray())
                 {
+                    // The name is a string in the file like any other and used to be checked by nobody
+                    // (#514). It is judged as a name: one of the arms' own tools, one of Shonkor's MCP
+                    // tools, or the stand-in Ap6Anonymiser.RedactToolName wrote for anything else.
+                    if (Text(call, "name") is { } name && name != Ap6Anonymiser.Redacted && !Ap6Anonymiser.IsOwnToolName(name))
+                        leaks.Add($"{label}: toolCalls[].name is neither one of our tool names nor redacted");
                     if (Text(call, "input") is not { } input) continue;
-                    // The input is JSON inside a JSON string: check the values, not the schema keys around them.
+                    // The input is JSON inside a JSON string: every string in it, keys included.
                     JsonDocument inner;
                     try { inner = JsonDocument.Parse(input); }
                     catch (JsonException) { CheckString(leaks, $"{label}: toolCalls[].input", input); continue; }
@@ -289,6 +295,11 @@ internal static class Ap6Corpus
         if (bad.Count > 0) leaks.Add($"{where}: {bad.Count} word(s) that are neither a token, a placeholder nor allow-listed");
     }
 
+    /// <summary>
+    /// Every string a JSON document carries — <b>including object keys</b>. Keys were skipped as "the tool's
+    /// schema": they are not, the model writes them, and a key holding a name passed both layers untouched
+    /// (#514). Anything that is judged must first be visited.
+    /// </summary>
     private static IEnumerable<string> StringValues(JsonElement e)
     {
         switch (e.ValueKind)
@@ -298,7 +309,10 @@ internal static class Ap6Corpus
                 break;
             case JsonValueKind.Object:
                 foreach (var p in e.EnumerateObject())
-                foreach (var s in StringValues(p.Value)) yield return s;
+                {
+                    yield return p.Name;
+                    foreach (var s in StringValues(p.Value)) yield return s;
+                }
                 break;
             case JsonValueKind.Array:
                 foreach (var item in e.EnumerateArray())

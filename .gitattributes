@@ -1,3 +1,7 @@
 # Shell scripts must stay LF even when checked out on Windows: a CRLF in a .sh breaks the shebang and every
 # command when the file runs on the Linux CI runner (\r is treated as part of the interpreter path / args).
 *.sh text eol=lf
+
+# The shared rg-command case table (bench/golden/ap6/rg-command-cases.tsv) is replayed through a bash
+# script and through a C# theory; a CRLF would put a stray CR into every expected verdict.
+*.tsv text eol=lf

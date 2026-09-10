@@ -333,13 +333,10 @@ internal static class Ap6Runner
                 // file could ever be written).
                 if (task.Class == "C" && mapping is not null)
                 {
-                    var redactedCalls = new List<Ap6ToolCall>(record.ToolCalls.Count);
-                    foreach (var c in record.ToolCalls)
-                    {
-                        var (input, n) = Ap6Anonymiser.RedactToolInput(c.Input, c.Name, mapping);
-                        redactedCalls.Add(new Ap6ToolCall(c.Name, input));
-                        verdict.RedactedStrings += n;
-                    }
+                    // Names as well as inputs (#514): a name is the model's text too, and it used to be
+                    // written raw and checked by nobody.
+                    var (redactedCalls, n) = Ap6Anonymiser.RedactCalls(record.ToolCalls, record.InitTools, mapping);
+                    verdict.RedactedStrings += n;
                     toolCalls[(task.Id!, arm, run)] = redactedCalls;
                 }
                 else
@@ -381,34 +378,41 @@ internal static class Ap6Runner
             ToolCalls = toolCalls,
         };
 
+        // Every artefact is rendered and checked BEFORE any of them is written (#514). The old order wrote
+        // the report first and only then checked results-C.json, so a class-C string layer 1 did not get
+        // clean could land in bench/ap6-part1-report.md — in the repository, in the history — while the
+        // results file it came from was refused. The publication is all-or-nothing: one leak anywhere and
+        // nothing is written, because the two files carry the same strings.
         var denyHashes = mapping?.DenyWordHashes();
         var markdown = Ap6Report.Markdown(data);
-        var reportLeaks = Ap6Corpus.FindLeaks(markdown, denyHashes);
-        var reportPath = Path.Combine(plan.BrainRoot, ReportRelativePath.Replace('/', Path.DirectorySeparatorChar));
-        if (reportLeaks.Count > 0)
+        var artefacts = new List<(string Path, string Content, IReadOnlyList<string> Leaks)>
         {
-            console.WriteLine($"[Error] report NOT written — {reportLeaks.Count} leak pattern(s) matched: {string.Join("; ", reportLeaks.Take(5))}");
-        }
-        else
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
-            File.WriteAllText(reportPath, markdown, new UTF8Encoding(false));
-            console.WriteLine($"Wrote {reportPath}");
-        }
-
+            (Path.Combine(plan.BrainRoot, ReportRelativePath.Replace('/', Path.DirectorySeparatorChar)),
+                markdown, Ap6Corpus.FindLeaks(markdown, denyHashes)),
+        };
         foreach (var cls in Ap6Report.Classes.Where(c => tasks.Any(t => t.Class == c)))
         {
             var json = Ap6Report.ResultsJson(data, cls);
-            var resultsPath = Path.Combine(plan.BrainRoot, ResultsRelativeDir.Replace('/', Path.DirectorySeparatorChar), $"results-{cls}.json");
-            var leaks = Ap6Corpus.FindResultsLeaks(json, cls, denyHashes);
-            if (leaks.Count > 0)
+            artefacts.Add((
+                Path.Combine(plan.BrainRoot, ResultsRelativeDir.Replace('/', Path.DirectorySeparatorChar), $"results-{cls}.json"),
+                json,
+                Ap6Corpus.FindResultsLeaks(json, cls, denyHashes)));
+        }
+
+        if (artefacts.Any(a => a.Leaks.Count > 0))
+        {
+            foreach (var (path, _, leaks) in artefacts.Where(a => a.Leaks.Count > 0))
+                console.WriteLine($"[Error] {Path.GetFileName(path)}: {leaks.Count} leak pattern(s) matched: {string.Join("; ", leaks.Take(5))}");
+            console.WriteLine($"[Error] NOTHING written — {artefacts.Count} artefact(s) are checked together and published together. The run directory keeps every number; fix the redaction and re-score with --ap6 (no run is repeated).");
+        }
+        else
+        {
+            foreach (var (path, content, _) in artefacts)
             {
-                console.WriteLine($"[Error] results-{cls}.json NOT written — {leaks.Count} leak pattern(s) matched: {string.Join("; ", leaks.Take(5))}");
-                continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, content, new UTF8Encoding(false));
+                console.WriteLine($"Wrote {path}");
             }
-            Directory.CreateDirectory(Path.GetDirectoryName(resultsPath)!);
-            File.WriteAllText(resultsPath, json, new UTF8Encoding(false));
-            console.WriteLine($"Wrote {resultsPath}");
         }
 
         foreach (var n in notes) console.WriteLine($"NOTE: {n}");

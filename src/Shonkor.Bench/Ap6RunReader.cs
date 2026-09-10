@@ -1,5 +1,6 @@
 // Licensed to Shonkor under the MIT License.
 
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -215,10 +216,21 @@ internal static class Ap6RunReader
     /// <summary>
     /// Exactly what <c>bench/golden/ap6/rg-only-hook.sh</c> lets through, and it must stay exactly that: the
     /// hook decides what runs, this decides what the run is judged as, and two different ideas of "an rg
-    /// command" would let a command execute that the scorer then counts as clean. Both say: the first
-    /// word names <c>rg</c> (as a bare name or a path ending in it) <b>and</b> the command carries no shell
-    /// separator — <c>rg … | head</c> no longer counts, because the hook cannot let a pipeline through
-    /// without vetting what is on the other side of it.
+    /// command" would let a command execute that the scorer then counts as clean. The two are held together
+    /// by <c>bench/golden/ap6/rg-command-cases.tsv</c>, which the hook's own test script and
+    /// <c>Ap6RunReaderTests</c> both replay — a rule changed on one side fails a test rather than surviving
+    /// as a promise in a comment.
+    ///
+    /// <para>The rule: the command is scanned quote-aware, and an <b>unquoted</b> separator, an expansion
+    /// (<c>$(</c>, <c>${</c>, <c>$VAR</c>, backticks — the last two also inside double quotes, where they
+    /// still act), a newline, unbalanced quoting or a trailing backslash disqualifies it. The first word,
+    /// quotes stripped, must have the basename <c>rg</c>. And no argument may be one of ripgrep's own flags
+    /// that runs another program (<c>--pre</c>, <c>--pre-glob</c>, <c>-z</c>/<c>--search-zip</c>,
+    /// <c>--hostname-bin</c>): <c>rg --pre /bin/sh …</c> is a shell inside one plain rg command (#514).</para>
+    ///
+    /// <para><c>rg -n "a|b" src</c> <i>is</i> an rg command (#514). The earlier, quote-blind rule refused a
+    /// pipe even inside a pattern, and a refusal still counts in <see cref="Ap6RunRecord.ToolCalls"/> — so
+    /// the guard was inflating the tool-economy figure of exactly the arm it was protecting.</para>
     /// </summary>
     public static bool IsRgCommand(JsonElement input)
     {
@@ -226,16 +238,93 @@ internal static class Ap6RunReader
         return command is not null && IsRgCommand(command);
     }
 
-    /// <summary>Shell metacharacters that chain, redirect or substitute a second command; a command carrying one is not a single rg call.</summary>
-    public static readonly Regex ShellSeparator = new(@"[|&;<>`\n\r]|\$\(", RegexOptions.CultureInvariant);
+    /// <summary>
+    /// Word boundaries are <c>[[:space:]]</c> in the C locale — the set the hook's scanner uses. Notably
+    /// U+00A0 is <b>not</b> in it: <c>char.IsWhiteSpace</c> would trim it, the shell would not, and the two
+    /// readings of "<c>&#160;rg foo</c>" were one of the divergences this file's fixture pins shut.
+    /// </summary>
+    private const string ShellWhitespace = " \t\n\v\f\r";
+
+    /// <summary>ripgrep flags that make it execute another program — a preprocessor, a decompressor, a hostname binary.</summary>
+    public static readonly string[] ExecutingRgFlags = ["--pre", "--pre-glob", "--search-zip", "--hostname-bin"];
 
     /// <inheritdoc cref="IsRgCommand(JsonElement)"/>
     public static bool IsRgCommand(string command)
     {
-        if (ShellSeparator.IsMatch(command)) return false;
-        var first = command.Trim().Split((char[])[' ', '\t'], 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
-        var name = first.Replace('\\', '/').Split('/')[^1];
-        return name == "rg" || name.Equals("rg.exe", StringComparison.OrdinalIgnoreCase);
+        if (!TrySplitWords(command, out var words) || words.Count == 0) return false;
+        var name = words[0].Replace('\\', '/').Split('/')[^1];
+        if (name != "rg" && !name.Equals("rg.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        return words.Skip(1).All(IsHarmlessArgument);
+    }
+
+    /// <summary>
+    /// The command split into words the way a shell would, or <c>false</c> when it is not a single command at
+    /// all. Quotes are consumed (so <c>"--pre"</c> is still the flag <c>--pre</c>) but a backslash and the
+    /// character it escapes are kept in the word — a Windows path must keep its separators, while the escaped
+    /// character can no longer act.
+    /// </summary>
+    public static bool TrySplitWords(string command, out List<string> words)
+    {
+        words = [];
+        var word = new StringBuilder();
+        var started = false;
+        var quote = '\0';
+        for (var i = 0; i < command.Length; i++)
+        {
+            var c = command[i];
+            if (c is '\n' or '\r') return false;                       // a separator in every quoting state
+            if (quote == '\'')                                          // single quotes: everything is literal
+            {
+                if (c == '\'') quote = '\0'; else word.Append(c);
+                continue;
+            }
+            if (c == '\\')
+            {
+                if (i + 1 >= command.Length) return false;              // a trailing backslash swallows what follows
+                word.Append(c).Append(command[i + 1]);
+                i++;
+                started = true;
+                continue;
+            }
+            if (c == '`') return false;                                 // still a substitution inside double quotes
+            if (c == '$' && i + 1 < command.Length && (command[i + 1] is '(' or '{' or '_' || char.IsAsciiLetter(command[i + 1])))
+                return false;                                           // a bare '$' (an end anchor) is fine
+            if (quote == '"')
+            {
+                if (c == '"') quote = '\0'; else word.Append(c);
+                continue;
+            }
+            if (c is '|' or '&' or ';' or '<' or '>') return false;
+            if (c is '\'' or '"') { quote = c; started = true; continue; }
+            if (ShellWhitespace.Contains(c))
+            {
+                if (started) { words.Add(word.ToString()); word.Clear(); started = false; }
+                continue;
+            }
+            word.Append(c);
+            started = true;
+        }
+        if (quote != '\0') return false;                                // unterminated quoting
+        if (started) words.Add(word.ToString());
+        return true;
+    }
+
+    private static bool IsHarmlessArgument(string word)
+    {
+        if (word.StartsWith("--", StringComparison.Ordinal))
+        {
+            var eq = word.IndexOf('=', StringComparison.Ordinal);
+            var flag = eq < 0 ? word : word[..eq];
+            return !ExecutingRgFlags.Contains(flag, StringComparer.Ordinal);
+        }
+        if (word.Length > 1 && word[0] == '-')
+        {
+            // Short flags bundle, so -z hides in -nz as well as in -z.
+            var eq = word.IndexOf('=', StringComparison.Ordinal);
+            var cluster = eq < 0 ? word[1..] : word[1..eq];
+            return !cluster.Contains('z');
+        }
+        return true;
     }
 
     private static void ReadUser(JsonElement e, Ap6RunRecord r)

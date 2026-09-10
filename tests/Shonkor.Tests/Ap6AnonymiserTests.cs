@@ -16,9 +16,10 @@ public class Ap6AnonymiserTests
     private static readonly Ap6Mapping Mapping = Ap6Fixtures.Mapping();
 
     /// <summary>
-    /// The string <b>values</b> of a JSON document, keys excluded — what the redaction judges and what
-    /// <see cref="Ap6Corpus.FindResultsLeaks"/> checks. A key is the tool's schema, written by us; asserting
-    /// over the raw text would judge "query" and "command" as if a corpus had named them.
+    /// Every string of a JSON document, <b>keys included</b> — exactly what the redaction judges and what
+    /// <see cref="Ap6Corpus.FindResultsLeaks"/> checks. Keys were held to be "the tool's schema, written by
+    /// us"; they are the model's text as much as the values are (#514), so a test that skipped them was
+    /// asserting less than the checker does.
     /// </summary>
     private static IEnumerable<string> StringValues(string json)
     {
@@ -31,7 +32,11 @@ public class Ap6AnonymiserTests
             {
                 case System.Text.Json.JsonValueKind.String: yield return e.GetString()!; break;
                 case System.Text.Json.JsonValueKind.Object:
-                    foreach (var p in e.EnumerateObject()) foreach (var s in Walk(p.Value)) yield return s;
+                    foreach (var p in e.EnumerateObject())
+                    {
+                        yield return p.Name;
+                        foreach (var s in Walk(p.Value)) yield return s;
+                    }
                     break;
                 case System.Text.Json.JsonValueKind.Array:
                     foreach (var item in e.EnumerateArray()) foreach (var s in Walk(item)) yield return s;
@@ -218,7 +223,7 @@ public class Ap6AnonymiserTests
         const string identifier = "Kestrelbrook";
         var input = $$"""{"query":"which controller renders the {{identifier}} teaser"}""";
 
-        var (json, redacted) = Ap6Anonymiser.RedactToolInput(input, "mcp__shonkor__locate", Mapping);
+        var (json, redacted) = Ap6Anonymiser.RedactToolInput(input, Mapping);
 
         Assert.DoesNotContain(identifier, json, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, redacted);
@@ -238,11 +243,13 @@ public class Ap6AnonymiserTests
     [InlineData("StructuredOutput", """{"schemaVersion":1,"files":["src/Feature/Kestrelbrook/Thing.cs"],"symbols":["Kestrelbrook"]}""")]
     public void RedactToolInput_CoversEveryFreeTextField(string tool, string input)
     {
-        var (json, redacted) = Ap6Anonymiser.RedactToolInput(input, tool, Mapping);
+        var (json, redacted) = Ap6Anonymiser.RedactToolInput(input, Mapping);
 
         Assert.DoesNotContain("Kestrelbrook", json, StringComparison.OrdinalIgnoreCase);
         Assert.True(redacted > 0);
         Assert.All(StringValues(json), v => Assert.Empty(Ap6Anonymiser.DisallowedWords(v)));
+        // The call's name is redacted separately and by a different rule — it is a name, not free text.
+        Assert.Equal(tool, Ap6Anonymiser.RedactToolName(tool, [tool]));
     }
 
     /// <summary>
@@ -253,19 +260,75 @@ public class Ap6AnonymiserTests
     [Fact]
     public void RedactToolInput_RedactsRelativeCorpusPaths_KeepingTheirShape()
     {
-        var (json, _) = Ap6Anonymiser.RedactToolInput("""{"path":"src/Feature/Kestrelbrook/Thing.cs"}""", "mcp__shonkor__outline", Mapping);
+        var (json, _) = Ap6Anonymiser.RedactToolInput("""{"path":"src/Feature/Kestrelbrook/Thing.cs"}""", Mapping);
 
         Assert.Equal("""{"path":"src/<redacted>/<redacted>/<redacted>.cs"}""", json);
     }
 
-    /// <summary>Numbers, booleans, nulls and the schema keys around them name nobody, so they are not touched — a row with every value blanked would be unreadable for nothing.</summary>
+    /// <summary>Numbers, booleans and nulls name nobody, so they are not touched — a row with every value blanked would be unreadable for nothing.</summary>
     [Fact]
-    public void RedactToolInput_LeavesNonStringsAndKeysAlone()
+    public void RedactToolInput_LeavesNonStringsAlone()
     {
-        var (json, redacted) = Ap6Anonymiser.RedactToolInput("""{"hops":3,"verbose":true,"note":null,"limit":25}""", "mcp__shonkor__get_subgraph", Mapping);
+        var (json, redacted) = Ap6Anonymiser.RedactToolInput("""{"hops":3,"limit":25,"path":"src"}""", Mapping);
 
-        Assert.Equal("""{"hops":3,"verbose":true,"note":null,"limit":25}""", json);
+        Assert.Equal("""{"hops":3,"limit":25,"path":"src"}""", json);
         Assert.Equal(0, redacted);
+    }
+
+    /// <summary>
+    /// The tester's case for #514: the model writes the input object, so it can put a name in a KEY as
+    /// easily as in a value. A key used to pass layer 1 untouched and was not visited by layer 2 at all, so
+    /// it came out verbatim with the leak check reporting zero. Keys are judged like every other string now.
+    /// </summary>
+    [Fact]
+    public void RedactToolInput_JudgesObjectKeys_NotJustValues()
+    {
+        var (json, redacted) = Ap6Anonymiser.RedactToolInput("""{"Kestrelbrook":"src","nested":{"AcmeHoldings":1}}""", Mapping);
+
+        Assert.DoesNotContain("Kestrelbrook", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AcmeHoldings", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(3, redacted);   // two names, plus the un-allow-listed key "nested" — over-redaction is the safe side
+        Assert.All(StringValues(json), v => Assert.Empty(Ap6Anonymiser.DisallowedWords(v)));
+    }
+
+    /// <summary>
+    /// #514's other half of the same defect: a string that happened to contain a word of the CALL'S OWN tool
+    /// name passed layer 1 (which allowed those words per call) and was then reported as a leak by layer 2
+    /// (which never had that extension) — after 180 paid runs, with results-C.json refused and nothing in the
+    /// message pointing at the cause. One predicate now, so "locate" is redacted like any other word.
+    /// </summary>
+    [Fact]
+    public void RedactToolInput_DoesNotAllowTheToolsOwnWordsInsideAValue()
+    {
+        var (json, _) = Ap6Anonymiser.RedactToolInput("""{"query":"locate the capsule"}""", Mapping);
+
+        Assert.All(StringValues(json), v => Assert.True(Ap6Anonymiser.IsAllowedString(v), $"layer 2 must accept what layer 1 produced: '{v}'"));
+    }
+
+    /// <summary>
+    /// A tool name is judged as a name: ours, or the stand-in. It is not run through the word classifier
+    /// (that would mean allow-listing "usages" and "capsule" as words everywhere), and it is not written raw
+    /// (that is how an invented name would reach the file).
+    /// </summary>
+    [Theory]
+    [InlineData("mcp__shonkor__find_usages", true)]
+    [InlineData("Bash", true)]
+    [InlineData("Read", true)]
+    [InlineData("StructuredOutput", true)]
+    [InlineData("mcp__other__locate", false)]
+    [InlineData("WebSearch", false)]
+    [InlineData("Kestrelbrook", false)]
+    public void RedactToolName_KeepsOnlyOurOwnNames(string name, bool ours)
+    {
+        Assert.Equal(ours, Ap6Anonymiser.IsOwnToolName(name));
+        Assert.Equal(ours ? name : Ap6Anonymiser.Redacted, Ap6Anonymiser.RedactToolName(name, [name]));
+    }
+
+    /// <summary>Even one of our own names is only written when the run was actually offered it — <c>init.tools</c> is our configuration, the name in the stream is the model's text.</summary>
+    [Fact]
+    public void RedactToolName_KeepsNothingThatWasNotOffered()
+    {
+        Assert.Equal(Ap6Anonymiser.Redacted, Ap6Anonymiser.RedactToolName("mcp__shonkor__locate", ["mcp__shonkor__get_source"]));
     }
 
     /// <summary>What the mapping does know still becomes its token: redaction by default does not throw away the reading the tokens exist for.</summary>
@@ -274,7 +337,7 @@ public class Ap6AnonymiserTests
     {
         var input = """{"seeds":["@/src/Feature/Hero/HeroController.cs","{1A2B3C4D-1111-2222-3333-444455556666}"],"query":"NavController"}""";
 
-        var (json, _) = Ap6Anonymiser.RedactToolInput(input, "mcp__shonkor__get_subgraph", Mapping);
+        var (json, _) = Ap6Anonymiser.RedactToolInput(input, Mapping);
 
         Assert.Contains("Controller-01", json, StringComparison.Ordinal);
         Assert.Contains("Controller-03", json, StringComparison.Ordinal);
@@ -286,7 +349,7 @@ public class Ap6AnonymiserTests
     [Fact]
     public void RedactToolInput_ReplacesUnparseableInputWholesale()
     {
-        var (json, redacted) = Ap6Anonymiser.RedactToolInput("{not json at all", "Bash", Mapping);
+        var (json, redacted) = Ap6Anonymiser.RedactToolInput("{not json at all", Mapping);
 
         Assert.Equal("\"<redacted>\"", json);
         Assert.Equal(1, redacted);

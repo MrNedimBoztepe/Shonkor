@@ -188,13 +188,8 @@ public class Ap6ReportTests
 
         var record = Ap6RunReader.Read(stream);
         var verdict = Ap6Scorer.Score(task, "mcp", 1, record, Ap6MatchMode.Recall, Cwd, mapping);
-        var calls = new List<Ap6ToolCall>();
-        foreach (var c in record.ToolCalls)
-        {
-            var (input, n) = Ap6Anonymiser.RedactToolInput(c.Input, c.Name, mapping);
-            calls.Add(new Ap6ToolCall(c.Name, input));
-            verdict.RedactedStrings += n;
-        }
+        var (calls, redacted) = Ap6Anonymiser.RedactCalls(record.ToolCalls, record.InitTools, mapping);
+        verdict.RedactedStrings += redacted;
         var data = new Ap6ReportData
         {
             RunDirName = "smoke", GeneratedAt = "now", MatchMode = Ap6MatchMode.Recall, Env = Env,
@@ -217,6 +212,72 @@ public class Ap6ReportTests
         Assert.True(run.GetProperty("redactedStrings").GetInt32() > 0);
         Assert.Equal(["Controller-03"], run.GetProperty("answerFiles").EnumerateArray().Select(x => x.GetString()));
         Assert.Contains($"redactedStrings {run.GetProperty("redactedStrings").GetInt32()}", Section(Ap6Report.Markdown(data), "## Class C"));
+    }
+
+    /// <summary>
+    /// The blind dud #514 removed. Layer 1 allowed the words of the call's own tool name inside that call's
+    /// values; layer 2 never had that extension. So a value containing "locate", "usages" or "capsule"
+    /// passed the transform and was reported as a leak by the check — after the whole run set was paid for,
+    /// with results-C.json refused and nothing in the message pointing at the reason. Class C's inputs are
+    /// full of such words, and the smoke run happened not to hit one.
+    ///
+    /// <para>The property, not the example: whatever layer 1 emits, layer 2 accepts. A tool name in a value,
+    /// an invented key, a name we never offered — all of them arrive at the results file as something the
+    /// check is happy with, so the only reason a file is ever refused is a real leak.</para>
+    /// </summary>
+    [Fact]
+    public void WhatLayerOneWrites_LayerTwoAccepts()
+    {
+        var task = Ap6Fixtures.Task("C1-01", "C", files: ["Controller-03"], symbols: ["Controller-03"]);
+        var mapping = Ap6Fixtures.Mapping();
+        var stream = Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.McpTools.Append(Ap6Scorer.AnswerTool), ("shonkor", "connected")),
+            // Words of the arm's own tool names, inside the values — the case that used to split the layers.
+            Ap6Fixtures.ToolUse("mcp__shonkor__locate", new { query = "locate the capsule outline usages" }, "m1"),
+            Ap6Fixtures.ToolResultBlocks("src/A.cs:1"),
+            // A key the model invented, carrying a name — the case neither layer looked at.
+            Ap6Fixtures.ToolUse("mcp__shonkor__get_source", new Dictionary<string, object> { ["Kestrelbrook"] = "x", ["symbol"] = "NavController" }, "m2"),
+            Ap6Fixtures.ToolResultBlocks("class"),
+            // A tool the run was never offered: its name is the model's text and used to be written raw.
+            Ap6Fixtures.ToolUse("mcp__shonkor__kestrelbrook_lookup", new { query = "x" }, "m3"),
+            Ap6Fixtures.ToolResultBlocks("none"),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer(["src/Feature/Nav/NavController.cs"], ["NavController"])));
+
+        var record = Ap6RunReader.Read(stream);
+        var verdict = Ap6Scorer.Score(task, "mcp", 1, record, Ap6MatchMode.Recall, Cwd, mapping);
+        var (calls, redacted) = Ap6Anonymiser.RedactCalls(record.ToolCalls, record.InitTools, mapping);
+        verdict.RedactedStrings += redacted;
+        var data = new Ap6ReportData
+        {
+            RunDirName = "smoke", GeneratedAt = "now", MatchMode = Ap6MatchMode.Recall, Env = Env,
+            Tasks = [task], Verdicts = [verdict], Outcomes = Ap6Scorer.Outcomes([task], [verdict]),
+            Graphs = [Graph("Corpus-A")], ToolCalls = { [("C1-01", "mcp", 1)] = calls },
+        };
+
+        var json = Ap6Report.ResultsJson(data, "C");
+
+        Assert.Empty(Ap6Corpus.FindResultsLeaks(json, "C", Ap6CorpusTests.DenyWordHashes));
+        Assert.DoesNotContain("Kestrelbrook", json, StringComparison.OrdinalIgnoreCase);
+        var names = JsonDocument.Parse(json).RootElement.GetProperty("runs").EnumerateArray().Single()
+            .GetProperty("toolCalls").EnumerateArray().Select(c => c.GetProperty("name").GetString()).ToList();
+        Assert.Equal(["mcp__shonkor__locate", "mcp__shonkor__get_source", Ap6Anonymiser.Redacted], names);
+    }
+
+    /// <summary>
+    /// And the other direction: layer 2 is a net, not a formality. A name or a key that reached the file
+    /// without going through layer 1 is reported — the file is then not written at all.
+    /// </summary>
+    [Theory]
+    [InlineData("Kestrelbrook", """{"query":"x"}""")]                       // an invented tool name
+    [InlineData("mcp__shonkor__locate", """{"Kestrelbrook":"src"}""")]      // an invented key
+    public void LayerTwo_ReportsWhatDidNotGoThroughLayerOne(string name, string input)
+    {
+        var doc = $$"""
+            {"schemaVersion":2,"class":"C","runs":[{"task":"C1-01","arm":"mcp","run":1,
+             "toolCalls":[{"name":{{JsonSerializer.Serialize(name)}},"input":{{JsonSerializer.Serialize(input)}}}]}]}
+            """;
+
+        Assert.NotEmpty(Ap6Corpus.FindResultsLeaks(doc, "C", Ap6CorpusTests.DenyWordHashes));
     }
 
     /// <summary>

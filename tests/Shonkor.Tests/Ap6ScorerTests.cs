@@ -166,6 +166,48 @@ public class Ap6ScorerTests
         Assert.Contains("Read", Ap6Scorer.ArmViolation(missing, Ap6Scorer.RgArm)!);
     }
 
+    /// <summary>
+    /// The call level, symmetric to the mcp arm's (#514). Being offered only Bash and Read is what
+    /// <c>init.tools</c> says; what the arm CALLED is the other fact, and until now nothing looked at it in
+    /// this arm — a foreign tool that was never offered would have been counted as clean research.
+    /// </summary>
+    [Fact]
+    public void RgArm_IsViolated_ByCallingAToolItWasNotGiven()
+    {
+        var r = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.RgTools),
+            Ap6Fixtures.ToolUse("Bash", new { command = "rg -n Foo src" }, "m1"),
+            Ap6Fixtures.ToolUse("Grep", new { pattern = "Foo" }, "m2"),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer([], []))));
+
+        var v = Ap6Scorer.ArmViolation(r, Ap6Scorer.RgArm);
+
+        Assert.NotNull(v);
+        Assert.Contains("Grep", v);
+    }
+
+    /// <summary>
+    /// The void mechanism rests entirely on <c>permission_denials[].tool_use_id</c>, and MIN_CLAUDE is only
+    /// a lower bound: a later CLI that stops emitting the id would make every refused call look executed,
+    /// and every properly guarded run would be voided with "rg arm executed N non-rg Bash command(s)" — a
+    /// sentence about something that did not happen. The run is still not counted (we do not know), but it
+    /// is told apart from an arm that really ran grep (#514).
+    /// </summary>
+    [Fact]
+    public void RgArm_SaysSo_WhenDenialsCannotBeAttributedToACall()
+    {
+        var r = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.RgTools),
+            Ap6Fixtures.ToolUse("Bash", new { command = "grep -rn Foo src" }, "m1"),
+            Ap6Fixtures.Result(Ap6Fixtures.Answer([], []), denials: 1)));
+
+        var v = Ap6Scorer.ArmViolation(r, Ap6Scorer.RgArm);
+
+        Assert.NotNull(v);
+        Assert.Contains("could not be attributed", v);
+        Assert.DoesNotContain("executed", v);
+    }
+
     // ---------- #512: the answer channel is not a foreign tool ----------
 
     /// <summary>

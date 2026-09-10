@@ -160,26 +160,60 @@ public class Ap6RunReaderTests
     /// <summary>
     /// The reader's idea of "an rg command" must be the hook's idea of it
     /// (<c>bench/golden/ap6/rg-only-hook.sh</c>, #513): the hook decides what runs, this decides what the run
-    /// counts as, and a gap between the two is how a grep gets executed and scored as clean. First word names
-    /// rg (bare or as a path), and no shell separator anywhere — so <c>rg … | head</c> is NOT an rg command
-    /// here, because the hook cannot let a pipeline through without vetting the far side of the pipe.
+    /// counts as, and a gap between the two is how a grep gets executed and scored as clean. Both sides now
+    /// read the same fixture — <see cref="Ap6RgCommandCases"/> — instead of each carrying its own list, which
+    /// is what let three cases drift apart before #514.
     /// </summary>
+    public static TheoryData<string, bool> SharedCases()
+    {
+        var data = new TheoryData<string, bool>();
+        foreach (var (command, allow) in Ap6RgCommandCases.Load()) data.Add(command, allow);
+        return data;
+    }
+
     [Theory]
-    [InlineData("rg -n Foo src", true)]
-    [InlineData("rg", true)]
-    [InlineData("C:/tools/rg.exe -n Foo", true)]
-    [InlineData("/usr/bin/rg Foo", true)]
-    [InlineData("  rg --files | head", false)]
-    [InlineData("rg -n \"a|b\" src", false)]
-    [InlineData("rg -n Foo src > out.txt", false)]
-    [InlineData("rg -n $(cat pattern.txt) src", false)]
-    [InlineData("grep -rn Foo src", false)]
-    [InlineData("ls src && rg Foo", false)]
-    [InlineData("cat src/A.cs", false)]
-    public void IsRgCommand_IsExactlyWhatTheHookLetsThrough(string command, bool expected)
+    [MemberData(nameof(SharedCases))]
+    public void IsRgCommand_MatchesTheSharedCaseTable(string command, bool expected)
     {
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(new { command }));
         Assert.Equal(expected, Ap6RunReader.IsRgCommand(doc.RootElement));
+        Assert.Equal(expected, Ap6RunReader.IsRgCommand(command));
+    }
+
+    /// <summary>
+    /// The table is the guarantee, so it must keep covering the cases that were measured to matter: the three
+    /// former hook/reader divergences, the flags that make ripgrep run a program (#514), and the quoted-pipe
+    /// case the rg arm lost turns to. Deleting a row must be a test failure, not a quiet loss of coverage.
+    /// </summary>
+    [Fact]
+    public void TheSharedCaseTable_KeepsTheCasesThatWereMeasured()
+    {
+        var cases = Ap6RgCommandCases.Load();
+        var byCommand = cases.ToDictionary(c => c.Command, c => c.Allow, StringComparer.Ordinal);
+
+        Assert.True(cases.Count >= 40, $"the case table has shrunk to {cases.Count} rows");
+        Assert.Contains(cases, c => c.Allow);
+        Assert.Contains(cases, c => !c.Allow);
+        Assert.True(byCommand["rg -n \"a|b\" src"], "a pipe inside a quoted pattern is one rg command (#514)");
+        Assert.True(byCommand["rg -n PARSE-ERROR src"], "the hook's old parse sentinel refused this text (#514)");
+        Assert.True(byCommand["rg\vfoo"], "0x0B is a word boundary on both sides");
+        Assert.False(byCommand["\u00a0rg Foo"], "U+00A0 is not a space, so this names no ripgrep");
+        Assert.False(byCommand["rg --pre /bin/sh --pre-glob '*' Foo"]);
+        Assert.False(byCommand["rg -z Foo src"]);
+        Assert.False(byCommand["rg -nz Foo src"]);
+        Assert.False(byCommand["rg --hostname-bin /bin/sh Foo"]);
+        Assert.False(byCommand[string.Empty]);
+    }
+
+    /// <summary>An input that carries no <c>command</c> at all is not an rg command — the reader's equivalent of the hook's unreadable payload.</summary>
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"file_path":"src/A.cs"}""")]
+    [InlineData("""{"command":null}""")]
+    public void IsRgCommand_WithoutACommandField_IsFalse(string input)
+    {
+        using var doc = JsonDocument.Parse(input);
+        Assert.False(Ap6RunReader.IsRgCommand(doc.RootElement));
     }
 
     [Fact]
