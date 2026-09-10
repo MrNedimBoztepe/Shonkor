@@ -120,6 +120,32 @@ public class Ap6RunnerTests : IDisposable
         return (exit, console.ToString());
     }
 
+    // ---------- --ap6-tally ----------
+
+    [Fact]
+    public void Tally_NamesTheRunsToRedo_AndTheLimitHits_AndWritesResultJson()
+    {
+        var (runDir, _) = WriteRun(PlanJson(), null,
+            ("A-01", "rg", 1, Ap6Fixtures.RgStream(["src/X.cs"], ["Foo"])),
+            ("A-01", "rg", 2, Ap6Fixtures.Stream(Ap6Fixtures.Init(Ap6Fixtures.RgTools), Ap6Fixtures.ResultApiError(429, "You've hit your session limit · resets 4pm"))),
+            ("A-01", "rg", 3, Ap6Fixtures.Stream(Ap6Fixtures.Init(Ap6Fixtures.RgTools), Ap6Fixtures.ResultLoopError("error_max_turns", "max turns"))),
+            ("A-01", "mcp", 1, Ap6Fixtures.Stream(Ap6Fixtures.Init(Ap6Fixtures.McpTools, ("shonkor", "connected")))),
+            ("A-01", "mcp", 2, Ap6Fixtures.Stream(Ap6Fixtures.Init(Ap6Fixtures.McpTools, ("shonkor", "connected")), Ap6Fixtures.ResultApiError(500, "Internal server error"))));
+        var console = new StringWriter();
+
+        var exit = Ap6Runner.Tally(runDir, console);
+
+        Assert.Equal(0, exit);
+        var line = console.ToString().Trim();
+        Assert.StartsWith("runs=5 cost_usd=0.0900 without_result=1 ", line);
+        Assert.Contains("redo=[A-01/mcp/1,A-01/mcp/2,A-01/rg/2]", line);
+        Assert.Contains("limit=[A-01/rg/2]", line);
+        // result.json is written wherever a result event exists — the limit hit included, so --resume can see what happened.
+        Assert.True(File.Exists(Path.Combine(runDir, "A-01", "rg", "2", "result.json")));
+        Assert.True(File.Exists(Path.Combine(runDir, "A-01", "rg", "3", "result.json")));
+        Assert.False(File.Exists(Path.Combine(runDir, "A-01", "mcp", "1", "result.json")));
+    }
+
     [Fact]
     public async Task Score_AnRgArmReadByAbsolutePath_StillWritesResultsA_WithTheInputRelative()
     {

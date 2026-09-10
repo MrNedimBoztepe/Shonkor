@@ -30,6 +30,18 @@ internal sealed class Ap6RunRecord
     public bool SawResult { get; set; }
     public string? ResultSubtype { get; set; }
     public bool IsError { get; set; }
+
+    /// <summary><c>api_error_status</c> — the HTTP status of the API error that ended the run (429 = usage or rate limit), or <c>null</c> when it ended without one.</summary>
+    public int? ApiErrorStatus { get; set; }
+
+    /// <summary><c>terminal_reason</c> — why the query loop ended (<c>completed</c>, <c>max_turns</c>, <c>api_error</c> …), when the CLI reports it.</summary>
+    public string? TerminalReason { get; set; }
+
+    /// <summary>
+    /// The error text of a failed run: the <c>result</c> string when <c>is_error</c> is set (the API error, e.g.
+    /// "You've hit your session limit · resets 4pm") joined with the <c>errors[]</c> of the <c>error_*</c> subtypes. Null on a clean run.
+    /// </summary>
+    public string? ErrorText { get; set; }
     public double CostUsd { get; set; }
     public long DurationMs { get; set; }
     public int Turns { get; set; }
@@ -192,6 +204,14 @@ internal static class Ap6RunReader
         r.SawResult = true;
         r.ResultSubtype = Str(e, "subtype");
         r.IsError = e.TryGetProperty("is_error", out var ie) && ie.ValueKind == JsonValueKind.True;
+        r.ApiErrorStatus = e.TryGetProperty("api_error_status", out var st) && st.ValueKind == JsonValueKind.Number && st.TryGetInt32(out var code) ? code : null;
+        r.TerminalReason = Str(e, "terminal_reason");
+        // On subtype "success" without is_error the result field is the final assistant text — only a failed run's text is an error string.
+        var parts = new List<string>();
+        if (r.IsError && Str(e, "result") is { Length: > 0 } text) parts.Add(text);
+        if (e.TryGetProperty("errors", out var errs) && errs.ValueKind == JsonValueKind.Array)
+            parts.AddRange(errs.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).Where(x => x.Length > 0));
+        r.ErrorText = parts.Count == 0 ? null : string.Join(" | ", parts);
         r.CostUsd = e.TryGetProperty("total_cost_usd", out var cost) && cost.ValueKind == JsonValueKind.Number ? cost.GetDouble() : 0;
         r.DurationMs = Num(e, "duration_ms");
         r.Turns = (int)Num(e, "num_turns");

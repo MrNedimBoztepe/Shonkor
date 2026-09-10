@@ -255,6 +255,97 @@ public class Ap6ScorerTests
         Assert.False(v.Correct);
     }
 
+    // ---------- not run (usage limit, API error, no result) ----------
+
+    private static Ap6RunVerdict ScoreRg(Ap6Task task, params string[] events) =>
+        Ap6Scorer.Score(task, Ap6Scorer.RgArm, 1, Ap6RunReader.Read(Ap6Fixtures.Stream(events)), Ap6MatchMode.Recall, Cwd, null);
+
+    [Theory]
+    [InlineData(429, "You've hit your session limit · resets 4pm")]
+    [InlineData(429, "")]
+    [InlineData(400, "You've hit your weekly limit · resets Mon 12:00am")]
+    [InlineData(529, "Request rejected (429)")]
+    [InlineData(503, "upstream rate limit exceeded")]
+    public void AUsageOrRateLimit_IsNotRun_NeverNoAnswer_AndStartsWithTheLimitPrefix(int status, string text)
+    {
+        var task = Ap6Fixtures.Task("A-01", "A");
+
+        var v = ScoreRg(task, Ap6Fixtures.Init(Ap6Fixtures.RgTools), Ap6Fixtures.ResultApiError(status, text));
+
+        Assert.True(v.NotRun);
+        Assert.False(v.Scored);
+        Assert.False(v.NoAnswer);
+        Assert.False(v.Correct);
+        Assert.Null(v.ArmViolation);
+        Assert.True(v.IsError);
+        Assert.StartsWith(Ap6Scorer.LimitReasonPrefix, v.NotRunReason);
+        Assert.True(Ap6Scorer.IsLimitReason(v.NotRunReason));
+        Assert.Contains($"HTTP {status}", v.NotRunReason);
+    }
+
+    [Fact]
+    public void AnotherApiError_OrALoopFailure_OrNoResultEvent_IsNotRun_ButNoLimit()
+    {
+        var task = Ap6Fixtures.Task("A-01", "A");
+
+        var server = ScoreRg(task, Ap6Fixtures.Init(Ap6Fixtures.RgTools), Ap6Fixtures.ResultApiError(500, "Internal server error"));
+        Assert.True(server.NotRun);
+        Assert.False(Ap6Scorer.IsLimitReason(server.NotRunReason));
+        Assert.Contains("HTTP 500", server.NotRunReason);
+
+        var loop = ScoreRg(task, Ap6Fixtures.Init(Ap6Fixtures.RgTools), Ap6Fixtures.ResultLoopError("error_during_execution", "sandbox failed to start"));
+        Assert.True(loop.NotRun);
+        Assert.False(Ap6Scorer.IsLimitReason(loop.NotRunReason));
+        Assert.Contains("error_during_execution", loop.NotRunReason);
+        Assert.Contains("sandbox failed to start", loop.NotRunReason);
+
+        // The process died before its result event: not the arm's doing, so not a measurement — and no arm violation
+        // is derived from a stream that never started (the init event may be missing as well).
+        var dead = ScoreRg(task, Ap6Fixtures.ToolUse("Bash", new { command = "rg -n Foo src" }));
+        Assert.True(dead.NotRun);
+        Assert.False(dead.Scored);
+        Assert.Null(dead.ArmViolation);
+        Assert.Contains("without a result event", dead.NotRunReason);
+    }
+
+    [Theory]
+    [InlineData("error_max_turns")]
+    [InlineData("error_max_budget_usd")]
+    [InlineData("error_max_structured_output_retries")]
+    public void ThePinnedLimits_StayScored_AsNoAnswer(string subtype)
+    {
+        // These end the run by the limits of #505 — the arm's outcome under them is the measurement.
+        var task = Ap6Fixtures.Task("A-01", "A");
+
+        var v = ScoreRg(task, Ap6Fixtures.Init(Ap6Fixtures.RgTools), Ap6Fixtures.ResultLoopError(subtype, "limit reached"));
+
+        Assert.False(v.NotRun);
+        Assert.True(v.Scored);
+        Assert.True(v.NoAnswer);
+        Assert.False(v.Correct);
+        Assert.True(v.IsError);
+    }
+
+    [Fact]
+    public void ANotRunRun_LeavesTheArmIncomplete_UntilItIsRunAgain()
+    {
+        var task = Ap6Fixtures.Task("A-01", "A", files: ["src/X/Foo.cs"], symbols: ["Foo"]);
+        var good = Ap6RunReader.Read(Ap6Fixtures.RgStream(["src/X/Foo.cs"], ["Foo"]));
+        var limited = Ap6RunReader.Read(Ap6Fixtures.Stream(Ap6Fixtures.Init(Ap6Fixtures.RgTools), Ap6Fixtures.ResultApiError(429, "You've hit your session limit · resets 4pm")));
+        var verdicts = new[]
+        {
+            Ap6Scorer.Score(task, Ap6Scorer.RgArm, 1, good, Ap6MatchMode.Recall, Cwd, null),
+            Ap6Scorer.Score(task, Ap6Scorer.RgArm, 2, good, Ap6MatchMode.Recall, Cwd, null),
+            Ap6Scorer.Score(task, Ap6Scorer.RgArm, 3, limited, Ap6MatchMode.Recall, Cwd, null),
+        };
+
+        var o = Ap6Scorer.ArmOutcome(verdicts);
+
+        Assert.Equal(Ap6Majority.Incomplete, o.Majority);
+        Assert.Equal(2, o.ScoredRuns);
+        Assert.Equal(2, o.CorrectRuns);
+    }
+
     [Fact]
     public void AnArmViolation_IsListedNotScored_InBothArms()
     {

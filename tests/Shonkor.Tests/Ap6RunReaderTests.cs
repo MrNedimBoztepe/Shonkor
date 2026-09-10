@@ -116,6 +116,32 @@ public class Ap6RunReaderTests
     }
 
     [Fact]
+    public void AFailedFinalRequest_CarriesStatusAndErrorText_ALoopErrorItsErrors()
+    {
+        var api = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.RgTools),
+            Ap6Fixtures.ResultApiError(429, "You've hit your session limit · resets 4pm")));
+        Assert.True(api.SawResult);
+        Assert.True(api.IsError);
+        Assert.Equal("success", api.ResultSubtype);
+        Assert.Equal(429, api.ApiErrorStatus);
+        Assert.Equal("api_error", api.TerminalReason);
+        Assert.Equal("You've hit your session limit · resets 4pm", api.ErrorText);
+        Assert.Null(api.Answer);
+
+        var loop = Ap6RunReader.Read(Ap6Fixtures.Stream(
+            Ap6Fixtures.Init(Ap6Fixtures.RgTools),
+            Ap6Fixtures.ResultLoopError("error_during_execution", "sandbox failed to start", "second")));
+        Assert.Null(loop.ApiErrorStatus);
+        Assert.Equal("sandbox failed to start | second", loop.ErrorText);
+
+        // A clean success keeps its result text out of ErrorText — that field is the final assistant message, not an error.
+        var ok = Ap6RunReader.Read(Ap6Fixtures.RgStream(["src/X/Foo.cs"], ["Foo"]));
+        Assert.Null(ok.ErrorText);
+        Assert.Null(ok.ApiErrorStatus);
+    }
+
+    [Fact]
     public void ResultWithoutStructuredOutput_HasNoAnswer_AndIsErrorIsKept()
     {
         var stream = Ap6Fixtures.Stream(

@@ -28,9 +28,13 @@ internal sealed class Ap6RunVerdict
     public string Arm { get; init; } = string.Empty;
     public int Run { get; init; }
 
-    /// <summary>False when the arm was not what it claims (<see cref="ArmViolation"/>) — the run is listed, never counted.</summary>
+    /// <summary>False when the arm was not what it claims (<see cref="ArmViolation"/>) or the run never was a measurement (<see cref="NotRun"/>) — the run is listed, never counted.</summary>
     public bool Scored { get; init; }
     public string? ArmViolation { get; init; }
+
+    /// <summary>True when the run ended on the API's or the loop's side (usage/rate limit, API error, no result event) — listed, not counted, and the driver re-runs it on <c>--resume</c>. Never <c>noAnswer</c>.</summary>
+    public bool NotRun { get; init; }
+    public string? NotRunReason { get; init; }
 
     public bool Correct { get; init; }
     public bool NoAnswer { get; init; }
@@ -209,16 +213,55 @@ internal static class Ap6Scorer
         }
     }
 
+    // ---------- not run ----------
+
+    /// <summary>
+    /// The <c>error_*</c> result subtypes that are outcomes of the pinned limits (#505): the arm ran out of turns,
+    /// budget or structured-output retries. They are scored (<c>noAnswer</c>); every other error ended the run on
+    /// the API's or the loop's side and is <see cref="NotRunReason"/>.
+    /// </summary>
+    public static readonly string[] MeasuredErrorSubtypes = ["error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"];
+
+    /// <summary>
+    /// The texts a subscription's usage windows and the API's throttles come back with ("You've hit your session limit ·
+    /// resets 4pm", "You've hit your weekly limit", "Request rejected (429)", "rate limit") — matched case-insensitively
+    /// on <see cref="Ap6RunRecord.ErrorText"/>; HTTP 429 in <c>api_error_status</c> counts without any text.
+    /// </summary>
+    public static readonly Regex LimitText =
+        new(@"session limit|weekly limit|opus limit|sonnet limit|usage limit|rate.?limit|\(429\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    public const string LimitReasonPrefix = "usage/rate limit";
+
+    /// <summary>
+    /// Why the run is not a measurement at all, or <c>null</c>. A stream without a <c>result</c> event (the process
+    /// died), an <c>is_error</c> result whose subtype is not one of <see cref="MeasuredErrorSubtypes"/> — on subtype
+    /// <c>success</c> that is a failed final API request with <c>api_error_status</c>, on <c>error_during_execution</c>
+    /// a loop-level failure. A limit hit starts with <see cref="LimitReasonPrefix"/> so the driver can stop the set.
+    /// </summary>
+    public static string? NotRunReason(Ap6RunRecord r)
+    {
+        if (!r.SawResult) return "stream ended without a result event";
+        if (!r.IsError || MeasuredErrorSubtypes.Contains(r.ResultSubtype, StringComparer.Ordinal)) return null;
+        var text = string.IsNullOrWhiteSpace(r.ErrorText) ? "(no error text)" : r.ErrorText.Trim();
+        var status = r.ApiErrorStatus is { } s ? $"HTTP {s.ToString(CultureInfo.InvariantCulture)}" : $"subtype {r.ResultSubtype ?? "?"}";
+        var limit = r.ApiErrorStatus == 429 || LimitText.IsMatch(text);
+        return $"{(limit ? LimitReasonPrefix : "API/loop error")} ({status}): {text}";
+    }
+
+    public static bool IsLimitReason(string? reason) => reason is not null && reason.StartsWith(LimitReasonPrefix, StringComparison.Ordinal);
+
     // ---------- one run ----------
 
     /// <param name="cwd">The arm's working directory (repository root) — absolute answer paths are relativised against it.</param>
     /// <param name="mapping">Class C only: the token mapping the answer is translated back through.</param>
     public static Ap6RunVerdict Score(Ap6Task task, string arm, int run, Ap6RunRecord r, Ap6MatchMode mode, string cwd, Ap6Mapping? mapping)
     {
-        var violation = ArmViolation(r, arm);
+        // A run that never was a measurement cannot violate its arm either — the not-run reason is the one listed.
+        var notRun = NotRunReason(r);
+        var violation = notRun is null ? ArmViolation(r, arm) : null;
         var files = (r.Answer?.Files ?? []).Select(f => NormalizePath(f, cwd)).Where(f => f.Length > 0).Distinct(FilePaths.Comparer).ToList();
         var symbols = (r.Answer?.Symbols ?? []).Select(NormalizeSymbol).Where(s => s.Length > 0).Distinct(StringComparer.Ordinal).ToList();
-        var noAnswer = r.Answer is null || r.Answer.SchemaVersion != 1;
+        var noAnswer = notRun is null && (r.Answer is null || r.Answer.SchemaVersion != 1);
 
         int unmappedFiles = 0, unmappedSymbols = 0, ambiguous = 0;
         var isC = task.Class == "C";
@@ -243,14 +286,15 @@ internal static class Ap6Scorer
         var extraFiles = files.Count(a => !keyFiles.Contains(a, fileComparer));
         var extraSymbols = symbols.Count(a => !keySymbols.Any(k => SymbolMatches(a, k)));
         var overSelect = extraFiles + extraSymbols;
-        var recall = !noAnswer && missingFiles == 0 && missingSymbols == 0;
+        var recall = notRun is null && !noAnswer && missingFiles == 0 && missingSymbols == 0;
         var correct = mode == Ap6MatchMode.Recall ? recall : recall && overSelect == 0;
+        var scored = violation is null && notRun is null;
 
         return new Ap6RunVerdict
         {
             TaskId = task.Id ?? string.Empty, Class = task.Class ?? string.Empty, Arm = arm, Run = run,
-            Scored = violation is null, ArmViolation = violation,
-            Correct = violation is null && correct, NoAnswer = noAnswer, OverSelect = overSelect,
+            Scored = scored, ArmViolation = violation, NotRun = notRun is not null, NotRunReason = notRun,
+            Correct = scored && correct, NoAnswer = noAnswer, OverSelect = overSelect,
             MissingFiles = missingFiles, MissingSymbols = missingSymbols,
             AmbiguousSymbols = ambiguous, UnmappedFiles = unmappedFiles, UnmappedSymbols = unmappedSymbols,
             ToolCalls = r.ToolCalls.Count, TokensApprox = r.TokensApprox, UsageExact = r.UsageExact,
