@@ -43,8 +43,16 @@
 #                                                local hooks, plugins or permission rules; built for "an
 #                                                evaluation harness [that] drives claude" (cli-reference, ≥ 2.1.248)
 #                   --strict-mcp-config          only the servers of --mcp-config (mcp doc)
-#                   --settings '{"disableAllHooks":true}'  hooks off for the run (permissions doc, "before you run
-#                                                claude -p in a repository you didn't write")
+#                   --settings <run-dir>/arm-<arm>.settings.json   the arm's own settings file. NOTE: this used
+#                                                to be '{"disableAllHooks":true}' and deliberately is not any
+#                                                more (#513) — under --restricted no user/project/local hook is
+#                                                loaded in the first place, so the switch bought nothing, and it
+#                                                would switch off the harness's OWN PreToolUse hook, which is the
+#                                                only thing that keeps the rg arm inside ripgrep. Do not put it back.
+#                   --permission-mode dontAsk    nothing waits for an answer that cannot come in -p (cli-reference)
+#                   --permission-prompts none    "anything that would prompt is denied automatically" (cli-reference)
+#                   --disallowedTools <mirror>   each arm denies the other arm's tools by bare name, which removes
+#                                                them from the context entirely (permissions doc)
 #                   --disable-slash-commands     skills and custom commands off (cli-reference)
 #                   CLAUDE_CODE_DISABLE_CLAUDE_MDS=1   "prevent loading any CLAUDE.md memory files into context,
 #                                                including user, project, and auto memory files" (env-vars doc)
@@ -170,12 +178,52 @@ fi
 BRAIN_HEAD="$(git -C "$BRAIN" rev-parse HEAD 2>/dev/null || echo "")"
 
 # ---------- isolation flags per auth mode (see header) ----------
+# The per-arm --settings and --disallowedTools are added at the call (they differ by arm); these are the
+# flags both arms share.
 if [ "$AUTH_MODE" = "subscription" ]; then
-  ISOLATION=(--restricted --strict-mcp-config --disable-slash-commands --settings '{"disableAllHooks":true}')
+  ISOLATION=(--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --permission-prompts none)
 else
   ISOLATION=(--bare --strict-mcp-config)
 fi
 ISOLATION_TEXT="${ISOLATION[*]}"
+
+# ---------- arm purity: what each arm may call, and what stops it (#513) ----------
+# --allowedTools only PRE-APPROVES; it denies nothing, and Claude Code runs its built-in read-only Bash set
+# (ls, cat, grep, find, wc, cd, ...) without a prompt in every mode. The first smoke run therefore measured an
+# "rg arm" that answered out of grep. Two mirror-image measures, neither of them a rule about command text
+# (rule syntax cannot say "Bash: only rg" — precedence is deny > ask > allow, so a Bash rule catches rg too):
+#   rg arm   a PreToolUse hook on Bash that exits 2 for anything that is not one plain rg command, plus
+#            --disallowedTools "mcp__*" so the graph is not reachable even if a server were configured.
+#   mcp arm  --tools "" (no built-in tool at all) plus --disallowedTools naming the file/command tools by
+#            bare name, which takes them out of the model's context rather than merely refusing them.
+# The hook is what actually refuses; the flags are the backstop. Both are recorded in env.json and printed
+# beside every class table, because a purity claim nobody can read back is not evidence.
+RG_HOOK="$HERE/rg-only-hook.sh"
+[ -f "$RG_HOOK" ] || gate_fail "rg-only-hook.sh missing next to run.sh — the rg arm has nothing keeping it inside ripgrep"
+# Hooks are fail-OPEN by documentation: a path that does not resolve, a script that is not executable, an
+# exit code other than 2 — the call runs. Existence therefore proves nothing; the hook is run here, on a
+# payload it must refuse, and the run set does not start unless it does (#514). Three lines against a lost
+# set of paid runs, and against the silent version of the #513 defect: a hook that never fires looks exactly
+# like an arm that behaved.
+HOOK_SELFTEST_EXIT=0
+printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"grep -rn x ."}}' \
+  | bash "$RG_HOOK" >/dev/null 2>&1 || HOOK_SELFTEST_EXIT=$?
+[ "$HOOK_SELFTEST_EXIT" -eq 2 ] || gate_fail "the rg-only hook did not block a grep command (exit $HOOK_SELFTEST_EXIT, expected 2) — hooks fail open, so the rg arm would run unguarded. Check that node is on PATH and run bash $HERE/rg-only-hook.test.sh"
+# ripgrep reads a config file from RIPGREP_CONFIG_PATH, and that file may contain --pre (a preprocessor
+# command). The hook vets the command text, not the environment, so the variable is taken out of the runs'
+# environment rather than trusted to be unset (#514).
+unset RIPGREP_CONFIG_PATH
+MCP_DENY="Bash Read Grep Glob Edit Write WebFetch WebSearch"
+RG_DENY="mcp__*"
+PERMISSION_RULES="mcp arm: --tools '' --allowedTools 'mcp__shonkor__*' --disallowedTools '$MCP_DENY'; rg arm: --tools 'Bash,Read' --allowedTools 'Bash(rg *)' --disallowedTools '$RG_DENY'"
+HOOKS_TEXT="rg arm: PreToolUse(Bash) -> rg-only-hook.sh (exit 2 unless the command is one plain rg call: no UNQUOTED shell separator or expansion, no --pre/-z/--hostname-bin; verified against a grep payload before the set starts); mcp arm: none"
+# Written on every invocation, --resume included: these are inputs to the runs, not the set's record (that is
+# env.json, which --resume keeps). A resume whose settings file was missing would run an rg arm with no hook.
+# A settings FILE, not inline JSON: the hook command carries a path with slashes and quoting it inline is
+# one escaping mistake away from a hook that never fires — and a hook that never fires looks like a clean run.
+printf '{\n  "hooks": {\n    "PreToolUse": [\n      { "matcher": "Bash", "hooks": [ { "type": "command", "command": %s } ] }\n    ]\n  }\n}\n' \
+  "$(json_str "bash '$RG_HOOK'")" > "$RUN_DIR/arm-rg.settings.json"
+printf '{ "hooks": {} }\n' > "$RUN_DIR/arm-mcp.settings.json"
 
 # ---------- 2. plan (preconditions live in shonkor-bench, not here) ----------
 CORPUS_ROOT=""; CORPUS_PROJECT="Corpus-A"; CORPUS_DB=""; CORPUS_REVISION=""; BRAIN_PROJECT="Shonkor"; BRAIN_DB=""
@@ -227,6 +275,8 @@ if [ "$RESUME" -eq 0 ]; then
   printf '  "authMode": %s,\n' "$(json_str "$AUTH_MODE")"
   printf '  "claudeAuthMethod": %s,\n' "$(json_str "$CLAUDE_AUTH_METHOD")"
   printf '  "isolationFlags": %s,\n' "$(json_str "$ISOLATION_TEXT")"
+  printf '  "permissionRules": %s,\n' "$(json_str "$PERMISSION_RULES")"
+  printf '  "hooks": %s,\n' "$(json_str "$HOOKS_TEXT")"
   printf '  "maxTurns": %s,\n' "$MAX_TURNS"
   printf '  "maxUsdPerRun": %s,\n' "$MAX_USD"
   printf '  "runSetUsdCap": %s,\n' "$TOTAL_USD"
@@ -248,7 +298,7 @@ fi
 
 if [ "$DRY" -eq 1 ]; then
   echo "=== dry run: env.json ==="; cat "$RUN_DIR/env.json"
-  echo "=== dry run: MCP configs ==="; for f in mcp-brain.json mcp-corpus.json mcp-none.json; do echo "--- $f"; cat "$RUN_DIR/$f"; done
+  echo "=== dry run: MCP configs and arm settings ==="; for f in mcp-brain.json mcp-corpus.json mcp-none.json arm-rg.settings.json arm-mcp.settings.json; do echo "--- $f"; cat "$RUN_DIR/$f"; done
 fi
 [ "$FAILED" -eq 0 ] || echo "[DRY-RUN] one or more gate checks would abort a real run (see above)."
 
@@ -264,14 +314,15 @@ while IFS=$'\t' read -r id cls corpus prompt; do
   if [ "$SMOKE" -eq 1 ]; then case "$SMOKE_IDS" in *" $id "*) ;; *) continue ;; esac; fi
   if [ "$cls" = "C" ]; then cwd="$CORPUS_ROOT"; mcp_cfg="$RUN_DIR/mcp-corpus.json"; else cwd="$BRAIN"; mcp_cfg="$RUN_DIR/mcp-brain.json"; fi
   for arm in mcp rg; do
-    if [ "$arm" = "mcp" ]; then tools=""; allowed="mcp__shonkor__*"; cfg="$mcp_cfg"
-    else tools="Bash,Read"; allowed="Bash(rg *)"; cfg="$RUN_DIR/mcp-none.json"; fi
+    if [ "$arm" = "mcp" ]; then tools=""; allowed="mcp__shonkor__*"; denied="$MCP_DENY"; cfg="$mcp_cfg"
+    else tools="Bash,Read"; allowed="Bash(rg *)"; denied="$RG_DENY"; cfg="$RUN_DIR/mcp-none.json"; fi
+    arm_settings="$RUN_DIR/arm-$arm.settings.json"
     n=1
     while [ "$n" -le "$RUNS" ]; do
       dir="$RUN_DIR/$id/$arm/$n"; mkdir -p "$dir"; key="$id/$arm/$n"
       # --json-schema is appended at the call: the schema text is long and would drown the dry-run listing.
-      cmd=(claude -p "${ISOLATION[@]}" --output-format stream-json --verbose --model "$MODEL" --effort "$EFFORT"
-           --tools "$tools" --allowedTools "$allowed" --mcp-config "$cfg"
+      cmd=(claude -p "${ISOLATION[@]}" --settings "$arm_settings" --output-format stream-json --verbose --model "$MODEL" --effort "$EFFORT"
+           --tools "$tools" --allowedTools "$allowed" --disallowedTools "$denied" --mcp-config "$cfg"
            --max-turns "$MAX_TURNS" --max-budget-usd "$MAX_USD" --no-session-persistence)
       if [ "$DRY" -eq 1 ]; then
         # The corpus root is a customer path: it goes into the command, never onto stdout.

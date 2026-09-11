@@ -25,13 +25,8 @@ public class Ap6ReportNumbersTests
 
     private static string ResultsPath(string cls) => RepoPaths.File("bench", "golden", "ap6", $"results-{cls}.json");
 
-    /// <summary>SHA-256 digests of the class-C deny words — the same set <see cref="Ap6CorpusTests"/> embeds.</summary>
-    private static readonly HashSet<string> DenyWordHashes =
-    [
-        "f2d758f9e379babc91f1f5062e2d486a70008cccc3c5d47b75f645e588a0ea09",
-        "88578022d5b453c268a01f354193e467dbd1a8a0f95b35215ef1e2c96753119c",
-        "551f67997ce2e2d23eb16079656e13eb6de0ee29619a102a6208fe566dcf14a7",
-    ];
+    /// <summary>SHA-256 digests of the class-C deny words — read from <see cref="Ap6CorpusTests.DenyWordHashes"/>, never copied.</summary>
+    private static HashSet<string> DenyWordHashes => Ap6CorpusTests.DenyWordHashes;
 
     [Fact]
     public void ResultsAndReport_ExistTogetherOrNotAtAll()
@@ -45,14 +40,20 @@ public class Ap6ReportNumbersTests
                 : $"results-{string.Join('/', results)}.json exist but bench/ap6-part1-report.md does not — the report is what the gate reads; re-run shonkor-bench --ap6.");
     }
 
+    /// <summary>
+    /// Never skips: an absent file is trivially clean; a present one is checked structurally. This used to be
+    /// <see cref="Ap6Corpus.FindLeaks"/> alone — fixed patterns plus hashed deny words — and #511 is the run
+    /// that walked through it: three customer identifiers that matched no pattern and were on no list.
+    /// <see cref="Ap6Corpus.FindResultsLeaks"/> asks the other question, the one that has no list to be
+    /// incomplete: is every string in this file a token, a placeholder or vocabulary we wrote ourselves.
+    /// </summary>
     [Fact]
     public void ResultsC_CarriesNoCustomerData()
     {
-        // Never skips: an absent file is trivially clean; a present one is checked with the fixed patterns and the hashed deny words.
         var path = ResultsPath("C");
         if (!File.Exists(path)) return;
 
-        var leaks = Ap6Corpus.FindLeaks(File.ReadAllText(path), DenyWordHashes);
+        var leaks = Ap6Corpus.FindResultsLeaks(File.ReadAllText(path), "C", DenyWordHashes);
         Assert.True(leaks.Count == 0, "results-C.json leaks customer data: " + string.Join("; ", leaks.Take(10)));
 
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
@@ -78,6 +79,10 @@ public class Ap6ReportNumbersTests
         var root = doc.RootElement;
         var section = Section(File.ReadAllText(ReportPath), $"## Class {cls} —");
 
+        // The one-way door is only shut if a reader checks it (#514): `toolCallCount` and `bashNonRg` are
+        // read below under names that mean something different in v1, so a v1 file must fail here rather
+        // than be compared as if the numbers were the same measurement.
+        Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
         Assert.Contains($"match mode `{root.GetProperty("matchMode").GetString()}`", section);
         foreach (var run in root.GetProperty("runs").EnumerateArray())
         {

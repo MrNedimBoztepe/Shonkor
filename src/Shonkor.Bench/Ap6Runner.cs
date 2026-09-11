@@ -325,12 +325,24 @@ internal static class Ap6Runner
                 var verdict = Ap6Scorer.Score(task, arm, run, record, o.Mode, cwd, mapping);
                 verdicts.Add(verdict);
                 if (arm == Ap6Scorer.McpArm) foreach (var t in record.InitTools.Where(t => t.StartsWith(Ap6Scorer.McpToolPrefix, StringComparison.Ordinal))) mcpTools.Add(t);
-                // Every class's inputs are redacted before they can reach a results file: class C through the mapping, A/B
-                // by making paths under the arm's cwd repository-relative (the rg arm reads by absolute path, which is a
-                // FindLeaks pattern — the results file would otherwise never be written).
-                toolCalls[(task.Id!, arm, run)] = task.Class == "C" && mapping is not null
-                    ? record.ToolCalls.Select(c => new Ap6ToolCall(c.Name, Ap6Anonymiser.RedactArgument(c.Input, mapping))).ToList()
-                    : record.ToolCalls.Select(c => new Ap6ToolCall(c.Name, Ap6Anonymiser.RelativiseArgument(c.Input, cwd))).ToList();
+                // Every class's inputs are redacted before they can reach a results file. Class C is rebuilt
+                // string by string (#511): a class-C input is customer text unless it proves otherwise, so the
+                // default is <redacted> and only tokens, placeholders and allow-listed vocabulary survive.
+                // Class A/B is Brain — our own code — and only needs paths under the arm's cwd made relative
+                // (the rg arm reads by absolute path, which is a FindLeaks pattern; without this no results
+                // file could ever be written).
+                if (task.Class == "C" && mapping is not null)
+                {
+                    // Names as well as inputs (#514): a name is the model's text too, and it used to be
+                    // written raw and checked by nobody.
+                    var (redactedCalls, n) = Ap6Anonymiser.RedactCalls(record.ToolCalls, record.InitTools, mapping);
+                    verdict.RedactedStrings += n;
+                    toolCalls[(task.Id!, arm, run)] = redactedCalls;
+                }
+                else
+                {
+                    toolCalls[(task.Id!, arm, run)] = record.ToolCalls.Select(c => new Ap6ToolCall(c.Name, Ap6Anonymiser.RelativiseArgument(c.Input, cwd))).ToList();
+                }
                 File.WriteAllText(Path.Combine(dir, "meta.json"), JsonSerializer.Serialize(new { record, verdict }, JsonOptions));
             }
         }
@@ -366,34 +378,42 @@ internal static class Ap6Runner
             ToolCalls = toolCalls,
         };
 
+        // Every artefact is rendered and checked BEFORE any of them is written (#514). The old order wrote
+        // the report first and only then checked results-C.json, so a class-C string layer 1 did not get
+        // clean could land in bench/ap6-part1-report.md — in the repository, in the history — while the
+        // results file it came from was refused. The publication is all-or-nothing: one leak anywhere and
+        // nothing is written, because the two files carry the same strings.
         var denyHashes = mapping?.DenyWordHashes();
         var markdown = Ap6Report.Markdown(data);
-        var reportLeaks = Ap6Corpus.FindLeaks(markdown, denyHashes);
-        var reportPath = Path.Combine(plan.BrainRoot, ReportRelativePath.Replace('/', Path.DirectorySeparatorChar));
-        if (reportLeaks.Count > 0)
+        var artefacts = new List<(string Path, string Content, IReadOnlyList<string> Leaks)>
         {
-            console.WriteLine($"[Error] report NOT written — {reportLeaks.Count} leak pattern(s) matched: {string.Join("; ", reportLeaks.Take(5))}");
-        }
-        else
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
-            File.WriteAllText(reportPath, markdown, new UTF8Encoding(false));
-            console.WriteLine($"Wrote {reportPath}");
-        }
-
+            (Path.Combine(plan.BrainRoot, ReportRelativePath.Replace('/', Path.DirectorySeparatorChar)),
+                markdown, Ap6Corpus.FindLeaks(markdown, denyHashes)),
+        };
         foreach (var cls in Ap6Report.Classes.Where(c => tasks.Any(t => t.Class == c)))
         {
             var json = Ap6Report.ResultsJson(data, cls);
-            var resultsPath = Path.Combine(plan.BrainRoot, ResultsRelativeDir.Replace('/', Path.DirectorySeparatorChar), $"results-{cls}.json");
-            var leaks = Ap6Corpus.FindLeaks(json, denyHashes);
-            if (leaks.Count > 0)
+            artefacts.Add((
+                Path.Combine(plan.BrainRoot, ResultsRelativeDir.Replace('/', Path.DirectorySeparatorChar), $"results-{cls}.json"),
+                json,
+                Ap6Corpus.FindResultsLeaks(json, cls, denyHashes)));
+        }
+
+        var refused = artefacts.Any(a => a.Leaks.Count > 0);
+        if (refused)
+        {
+            foreach (var (path, _, leaks) in artefacts.Where(a => a.Leaks.Count > 0))
+                console.WriteLine($"[Error] {Path.GetFileName(path)}: {leaks.Count} leak pattern(s) matched: {string.Join("; ", leaks.Take(5))}");
+            console.WriteLine($"[Error] NOTHING written — {artefacts.Count} artefact(s) are checked together and published together. The run directory keeps every number; fix the redaction and re-score with --ap6 (no run is repeated).");
+        }
+        else
+        {
+            foreach (var (path, content, _) in artefacts)
             {
-                console.WriteLine($"[Error] results-{cls}.json NOT written — {leaks.Count} leak pattern(s) matched: {string.Join("; ", leaks.Take(5))}");
-                continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, content, new UTF8Encoding(false));
+                console.WriteLine($"Wrote {path}");
             }
-            Directory.CreateDirectory(Path.GetDirectoryName(resultsPath)!);
-            File.WriteAllText(resultsPath, json, new UTF8Encoding(false));
-            console.WriteLine($"Wrote {resultsPath}");
         }
 
         foreach (var n in notes) console.WriteLine($"NOTE: {n}");
@@ -404,8 +424,10 @@ internal static class Ap6Runner
             console.WriteLine($"Class {cls}: {outcomes.Count} task(s); mcp majority-correct {outcomes.Count(x => x.Mcp.Majority == Ap6Majority.Correct)}, rg {outcomes.Count(x => x.Rg.Majority == Ap6Majority.Correct)}, incomplete {outcomes.Count(x => x.Mcp.Majority == Ap6Majority.Incomplete || x.Rg.Majority == Ap6Majority.Incomplete)}; arm violations {verdicts.Count(v => v.Class == cls && !v.Scored)}; missing runs {missing.Count(m => tasks.Any(t => t.Class == cls && t.Id == m.Split('/')[0]))}");
             if (cls == "C") console.WriteLine($"Gate: {Ap6Scorer.Gate(outcomes).Decision}");
         }
-        // A lens, not a gate: whatever the numbers say, reading them is the point.
-        return 0;
+        // The numbers are a lens, not a gate: a red gate still exits 0, because reading them is the point.
+        // A refused publication is different: nothing was written, and run.sh ends on this call, so returning 0
+        // would report a successful set for a run that produced no artefact at all.
+        return refused ? 1 : 0;
     }
 
     /// <summary>One note per graph whose <c>indexedRevision</c> at scoring time is not the revision <c>env.json</c> recorded for the run.</summary>

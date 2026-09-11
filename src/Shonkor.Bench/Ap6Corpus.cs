@@ -232,6 +232,100 @@ internal static class Ap6Corpus
         return leaks;
     }
 
+    /// <summary>
+    /// The leak check for a <c>results-&lt;class&gt;.json</c> (#511). <see cref="FindLeaks"/> is a net: fixed
+    /// patterns plus hashed deny words, and the first smoke run went straight through it — three customer
+    /// identifiers that were neither a corpus path, an item path, a GUID nor a deny word were written out
+    /// verbatim. So for class C this adds the rule the net cannot express: every string the file carries in a
+    /// position that can hold arbitrary text must be a mapping token, a redaction placeholder, or built from
+    /// allow-listed vocabulary (<see cref="Ap6Anonymiser.IsAllowedString"/>). Default deny, not default pass.
+    ///
+    /// <para>The positions are the ones an arm's own words can reach: <c>runs[].toolCalls[].name</c>,
+    /// <c>runs[].toolCalls[].input</c> (itself JSON text, so it is parsed and every string inside it is
+    /// checked — object keys included, since the model writes those too), <c>answerFiles</c>,
+    /// <c>answerSymbols</c>, <c>notRunReason</c> (raw API error text) and <c>armViolation</c>. Class A and B
+    /// are Brain — our own code — and are checked with the fixed patterns only, exactly as before.</para>
+    /// </summary>
+    public static IReadOnlyList<string> FindResultsLeaks(string json, string cls, IReadOnlyCollection<string>? denyWordHashes = null)
+    {
+        var leaks = FindLeaks(json, denyWordHashes).ToList();
+        if (cls != "C") return leaks;
+
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(json); }
+        catch (JsonException ex) { leaks.Add($"results-{cls}.json is not valid JSON ({ex.Message}) — it cannot be checked, so it is not clean"); return leaks; }
+        using (doc)
+        {
+            if (!doc.RootElement.TryGetProperty("runs", out var runs) || runs.ValueKind != JsonValueKind.Array) return leaks;
+            foreach (var run in runs.EnumerateArray())
+            {
+                var label = $"{Text(run, "task") ?? "?"}/{Text(run, "arm") ?? "?"}/{Text(run, "run") ?? "?"}";
+                foreach (var field in new[] { "notRunReason", "armViolation" })
+                    if (Text(run, field) is { } value) CheckString(leaks, $"{label}: {field}", value);
+                foreach (var field in new[] { "answerFiles", "answerSymbols" })
+                    if (run.TryGetProperty(field, out var arr) && arr.ValueKind == JsonValueKind.Array)
+                        foreach (var item in arr.EnumerateArray())
+                            if (item.ValueKind == JsonValueKind.String) CheckString(leaks, $"{label}: {field}", item.GetString()!);
+                if (!run.TryGetProperty("toolCalls", out var calls) || calls.ValueKind != JsonValueKind.Array) continue;
+                foreach (var call in calls.EnumerateArray())
+                {
+                    // The name is a string in the file like any other and used to be checked by nobody
+                    // (#514). It is judged as a name: one of the arms' own tools, one of Shonkor's MCP
+                    // tools, or the stand-in Ap6Anonymiser.RedactToolName wrote for anything else.
+                    if (Text(call, "name") is { } name && name != Ap6Anonymiser.Redacted && !Ap6Anonymiser.IsOwnToolName(name))
+                        leaks.Add($"{label}: toolCalls[].name is neither one of our tool names nor redacted");
+                    if (Text(call, "input") is not { } input) continue;
+                    // The input is JSON inside a JSON string: every string in it, keys included.
+                    JsonDocument inner;
+                    try { inner = JsonDocument.Parse(input); }
+                    catch (JsonException) { CheckString(leaks, $"{label}: toolCalls[].input", input); continue; }
+                    using (inner) foreach (var s in StringValues(inner.RootElement)) CheckString(leaks, $"{label}: toolCalls[].input", s);
+                }
+            }
+        }
+        return leaks;
+    }
+
+    private static void CheckString(List<string> leaks, string where, string value)
+    {
+        var bad = Ap6Anonymiser.DisallowedWords(value);
+        // The offending words are NOT quoted into the message: this text is printed, logged and pasted into
+        // issues, and a leak report that repeats the leak is a second copy of it. The count and the position
+        // are what a reader needs; the value itself is in the run directory, outside both repositories.
+        if (bad.Count > 0) leaks.Add($"{where}: {bad.Count} word(s) that are neither a token, a placeholder nor allow-listed");
+    }
+
+    /// <summary>
+    /// Every string a JSON document carries — <b>including object keys</b>. Keys were skipped as "the tool's
+    /// schema": they are not, the model writes them, and a key holding a name passed both layers untouched
+    /// (#514). Anything that is judged must first be visited.
+    /// </summary>
+    private static IEnumerable<string> StringValues(JsonElement e)
+    {
+        switch (e.ValueKind)
+        {
+            case JsonValueKind.String:
+                yield return e.GetString()!;
+                break;
+            case JsonValueKind.Object:
+                foreach (var p in e.EnumerateObject())
+                {
+                    yield return p.Name;
+                    foreach (var s in StringValues(p.Value)) yield return s;
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in e.EnumerateArray())
+                foreach (var s in StringValues(item)) yield return s;
+                break;
+        }
+    }
+
+    private static string? Text(JsonElement o, string name) =>
+        o.TryGetProperty(name, out var p)
+            ? p.ValueKind switch { JsonValueKind.String => p.GetString(), JsonValueKind.Number => p.GetRawText(), _ => null }
+            : null;
+
     /// <summary>Lower-case hex SHA-256 of a UTF-8 string — the deny-list's word form.</summary>
     public static string Sha256Hex(string text) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));

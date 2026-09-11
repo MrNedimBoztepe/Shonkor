@@ -1,5 +1,6 @@
 // Licensed to Shonkor under the MIT License.
 
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -47,10 +48,26 @@ internal sealed class Ap6RunRecord
     public int Turns { get; set; }
     public int PermissionDenials { get; set; }
 
-    /// <summary>Tool calls of the main conversation only — subagent events (<c>parent_tool_use_id != null</c>) are not the arm.</summary>
+    /// <summary><c>tool_use.id</c> of every call a permission rule or a PreToolUse hook refused — read from the result event's <c>permission_denials[].tool_use_id</c>.</summary>
+    public HashSet<string> DeniedToolUseIds { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary><c>tool_use.id</c> of every <see cref="AnswerEmissions"/> block — the ids whose <c>tool_result</c> is not corpus text.</summary>
+    public HashSet<string> AnswerToolUseIds { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Research steps of the main conversation only — subagent events (<c>parent_tool_use_id != null</c>) are
+    /// not the arm, and the answer emission (<see cref="AnswerEmissions"/>) is not research (#512).
+    /// </summary>
     public List<Ap6ToolCall> ToolCalls { get; set; } = [];
 
-    /// <summary>Σ characters of every <c>tool_result</c> text block in the main conversation.</summary>
+    /// <summary>
+    /// The arm's <see cref="Ap6Scorer.AnswerTool"/> calls — how it handed the answer over, not how it found it.
+    /// Kept apart from <see cref="ToolCalls"/> so the tool-economy comparison counts research only; both arms
+    /// emit exactly once, so both lose the same one and the comparison stays valid (#512).
+    /// </summary>
+    public List<Ap6ToolCall> AnswerEmissions { get; set; } = [];
+
+    /// <summary>Σ characters of every <c>tool_result</c> text block in the main conversation, except the answer emission's — the arm read the corpus, not its own answer back.</summary>
     public long ToolResultChars { get; set; }
 
     /// <summary><see cref="ToolResultChars"/> / 4, rounded — the same approximation for both arms; the gate's token column.</summary>
@@ -59,8 +76,18 @@ internal sealed class Ap6RunRecord
     /// <summary>Σ <c>message.usage.{input,cache_creation,cache_read,output}</c> over distinct assistant messages — the billed side, for the second column.</summary>
     public long UsageExact { get; set; }
 
-    /// <summary>Bash calls whose command does not start with <c>rg</c> — built-in read-only commands the rg arm may use; counted, not forbidden.</summary>
+    /// <summary>
+    /// Bash calls that were <b>not</b> an rg command (<see cref="Ap6RunReader.IsRgCommand"/>) and that ran:
+    /// the rg arm reached outside itself and got away with it. Any of these voids the run
+    /// (<see cref="Ap6Scorer.ArmViolation"/>) — #513 measured an arm that answered from <c>grep</c> output.
+    /// </summary>
     public int BashNonRg { get; set; }
+
+    /// <summary>
+    /// Non-rg Bash calls the hook or a permission rule refused. Recorded and printed, never counted as a
+    /// violation: a denial is the guard working, and a run that shows one is more trustworthy, not less.
+    /// </summary>
+    public int BashNonRgDenied { get; set; }
 
     /// <summary>MCP tool results Claude Code replaced with its "exceeds maximum allowed tokens" stand-in — the arm never saw the payload.</summary>
     public int McpOverflow { get; set; }
@@ -91,6 +118,9 @@ internal static class Ap6RunReader
         var r = new Ap6RunRecord();
         var usageByMessage = new Dictionary<string, long>(StringComparer.Ordinal);
         var anonymousUsage = 0L;
+        // The tool_use ids of the non-rg Bash calls, in order. Whether each one ran is only known once the
+        // result event has been read (permission_denials arrives last), so the split is a fold at the end.
+        var nonRgBashIds = new List<string?>();
 
         foreach (var rawLine in streamText.Split('\n'))
         {
@@ -110,7 +140,7 @@ internal static class Ap6RunReader
                         ReadInit(e, r);
                         break;
                     case "assistant" when IsMainConversation(e):
-                        ReadAssistant(e, r, usageByMessage, ref anonymousUsage);
+                        ReadAssistant(e, r, nonRgBashIds, usageByMessage, ref anonymousUsage);
                         break;
                     case "user" when IsMainConversation(e):
                         ReadUser(e, r);
@@ -122,6 +152,11 @@ internal static class Ap6RunReader
             }
         }
         r.UsageExact = usageByMessage.Values.Sum() + anonymousUsage;
+        // A call whose id we cannot match against a denial counts as executed. That errs towards voiding a run
+        // (#513) rather than scoring one that reached outside its arm — the direction a leak must fail in.
+        var denied = nonRgBashIds.Count(id => id is not null && r.DeniedToolUseIds.Contains(id));
+        r.BashNonRgDenied = denied;
+        r.BashNonRg = nonRgBashIds.Count - denied;
         return r;
     }
 
@@ -145,7 +180,7 @@ internal static class Ap6RunReader
         }
     }
 
-    private static void ReadAssistant(JsonElement e, Ap6RunRecord r, Dictionary<string, long> usageByMessage, ref long anonymousUsage)
+    private static void ReadAssistant(JsonElement e, Ap6RunRecord r, List<string?> nonRgBashIds, Dictionary<string, long> usageByMessage, ref long anonymousUsage)
     {
         if (!e.TryGetProperty("message", out var msg) || msg.ValueKind != JsonValueKind.Object) return;
         if (msg.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
@@ -154,9 +189,18 @@ internal static class Ap6RunReader
             {
                 if (Str(block, "type") != "tool_use") continue;
                 var name = Str(block, "name") ?? "?";
+                var id = Str(block, "id");
                 var input = block.TryGetProperty("input", out var inp) ? inp.GetRawText() : "{}";
+                if (name == Ap6Scorer.AnswerTool)
+                {
+                    // The answer channel, not a research step (#512): kept apart, and its id noted so the
+                    // tool_result echoing the answer back does not count as context the arm read.
+                    r.AnswerEmissions.Add(new Ap6ToolCall(name, input));
+                    if (id is not null) r.AnswerToolUseIds.Add(id);
+                    continue;
+                }
                 r.ToolCalls.Add(new Ap6ToolCall(name, input));
-                if (name == "Bash" && !IsRgCommand(inp)) r.BashNonRg++;
+                if (name == "Bash" && !IsRgCommand(inp)) nonRgBashIds.Add(id);
             }
         }
         if (msg.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
@@ -169,13 +213,118 @@ internal static class Ap6RunReader
         }
     }
 
-    /// <summary>The first word of the command is <c>rg</c> — pipes after it (<c>rg … | head</c>) still count as rg.</summary>
+    /// <summary>
+    /// Exactly what <c>bench/golden/ap6/rg-only-hook.sh</c> lets through, and it must stay exactly that: the
+    /// hook decides what runs, this decides what the run is judged as, and two different ideas of "an rg
+    /// command" would let a command execute that the scorer then counts as clean. The two are held together
+    /// by <c>bench/golden/ap6/rg-command-cases.tsv</c>, which the hook's own test script and
+    /// <c>Ap6RunReaderTests</c> both replay — a rule changed on one side fails a test rather than surviving
+    /// as a promise in a comment.
+    ///
+    /// <para>The rule: the command is scanned quote-aware, and an <b>unquoted</b> separator, an expansion
+    /// (<c>$(</c>, <c>${</c>, <c>$VAR</c>, backticks — the last two also inside double quotes, where they
+    /// still act), a newline, unbalanced quoting or a trailing backslash disqualifies it. The first word,
+    /// quotes stripped, must have the basename <c>rg</c>. And no argument may be one of ripgrep's own flags
+    /// that runs another program (<c>--pre</c>, <c>--pre-glob</c>, <c>-z</c>/<c>--search-zip</c>,
+    /// <c>--hostname-bin</c>): <c>rg --pre /bin/sh …</c> is a shell inside one plain rg command (#514).</para>
+    ///
+    /// <para><c>rg -n "a|b" src</c> <i>is</i> an rg command (#514). The earlier, quote-blind rule refused a
+    /// pipe even inside a pattern, and a refusal still counts in <see cref="Ap6RunRecord.ToolCalls"/> — so
+    /// the guard was inflating the tool-economy figure of exactly the arm it was protecting.</para>
+    /// </summary>
     public static bool IsRgCommand(JsonElement input)
     {
         var command = input.ValueKind == JsonValueKind.Object ? Str(input, "command") : null;
-        if (command is null) return false;
-        var first = command.TrimStart().Split((char[])[' ', '\t', '\n'], 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
-        return first == "rg" || first.EndsWith("/rg", StringComparison.Ordinal) || first.EndsWith("/rg.exe", StringComparison.OrdinalIgnoreCase);
+        return command is not null && IsRgCommand(command);
+    }
+
+    /// <summary>
+    /// Word boundaries are <c>[[:space:]]</c> in the C locale — the set the hook's scanner uses. Notably
+    /// U+00A0 is <b>not</b> in it: <c>char.IsWhiteSpace</c> would trim it, the shell would not, and the two
+    /// readings of "<c>&#160;rg foo</c>" were one of the divergences this file's fixture pins shut.
+    /// </summary>
+    private const string ShellWhitespace = " \t\n\v\f\r";
+
+    /// <summary>ripgrep flags that make it execute another program — a preprocessor, a decompressor, a hostname binary.</summary>
+    public static readonly string[] ExecutingRgFlags = ["--pre", "--pre-glob", "--search-zip", "--hostname-bin"];
+
+    /// <inheritdoc cref="IsRgCommand(JsonElement)"/>
+    public static bool IsRgCommand(string command)
+    {
+        if (!TrySplitWords(command, out var words) || words.Count == 0) return false;
+        var name = words[0].Replace('\\', '/').Split('/')[^1];
+        if (name != "rg" && !name.Equals("rg.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        return words.Skip(1).All(IsHarmlessArgument);
+    }
+
+    /// <summary>
+    /// The command split into words the way a shell would, or <c>false</c> when it is not a single command at
+    /// all. Quotes are consumed (so <c>"--pre"</c> is still the flag <c>--pre</c>) but a backslash and the
+    /// character it escapes are kept in the word — a Windows path must keep its separators, while the escaped
+    /// character can no longer act.
+    /// </summary>
+    public static bool TrySplitWords(string command, out List<string> words)
+    {
+        words = [];
+        var word = new StringBuilder();
+        var started = false;
+        var quote = '\0';
+        for (var i = 0; i < command.Length; i++)
+        {
+            var c = command[i];
+            if (c is '\n' or '\r') return false;                       // a separator in every quoting state
+            if (quote == '\'')                                          // single quotes: everything is literal
+            {
+                if (c == '\'') quote = '\0'; else word.Append(c);
+                continue;
+            }
+            if (c == '\\')
+            {
+                if (i + 1 >= command.Length) return false;              // a trailing backslash swallows what follows
+                word.Append(c).Append(command[i + 1]);
+                i++;
+                started = true;
+                continue;
+            }
+            if (c == '`') return false;                                 // still a substitution inside double quotes
+            if (c == '$' && i + 1 < command.Length && (command[i + 1] is '(' or '{' or '_' || char.IsAsciiLetter(command[i + 1])))
+                return false;                                           // a bare '$' (an end anchor) is fine
+            if (quote == '"')
+            {
+                if (c == '"') quote = '\0'; else word.Append(c);
+                continue;
+            }
+            if (c is '|' or '&' or ';' or '<' or '>') return false;
+            if (c is '\'' or '"') { quote = c; started = true; continue; }
+            if (ShellWhitespace.Contains(c))
+            {
+                if (started) { words.Add(word.ToString()); word.Clear(); started = false; }
+                continue;
+            }
+            word.Append(c);
+            started = true;
+        }
+        if (quote != '\0') return false;                                // unterminated quoting
+        if (started) words.Add(word.ToString());
+        return true;
+    }
+
+    private static bool IsHarmlessArgument(string word)
+    {
+        if (word.StartsWith("--", StringComparison.Ordinal))
+        {
+            var eq = word.IndexOf('=', StringComparison.Ordinal);
+            var flag = eq < 0 ? word : word[..eq];
+            return !ExecutingRgFlags.Contains(flag, StringComparer.Ordinal);
+        }
+        if (word.Length > 1 && word[0] == '-')
+        {
+            // Short flags bundle, so -z hides in -nz as well as in -z.
+            var eq = word.IndexOf('=', StringComparison.Ordinal);
+            var cluster = eq < 0 ? word[1..] : word[1..eq];
+            return !cluster.Contains('z');
+        }
+        return true;
     }
 
     private static void ReadUser(JsonElement e, Ap6RunRecord r)
@@ -184,6 +333,9 @@ internal static class Ap6RunReader
         foreach (var block in content.EnumerateArray())
         {
             if (Str(block, "type") != "tool_result") continue;
+            // Matched by tool_use_id, never by the result text: what the CLI echoes back for an answer
+            // emission is undocumented and free to change, an id is the fact the stream states (#512).
+            if (Str(block, "tool_use_id") is { } id && r.AnswerToolUseIds.Contains(id)) continue;
             var text = ToolResultText(block);
             r.ToolResultChars += text.Length;
             if (OverflowMarker.IsMatch(text)) r.McpOverflow++;
@@ -215,7 +367,15 @@ internal static class Ap6RunReader
         r.CostUsd = e.TryGetProperty("total_cost_usd", out var cost) && cost.ValueKind == JsonValueKind.Number ? cost.GetDouble() : 0;
         r.DurationMs = Num(e, "duration_ms");
         r.Turns = (int)Num(e, "num_turns");
-        r.PermissionDenials = e.TryGetProperty("permission_denials", out var pd) && pd.ValueKind == JsonValueKind.Array ? pd.GetArrayLength() : 0;
+        if (e.TryGetProperty("permission_denials", out var pd) && pd.ValueKind == JsonValueKind.Array)
+        {
+            r.PermissionDenials = pd.GetArrayLength();
+            // Element shape as the CLI writes it (verified against a blocked run, 2.1.263):
+            // {"tool_name":…,"tool_use_id":"toolu_…","tool_input":{…}}. An element without an id is left
+            // unattributed on purpose — see the fold in Read.
+            foreach (var d in pd.EnumerateArray())
+                if (Str(d, "tool_use_id") is { Length: > 0 } id) r.DeniedToolUseIds.Add(id);
+        }
         r.StructuredOutputJson = e.TryGetProperty("structured_output", out var so) && so.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined) ? so.GetRawText() : null;
         r.Answer = ParseAnswer(r.StructuredOutputJson);
     }

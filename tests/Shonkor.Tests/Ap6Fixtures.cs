@@ -52,11 +52,12 @@ internal static class Ap6Fixtures
         });
 
     /// <summary>A tool result whose <c>content</c> is a plain string.</summary>
-    public static string ToolResultString(string text, string? parentToolUseId = null) =>
+    /// <param name="toolUseId">The call this answers. Default matches <see cref="ToolUse"/>'s <c>m1</c>; name it when the test cares which call the result belongs to (#512).</param>
+    public static string ToolResultString(string text, string? parentToolUseId = null, string toolUseId = "t_m1") =>
         JsonSerializer.Serialize(new
         {
             type = "user", parent_tool_use_id = parentToolUseId,
-            message = new { content = new object[] { new { type = "tool_result", tool_use_id = "t_m1", content = text } } },
+            message = new { content = new object[] { new { type = "tool_result", tool_use_id = toolUseId, content = text } } },
         });
 
     /// <summary>A tool result whose <c>content</c> is an array of blocks (the MCP shape).</summary>
@@ -67,14 +68,24 @@ internal static class Ap6Fixtures
             message = new { content = new object[] { new { type = "tool_result", tool_use_id = "t_m1", content = texts.Select(t => new { type = "text", text = t }).ToArray() } } },
         });
 
-    public static string Result(object? structuredOutput, double cost = 0.05, int turns = 3, long durationMs = 1234, bool isError = false, int denials = 0) =>
+    /// <param name="denials">Anonymous denials — no <c>tool_use_id</c>, so nothing can be attributed to a call.</param>
+    /// <param name="deniedToolUseIds">Denials in the shape the CLI actually writes (verified against a hook-blocked run, 2.1.263) — with the id of the call that was refused.</param>
+    public static string Result(object? structuredOutput, double cost = 0.05, int turns = 3, long durationMs = 1234, bool isError = false, int denials = 0, params string[] deniedToolUseIds) =>
         JsonSerializer.Serialize(new
         {
             type = "result", subtype = isError ? "error_max_turns" : "success", is_error = isError,
             total_cost_usd = cost, duration_ms = durationMs, num_turns = turns,
             structured_output = structuredOutput,
-            permission_denials = Enumerable.Range(0, denials).Select(_ => new { tool_name = "Bash" }).ToArray(),
+            permission_denials = Enumerable.Range(0, denials).Select(_ => new { tool_name = "Bash", tool_use_id = (string?)null })
+                .Concat(deniedToolUseIds.Select(id => new { tool_name = "Bash", tool_use_id = (string?)id })).ToArray(),
         });
+
+    /// <summary>
+    /// The answer emission both arms make because the driver passes <c>--json-schema</c>: one
+    /// <c>StructuredOutput</c> tool_use plus the tool_result echoing it back (#512).
+    /// </summary>
+    public static string AnswerEmission(string[] files, string[] symbols, string messageId = "m_ans") =>
+        ToolUse(Ap6Scorer.AnswerTool, Answer(files, symbols), messageId);
 
     /// <summary>
     /// The result of a run whose final API request failed (SDK reference: subtype <c>success</c>, <c>is_error</c> true,

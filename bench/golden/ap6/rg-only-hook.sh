@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# rg-only-hook.sh — the rg arm's PreToolUse hook on Bash (#513).
+#
+# Why a hook and not a permission rule. `--allowedTools "Bash(rg *)"` pre-approves rg and denies nothing
+# else, and Claude Code runs a built-in set of read-only Bash commands (ls, cat, echo, pwd, head, tail,
+# grep, find, wc, which, diff, stat, du, cd) without a prompt in every mode; the set is not configurable
+# (permissions doc, "Read-only commands"). Rule precedence is deny -> ask -> allow, so a Bash ask/deny rule
+# would also catch rg — "Bash: only rg" is not expressible in rule syntax, and deny rules are documented as
+# not being a security boundary anyway. A PreToolUse hook is the documented way out: it sees the full
+# command text and, on exit 2, blocks the call before the permission rules are consulted.
+#
+# Contract: the hook payload arrives as JSON on stdin (tool_name, tool_input.command). Exit 0 = allow,
+# exit 2 = block, and the stderr text is what the model is told. A blocked call still appears in the stream
+# as a tool_use with an is_error tool_result and is listed in the result event's permission_denials — that
+# is how Ap6RunReader tells an attempt (BashNonRgDenied, recorded) from an execution (BashNonRg, voids the
+# run). Blocking is therefore cheap and letting something through is not: when in doubt, block.
+#
+# What passes must be exactly what Ap6RunReader.IsRgCommand calls an rg command — one definition, two
+# implementations, and #421/#511's lesson is that two components naming one thing differently is where the
+# defects live. The two are held together by a shared fixture rather than by this comment:
+# rg-command-cases.tsv is replayed against THIS script by rg-only-hook.test.sh and against IsRgCommand by
+# Ap6RunReaderTests. A rule changed on one side and not the other fails a test instead of surviving in prose.
+#
+# The rule, in both places:
+#   1. the command is scanned character by character, quote-aware (single quotes are literal, double quotes
+#      still allow `...` and $(...)): an UNQUOTED | & ; < > ` or $(, a backtick or an expansion inside "",
+#      a newline anywhere, unbalanced quotes or a trailing backslash -> block. `rg -n "a|b" src` therefore
+#      runs (#511/#514: the old, quote-blind rule cost the rg arm turns for pipes inside its own patterns,
+#      which inflated the very tool-economy number the two arms are compared on);
+#   2. the first word, quotes stripped, must have the basename `rg` (or `rg.exe`, case-insensitively);
+#   3. no argument may be one of ripgrep's own flags that runs a program or reads a shell-visible
+#      configuration for it: --pre, --pre-glob, -z/--search-zip (they spawn a preprocessor / decompressor)
+#      and --hostname-bin. `rg --pre /bin/sh --pre-glob '*' pattern` is a shell in one plain rg command.
+set -u
+
+# `[[:space:]]`, `tr` and the character classes below must mean ASCII and nothing else — a locale in which
+# U+00A0 counts as space would give this script and IsRgCommand two different ideas of a word boundary.
+export LC_ALL=C
+
+payload="$(cat)"
+
+deny() { echo "$1" >&2; exit 2; }
+
+# tool_input.command out of the payload. Node is a dependency of the Claude CLI itself, so it is present
+# wherever this hook can run; a sed over JSON would misread an escaped quote inside a command.
+# The `; rc=$?; printf X; exit "$rc"` frame keeps two things a bare $(...) would lose: node's exit code
+# (a broken payload must be a denial, not an empty command) and a trailing newline in the command text
+# (which $(...) strips, and which IsRgCommand rejects — the strip alone would be a divergence).
+raw="$(printf '%s' "$payload" | node -e '
+  let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+    try { const p = JSON.parse(s); process.stdout.write(String((p.tool_input && p.tool_input.command) || "")); }
+    catch { process.exit(3); }
+  });
+' 2>/dev/null; rc=$?; printf 'X'; exit "$rc")" \
+  || deny "rg-only arm: the Bash command could not be read out of the hook payload, so it cannot be vetted. Denied."
+command_text="${raw%X}"
+
+[ -n "$command_text" ] || deny "rg-only arm: the hook payload carried no Bash command to vet. Denied."
+
+# ---------- the shared rule ----------
+# Exit codes are the reason for the refusal, so the model is told which rule it hit:
+#   1 shell construction (unquoted separator, expansion, unbalanced quoting)   2 not ripgrep
+#   3 an rg flag that would execute a program
+rg_command_verdict() {
+  # In one `local` every word is expanded before the first assignment happens, so ${#s} must come after it.
+  local s="$1"
+  local n=${#s} i=0 c nx quote="" word="" started=0 first base lower flag cluster w
+  local -a words=()
+  while [ "$i" -lt "$n" ]; do
+    c="${s:i:1}"
+    # A newline is a command separator in every quoting state there is.
+    case "$c" in $'\n'|$'\r') return 1 ;; esac
+    if [ "$quote" = "'" ]; then
+      if [ "$c" = "'" ]; then quote=""; else word="$word$c"; fi
+      i=$((i + 1)); continue
+    fi
+    if [ "$c" = '\' ]; then
+      # The escaped character is kept in the word (so a Windows path keeps its separators) but can no
+      # longer act: `rg foo\|bar` searches for a literal pipe.
+      [ $((i + 1)) -lt "$n" ] || return 1
+      word="$word$c${s:i+1:1}"; started=1; i=$((i + 2)); continue
+    fi
+    if [ "$c" = '`' ]; then return 1; fi
+    if [ "$c" = '$' ]; then
+      nx="${s:i+1:1}"
+      # Command substitution, brace or variable expansion. A bare '$' (a regex end anchor) is fine.
+      case "$nx" in [A-Za-z_]|'('|'{') return 1 ;; esac
+    fi
+    if [ "$quote" = '"' ]; then
+      if [ "$c" = '"' ]; then quote=""; else word="$word$c"; fi
+      i=$((i + 1)); continue
+    fi
+    case "$c" in
+      '|'|'&'|';'|'<'|'>') return 1 ;;
+      "'"|'"') quote="$c"; started=1; i=$((i + 1)); continue ;;
+      ' '|$'\t'|$'\v'|$'\f')
+        if [ "$started" -eq 1 ]; then words+=("$word"); word=""; started=0; fi
+        i=$((i + 1)); continue ;;
+    esac
+    word="$word$c"; started=1; i=$((i + 1))
+  done
+  [ -z "$quote" ] || return 1                       # an unterminated quote is a command we cannot read
+  [ "$started" -eq 0 ] || words+=("$word")
+  [ "${#words[@]}" -gt 0 ] || return 1
+
+  first="${words[0]}"
+  base="${first##*/}"; base="${base##*\\}"
+  lower="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')"
+  [ "$base" = "rg" ] || [ "$lower" = "rg.exe" ] || return 2
+
+  for w in "${words[@]:1}"; do
+    case "$w" in
+      --*)
+        flag="${w%%=*}"
+        case "$flag" in --pre|--pre-glob|--search-zip|--hostname-bin) return 3 ;; esac ;;
+      -?*)
+        # Short flags bundle, so -z hides in -nz as well as in -z.
+        cluster="${w#-}"; cluster="${cluster%%=*}"
+        case "$cluster" in *z*) return 3 ;; esac ;;
+    esac
+  done
+  return 0
+}
+
+verdict=0
+rg_command_verdict "$command_text" || verdict=$?
+case "$verdict" in
+  0) exit 0 ;;
+  1) deny "rg-only arm: this run may execute one plain ripgrep command and nothing else — no pipes, redirection, chaining, command substitution or variable expansion outside single quotes, and no unbalanced quoting. A '|' INSIDE a quoted pattern is fine (rg -n \"a|b\" src); a '|' between two commands is not. Re-issue it as one rg call, or as several separate rg calls." ;;
+  3) deny "rg-only arm: --pre, --pre-glob, -z/--search-zip and --hostname-bin make ripgrep run another program, which is the thing this arm may not do. Re-issue the search without them." ;;
+  *) deny "rg-only arm: that is not ripgrep. This run is the ripgrep half of a two-arm measurement (#473); grep, find, cat, ls, sed and awk are not substitutes for it and the run is voided if one of them executes. Use rg (it is on PATH), or the Read tool to read a file." ;;
+esac
