@@ -399,7 +399,8 @@ internal static class Ap6Runner
                 Ap6Corpus.FindResultsLeaks(json, cls, denyHashes)));
         }
 
-        if (artefacts.Any(a => a.Leaks.Count > 0))
+        var refused = artefacts.Any(a => a.Leaks.Count > 0);
+        if (refused)
         {
             foreach (var (path, _, leaks) in artefacts.Where(a => a.Leaks.Count > 0))
                 console.WriteLine($"[Error] {Path.GetFileName(path)}: {leaks.Count} leak pattern(s) matched: {string.Join("; ", leaks.Take(5))}");
@@ -423,8 +424,10 @@ internal static class Ap6Runner
             console.WriteLine($"Class {cls}: {outcomes.Count} task(s); mcp majority-correct {outcomes.Count(x => x.Mcp.Majority == Ap6Majority.Correct)}, rg {outcomes.Count(x => x.Rg.Majority == Ap6Majority.Correct)}, incomplete {outcomes.Count(x => x.Mcp.Majority == Ap6Majority.Incomplete || x.Rg.Majority == Ap6Majority.Incomplete)}; arm violations {verdicts.Count(v => v.Class == cls && !v.Scored)}; missing runs {missing.Count(m => tasks.Any(t => t.Class == cls && t.Id == m.Split('/')[0]))}");
             if (cls == "C") console.WriteLine($"Gate: {Ap6Scorer.Gate(outcomes).Decision}");
         }
-        // A lens, not a gate: whatever the numbers say, reading them is the point.
-        return 0;
+        // The numbers are a lens, not a gate: a red gate still exits 0, because reading them is the point.
+        // A refused publication is different: nothing was written, and run.sh ends on this call, so returning 0
+        // would report a successful set for a run that produced no artefact at all.
+        return refused ? 1 : 0;
     }
 
     /// <summary>One note per graph whose <c>indexedRevision</c> at scoring time is not the revision <c>env.json</c> recorded for the run.</summary>
